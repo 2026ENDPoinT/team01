@@ -24,12 +24,12 @@ cmake --build build
 
 | 역할 | 담당 | 파일 |
 |---|---|---|
-| 조장 | 30WON (Eno74) | `file_io`, `report_exporter`, `CMakeLists.txt`, 헤더 관리, PR 리뷰·merge |
+| 조장 | 동현 | `file_io`, `report_exporter`, `CMakeLists.txt`, 헤더 관리, PR 리뷰·merge |
 | A | 연준 | `student`, `course`, `grade` — 데이터 클래스, 점수→등급 변환, 입력 검증 |
 | B | 현준 | `grade_manager` — 등록/수정/삭제/조회, 검색 |
 | C | 원준 | `statistics`, `server`, `web/` — GPA·평균·석차, HTTP 서버, 웹 UI |
 
-각자 `src/` 의 자기 `.cpp` 에 있는 `TODO` 를 채우면 됩니다. **헤더(`include/`)를 바꿔야 하면 조장에게 먼저 공유.**
+각자 `src/` 의 자기 `.cpp` 에 있는 `TODO` 를 채우면 됩니다.
 
 ## 폴더 구조
 
