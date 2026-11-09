@@ -5,6 +5,7 @@
 #include <sstream>
 #include <vector>
 
+#include "retake.h"
 #include "statistics.h"
 
 namespace {
@@ -42,13 +43,21 @@ std::string ReportExporter::studentReport(const GradeManager& gm, const std::str
         return a.courseCode < b.courseCode;
     });
 
+    // 재수강으로 삭제된 성적: 2018년 이후 입학생은 등급 "R" (점수 칸은 비움), 그 전 입학생은 줄을 뺌
+    const bool showReplaced = Retake::admittedSince2018(studentId);
+
     std::string csv = kUtf8Bom;
     csv += joinCsvLine({"과목코드", "과목명", "학점", "학기", "점수", "등급"});
     for (const Grade& g : grades) {
+        const bool replaced = Retake::isReplaced(g, grades);
+        if (replaced && !showReplaced) {
+            continue;
+        }
         const Course* course = gm.findCourse(g.courseCode);
         csv += joinCsvLine({g.courseCode, course ? course->name : "",
                             course ? std::to_string(course->credit) : "", g.semester,
-                            scoreToString(g.score), g.letter()});
+                            replaced ? "" : scoreToString(g.score),
+                            Retake::officialLetter(g, grades)});
     }
     if (!grades.empty()) {
         csv += joinCsvLine({"GPA", fixed2(Statistics::calcGPA(gm, studentId))});
@@ -61,8 +70,10 @@ std::string ReportExporter::courseReport(const GradeManager& gm, const std::stri
         return "";
     }
 
-    // 학기 → 학번 순으로 정렬
-    std::vector<Grade> grades = gm.getGradesByCourse(courseCode);
+    // 재수강으로 삭제된 성적은 빼고, 학기 → 학번 순으로 정렬
+    //   등급은 전체 목록(all)으로 판단해야 재수강 성적의 A0 제한이 적용됨
+    const std::vector<Grade> all = gm.getGradesByCourse(courseCode);
+    std::vector<Grade> grades = Retake::activeGrades(all);
     std::sort(grades.begin(), grades.end(), [](const Grade& a, const Grade& b) {
         if (a.semester != b.semester) {
             return a.semester < b.semester;
@@ -75,7 +86,7 @@ std::string ReportExporter::courseReport(const GradeManager& gm, const std::stri
     for (const Grade& g : grades) {
         const Student* student = gm.findStudent(g.studentId);
         csv += joinCsvLine({g.studentId, student ? student->name : "", g.semester,
-                            scoreToString(g.score), g.letter()});
+                            scoreToString(g.score), Retake::officialLetter(g, all)});
     }
 
     Statistics::CourseStats stats = Statistics::courseStats(gm, courseCode);

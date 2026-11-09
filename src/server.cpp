@@ -18,6 +18,7 @@ void Server::run() {
 
     // 예시 라우트: 학생 목록
     svr.Get("/api/students", [this](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);  // 모든 /api 라우트 첫 줄에 넣기 (server.h 참고)
         json arr = json::array();
         for (const Student& s : gm.getStudents()) {
             arr.push_back({{"id", s.id}, {"name", s.name}, {"major", s.major}, {"year", s.year}});
