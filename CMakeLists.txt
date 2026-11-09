@@ -24,3 +24,12 @@ if(WIN32)
     target_compile_definitions(GradeManager PRIVATE _WIN32_WINNT=0x0A00)
     target_link_libraries(GradeManager PRIVATE ws2_32)
 endif()
+
+# FileIO 테스트 (GradeManager 와 별개 실행파일, 서버 없이 FileIO 만 실행)
+#   CLion 실행 대상에서 FileIOTest 선택 → Run / Debug,  터미널에서는 ctest
+add_executable(FileIOTest tests/file_io_test.cpp src/file_io.cpp)
+target_include_directories(FileIOTest PRIVATE include)
+target_compile_definitions(FileIOTest PRIVATE TEST_DATA_DIR="${CMAKE_BINARY_DIR}/test_data")
+
+enable_testing()
+add_test(NAME FileIOTest COMMAND FileIOTest)
