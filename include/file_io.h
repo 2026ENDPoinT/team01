@@ -12,6 +12,11 @@
 #include "grade.h"
 #include "student.h"
 
+// 값 여러 개를 쉼표로 이어서 CSV 한 줄로 만듦 (끝에 줄바꿈 포함)
+//   쉼표나 큰따옴표가 있는 값은 "..." 로 감싸고, 안의 " 는 "" 로 바꿈
+//   ReportExporter 도 같은 규칙으로 CSV 를 만들도록 공개
+std::string joinCsvLine(const std::vector<std::string>& fields);
+
 class FileIO {
 public:
     explicit FileIO(const std::string& dataDir);

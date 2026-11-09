@@ -31,19 +31,6 @@ std::string escapeField(const std::string& value) {
     return result;
 }
 
-// 값 여러 개를 쉼표로 이어서 한 줄로 만듦 (끝에 줄바꿈 포함)
-std::string joinLine(const std::vector<std::string>& fields) {
-    std::string line;
-    for (size_t i = 0; i < fields.size(); i++) {
-        if (i > 0) {
-            line += ',';
-        }
-        line += escapeField(fields[i]);
-    }
-    line += '\n';
-    return line;
-}
-
 // CSV 한 줄을 쉼표 기준으로 나눔. escapeField 의 반대
 //   "..." 안의 쉼표는 나누지 않고, "" 는 " 하나로 바꿈
 std::vector<std::string> splitLine(const std::string& line) {
@@ -170,6 +157,19 @@ void warnBadNumber(const std::string& path, int lineNumber, const std::string& v
 
 }  // namespace
 
+// 값 여러 개를 쉼표로 이어서 한 줄로 만듦 (끝에 줄바꿈 포함)
+std::string joinCsvLine(const std::vector<std::string>& fields) {
+    std::string line;
+    for (size_t i = 0; i < fields.size(); i++) {
+        if (i > 0) {
+            line += ',';
+        }
+        line += escapeField(fields[i]);
+    }
+    line += '\n';
+    return line;
+}
+
 // ---------------------------------------------------------------------------
 // FileIO
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ FileIO::FileIO(const std::string& dataDir) : dataDir(dataDir) {}
 bool FileIO::saveStudents(const std::vector<Student>& students) {
     std::string content = "id,name,major,year\n";
     for (const Student& s : students) {
-        content += joinLine({s.id, s.name, s.major, std::to_string(s.year)});
+        content += joinCsvLine({s.id, s.name, s.major, std::to_string(s.year)});
     }
     return atomicWrite(dataDir + "/students.csv", content);
 }
@@ -213,7 +213,7 @@ bool FileIO::loadStudents(std::vector<Student>& students) {
 bool FileIO::saveCourses(const std::vector<Course>& courses) {
     std::string content = "code,name,credit,professor\n";
     for (const Course& c : courses) {
-        content += joinLine({c.code, c.name, std::to_string(c.credit), c.professor});
+        content += joinCsvLine({c.code, c.name, std::to_string(c.credit), c.professor});
     }
     return atomicWrite(dataDir + "/courses.csv", content);
 }
@@ -245,7 +245,7 @@ bool FileIO::loadCourses(std::vector<Course>& courses) {
 bool FileIO::saveGrades(const std::vector<Grade>& grades) {
     std::string content = "studentId,courseCode,semester,score\n";
     for (const Grade& g : grades) {
-        content += joinLine({g.studentId, g.courseCode, g.semester, doubleToString(g.score)});
+        content += joinCsvLine({g.studentId, g.courseCode, g.semester, doubleToString(g.score)});
     }
     return atomicWrite(dataDir + "/grades.csv", content);
 }
