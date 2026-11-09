@@ -20,11 +20,25 @@ cmake --build build
 
 `data/`, `web/` 경로는 빌드 시 프로젝트 경로로 고정되므로 어디서 실행해도 됩니다.
 
+**샘플 데이터** (학생 9명, 과목 6개, 성적 29건): `data/sample/` 을 `data/` 로 복사하면 바로 화면에서 확인할 수 있습니다.
+```bash
+cp data/sample/*.csv data/          # Windows: copy data\sample\*.csv data\
+```
+`data/*.csv` 는 실행 중에 바뀌므로 git 에 올리지 않습니다 (`.gitignore`). 처음 상태로 돌리려면 다시 복사하면 됩니다.
+
+샘플에 일부러 넣은 경우:
+- 등급 경계 점수 (100, 95, 90, 85, 65, 60, 59.5, 0), 소수점 점수
+- GPA 동점: 이서연·박지호 (전체, 2026-1 둘 다 같음) → 석차 같은 등수
+- 재수강: 윤지아 MA101 (2018년 이후 입학, 2025-2 F → 2026-1, 성적표에 2025-2 는 "R"),
+  한지민 CS201 (2017년 입학, 2025-1 F → 2025-2 97점이지만 A0, 성적표에서 2025-1 줄은 빠짐)
+- 성적 없는 학생 (조서준), 성적 없는 과목 (CS401)
+- 쉼표가 든 값: MA101 담당 교수 `"최정훈, 한수진"`
+
 ## 역할
 
 | 역할 | 담당 | 파일 |
 |---|---|---|
-| 조장 | 동현 | `file_io`, `report_exporter`, `CMakeLists.txt`, 헤더 관리, PR 리뷰·merge |
+| 조장 | 동현 | `file_io`, `report_exporter`, `retake`, `CMakeLists.txt`, 헤더 관리, PR 리뷰·merge |
 | A | 연준 | `student`, `course`, `grade` — 데이터 클래스, 점수→등급 변환, 입력 검증 |
 | B | 현준 | `grade_manager` — 등록/수정/삭제/조회, 검색 |
 | C | 원준 | `statistics`, `server`, `web/` — GPA·평균·석차, HTTP 서버, 웹 UI |
@@ -37,7 +51,8 @@ cmake --build build
 include/      헤더 (함수 시그니처)
 src/          구현 + main.cpp
 web/          index.html, style.css, app.js
-data/         students.csv, courses.csv, grades.csv (자동 생성)
+data/         students.csv, courses.csv, grades.csv (자동 생성, git 제외)
+data/sample/  샘플 데이터 (위 "샘플 데이터" 참고)
 third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 ```
 
@@ -78,4 +93,14 @@ third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
 - 학생 `{"id", "name", "major", "year"}`
 - 과목 `{"code", "name", "credit", "professor"}`
-- 성적 `{"studentId", "courseCode", "semester", "score", "letter"}`
+- 성적 `{"studentId", "courseCode", "semester", "score", "letter"}` — `letter` 는 `Retake::officialLetter` (재수강 규칙 적용)
+
+## 재수강 규칙
+
+같은 학생이 같은 과목을 여러 학기에 들으면 가장 늦은 학기가 재수강 성적이고, 그 전 성적은 삭제된 성적입니다. 자세한 내용과 함수는 `include/retake.h` 를 참고하세요.
+
+- 재수강 성적은 A0 까지만 받습니다 (95점 이상이어도 A0, 평점 4.0).
+- 삭제된 성적은 GPA, 석차, 과목 통계, 과목 성적표에서 빠집니다. `grades.csv` 에는 그대로 남습니다.
+- 학생 성적표: 2018년 이후 입학생(학번 앞 2자리 ≥ 18)은 삭제된 과목을 등급 `R` 로 표시하고, 그 전 입학생은 그 줄을 뺍니다.
+- 학사경고: 이미 내려진 학사경고는 유지합니다. 학사경고를 판단할 때는 재수강 규칙을 적용하지 않고 원래 성적을 씁니다.
+  - 기준 (아직 구현 안 함): 정규학기 평점평균 1.75 미만, 또는 수강신청 미이행 (기간 내 수강신청을 안 했거나 1학점 미만으로 신청한 재학생)

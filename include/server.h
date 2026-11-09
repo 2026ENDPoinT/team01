@@ -18,8 +18,12 @@
 //   GET    /                          web/ 정적 파일
 //
 // 실패 시: 400 (잘못된 값) / 404 (없음) / 409 (중복) + {"error": "메시지"}
+//
+// 동시 접근: cpp-httplib 은 요청을 여러 스레드에서 동시에 처리함
+//   → gm 을 쓰는 모든 라우트는 첫 줄에 std::lock_guard<std::mutex> lock(mtx); (server.cpp 예시 라우트 참고)
 #pragma once
 
+#include <mutex>
 #include <string>
 
 #include "grade_manager.h"
@@ -35,4 +39,5 @@ private:
     GradeManager& gm;
     std::string webDir;
     int port;
+    std::mutex mtx;  // gm 을 한 번에 한 요청만 쓰도록 잠금
 };

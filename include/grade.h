@@ -13,7 +13,8 @@ struct Grade {
     // 학번·과목코드·학기 형식, 점수 범위 등을 검사
     bool isValid() const;
 
-    // 이 성적의 등급 (scoreToLetter(score) 와 같음)
+    // 점수만 본 원래 등급 (scoreToLetter(score) 와 같음)
+    //   화면·성적표·GPA 에는 재수강 규칙을 적용한 Retake::officialLetter 를 씀 (retake.h)
     std::string letter() const;
 };
 
