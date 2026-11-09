@@ -4,5 +4,6 @@ cmake-build-*/
 .vs/
 out/
 *.bak
+*.tmp
 .claude/
 CLAUDE.local.md
