@@ -20,19 +20,28 @@ cmake --build build
 
 `data/`, `web/` 경로는 빌드 시 프로젝트 경로로 고정되므로 어디서 실행해도 됩니다.
 
-**샘플 데이터** (학생 9명, 과목 6개, 성적 29건): `data/sample/` 을 `data/` 로 복사하면 바로 화면에서 확인할 수 있습니다.
-```bash
-cp data/sample/*.csv data/          # Windows: copy data\sample\*.csv data\
-```
-`data/*.csv` 는 실행 중에 바뀌므로 git 에 올리지 않습니다 (`.gitignore`). 처음 상태로 돌리려면 다시 복사하면 됩니다.
+## 데이터
 
-샘플에 일부러 넣은 경우:
+`data/` 의 CSV 3개(학생 9명, 과목 6개, 성적 29건)를 git 으로 같이 관리합니다. 실행하면 바로 화면에서 확인할 수 있습니다.
+
+| 파일 | 칸 |
+|---|---|
+| `students.csv` | `id,name,major,year` |
+| `courses.csv` | `code,name,credit,professor,category,area,schedule,language,capacity,remote` |
+| `grades.csv` | `studentId,courseCode,semester,score` |
+
+프로그램이 등록·수정·삭제할 때마다 이 파일을 바로 고쳐 씁니다 (직전 내용은 `.bak`, git 제외).
+화면에서 테스트하느라 바뀐 내용은 커밋 전에 `git diff data/` 로 확인하고, 되돌리려면 `git checkout -- data/` 를 쓰면 됩니다.
+
+일부러 넣은 경우:
 - 등급 경계 점수 (100, 95, 90, 85, 65, 60, 59.5, 0), 소수점 점수
 - GPA 동점: 이서연·박지호 (전체, 2026-1 둘 다 같음) → 석차 같은 등수
-- 재수강: 윤지아 MA101 (2018년 이후 입학, 2025-2 F → 2026-1, 성적표에 2025-2 는 "R"),
-  한지민 CS201 (2017년 입학, 2025-1 F → 2025-2 97점이지만 A0, 성적표에서 2025-1 줄은 빠짐)
-- 성적 없는 학생 (조서준), 성적 없는 과목 (CS401)
-- 쉼표가 든 값: MA101 담당 교수 `"최정훈, 한수진"`
+- 재수강: 윤지아 미적분학 `100101` (2018년 이후 입학, 2025-2 F → 2026-1, 성적표에 2025-2 는 "R"),
+  한지민 자료구조 `109201` (2017년 입학, 2025-1 F → 2025-2 97점이지만 A0, 성적표에서 2025-1 줄은 빠짐)
+- 성적 없는 학생 (조서준), 성적 없는 과목 (캡스톤디자인 `109401`, 정원 30명)
+- 쉼표가 든 값: 미적분학 담당 교수 `"최정훈, 한수진"`
+- 과목 상세: 이수구분 3종류 (전공필수·전공선택·교양필수), 교양영역 (미적분학 자연과학, 글쓰기 인문), 강의언어 3종류,
+  강의시간 여러 칸 (캡스톤디자인 `화(6~9) 목(6~7)`), 강의시간 없는 원격강좌 (글쓰기)
 
 ## 역할
 
@@ -43,16 +52,13 @@ cp data/sample/*.csv data/          # Windows: copy data\sample\*.csv data\
 | B | 현준 | `grade_manager` — 등록/수정/삭제/조회, 검색 |
 | C | 원준 | `statistics`, `server`, `web/` — GPA·평균·석차, HTTP 서버, 웹 UI |
 
-각자 `src/` 의 자기 `.cpp` 에 있는 `TODO` 를 채우면 됩니다.
-
 ## 폴더 구조
 
 ```
 include/      헤더 (함수 시그니처)
 src/          구현 + main.cpp
 web/          index.html, style.css, app.js
-data/         students.csv, courses.csv, grades.csv (자동 생성, git 제외)
-data/sample/  샘플 데이터 (위 "샘플 데이터" 참고)
+data/         students.csv, courses.csv, grades.csv (위 "데이터" 참고)
 third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 ```
 
@@ -67,7 +73,7 @@ third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 
 ## API
 
-요청/응답 본문은 JSON. 실패 시 `400` 잘못된 값 / `404` 없음 / `409` 중복 + `{"error": "메시지"}`
+요청/응답 본문은 JSON. 실패 시 `400` 잘못된 값 / `404` 없음 / `409` 중복·정원 초과 + `{"error": "메시지"}`
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
@@ -92,8 +98,15 @@ third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 
 JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
 - 학생 `{"id", "name", "major", "year"}`
-- 과목 `{"code", "name", "credit", "professor"}`
-- 성적 `{"studentId", "courseCode", "semester", "score", "letter"}` — `letter` 는 `Retake::officialLetter` (재수강 규칙 적용)
+- 과목 `{"code", "name", "credit", "professor", "category", "area", "schedule", "language", "capacity", "remote"}`
+  - `code` 과목코드: 숫자 6자리 (예: `109004`). 수정할 때 바꾸면 그 과목의 성적에 적힌 코드도 같이 바뀜
+  - `category` 이수구분: `전공필수` `전공선택` `교양필수` `교양선택` `일반선택`
+  - `language` 강의언어: `한국어전용` `영어전용` `모듈강좌(M)`
+  - `schedule` 강의시간: `월(1~4)`, `화(2~3) 목(2~3)`, `금(5)` 형식 (빈 값 허용), `area` 교양영역 (빈 값 허용)
+  - `capacity` 학기당 정원 (0 = 제한 없음, 최대 999). 같은 과목·학기 성적이 정원만큼 있으면 성적 등록은 `409`
+  - `remote` 원격강좌 여부 (`true`/`false`)
+  - 예전 형식 `courses.csv` (`code,name,credit,professor`) 도 읽고, 다음 저장 때 새 형식으로 바뀜
+- 성적 `{"studentId", "courseCode", "semester", "score", "letter"}` — 점수만 입력하면 `letter` 는 서버가 정함 (`scoreToLetter` + 재수강 규칙 `Retake::officialLetter`)
 
 ## 재수강 규칙
 
