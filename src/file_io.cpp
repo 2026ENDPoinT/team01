@@ -1,5 +1,6 @@
 #include "file_io.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -100,12 +101,12 @@ struct CsvRow {
 };
 
 // path 의 CSV 를 읽어서 rows 에 담음
+//   headers: 맨 앞이 지금 형식의 헤더, 그 뒤는 예전 형식의 헤더 (칸 수가 다른 예전 파일도 읽기 위해)
 //   - 파일이 없으면 rows 는 비어 있고 true (처음 실행할 때)
-//   - 첫 줄이 header 와 같으면 건너뜀
-//   - 칸 개수가 columnCount 와 다른 줄은 경고 후 건너뜀
+//   - 첫 줄이 headers 중 하나와 같으면 건너뜀
+//   - 칸 개수가 headers 의 칸 수 어느 것과도 다른 줄은 경고 후 건너뜀
 //   - 파일은 있는데 열 수 없으면 false
-bool readCsv(const std::string& path, const std::string& header, size_t columnCount,
-             std::vector<CsvRow>& rows) {
+bool readCsv(const std::string& path, const std::vector<std::string>& headers, std::vector<CsvRow>& rows) {
     rows.clear();
     if (!fs::exists(path)) {
         return true;
@@ -115,6 +116,11 @@ bool readCsv(const std::string& path, const std::string& header, size_t columnCo
     if (!in) {
         std::cerr << "오류: " << path << " 파일을 열 수 없습니다." << std::endl;
         return false;
+    }
+
+    std::vector<size_t> columnCounts;
+    for (const std::string& header : headers) {
+        columnCounts.push_back(splitLine(header).size());
     }
 
     std::string line;
@@ -134,14 +140,14 @@ bool readCsv(const std::string& path, const std::string& header, size_t columnCo
         if (line.empty()) {
             continue;
         }
-        if (lineNumber == 1 && line == header) {
+        if (lineNumber == 1 && std::find(headers.begin(), headers.end(), line) != headers.end()) {
             continue;
         }
 
         std::vector<std::string> fields = splitLine(line);
-        if (fields.size() != columnCount) {
+        if (std::find(columnCounts.begin(), columnCounts.end(), fields.size()) == columnCounts.end()) {
             std::cerr << "경고: " << path << " " << lineNumber << "번째 줄 무시 (칸 " << fields.size()
-                      << "개, " << columnCount << "개여야 함)" << std::endl;
+                      << "개, " << columnCounts.front() << "개여야 함)" << std::endl;
             continue;
         }
         rows.push_back({lineNumber, fields});
@@ -189,7 +195,7 @@ bool FileIO::saveStudents(const std::vector<Student>& students) {
 bool FileIO::loadStudents(std::vector<Student>& students) {
     const std::string path = dataDir + "/students.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, "id,name,major,year", 4, rows)) {
+    if (!readCsv(path, {"id,name,major,year"}, rows)) {
         return false;
     }
 
@@ -208,12 +214,17 @@ bool FileIO::loadStudents(std::vector<Student>& students) {
     return true;
 }
 
-// courses.csv : code,name,credit,professor
+// courses.csv : code,name,credit,professor,category,area,schedule,language,capacity,remote
+//   예전 형식(code,name,credit,professor) 파일도 읽고, 없는 칸은 Course 기본값으로 채움 → 다음 저장 때 새 형식으로 바뀜
+
+const char* const kCoursesHeader = "code,name,credit,professor,category,area,schedule,language,capacity,remote";
+const char* const kCoursesLegacyHeader = "code,name,credit,professor";
 
 bool FileIO::saveCourses(const std::vector<Course>& courses) {
-    std::string content = "code,name,credit,professor\n";
+    std::string content = std::string(kCoursesHeader) + "\n";
     for (const Course& c : courses) {
-        content += joinCsvLine({c.code, c.name, std::to_string(c.credit), c.professor});
+        content += joinCsvLine({c.code, c.name, std::to_string(c.credit), c.professor, c.category, c.area,
+                                c.schedule, c.language, std::to_string(c.capacity), c.remote ? "Y" : "N"});
     }
     return atomicWrite(dataDir + "/courses.csv", content);
 }
@@ -221,20 +232,32 @@ bool FileIO::saveCourses(const std::vector<Course>& courses) {
 bool FileIO::loadCourses(std::vector<Course>& courses) {
     const std::string path = dataDir + "/courses.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, "code,name,credit,professor", 4, rows)) {
+    if (!readCsv(path, {kCoursesHeader, kCoursesLegacyHeader}, rows)) {
         return false;
     }
 
     courses.clear();
     for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
         Course c;
-        c.code = row.fields[0];
-        c.name = row.fields[1];
-        if (!parseInt(row.fields[2], c.credit)) {
-            warnBadNumber(path, row.lineNumber, row.fields[2]);
+        c.code = f[0];
+        c.name = f[1];
+        if (!parseInt(f[2], c.credit)) {
+            warnBadNumber(path, row.lineNumber, f[2]);
             continue;
         }
-        c.professor = row.fields[3];
+        c.professor = f[3];
+        if (f.size() > 4) {
+            c.category = f[4];
+            c.area = f[5];
+            c.schedule = f[6];
+            c.language = f[7];
+            if (!parseInt(f[8], c.capacity)) {
+                warnBadNumber(path, row.lineNumber, f[8]);
+                continue;
+            }
+            c.remote = f[9] == "Y";
+        }
         courses.push_back(c);
     }
     return true;
@@ -253,7 +276,7 @@ bool FileIO::saveGrades(const std::vector<Grade>& grades) {
 bool FileIO::loadGrades(std::vector<Grade>& grades) {
     const std::string path = dataDir + "/grades.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, "studentId,courseCode,semester,score", 4, rows)) {
+    if (!readCsv(path, {"studentId,courseCode,semester,score"}, rows)) {
         return false;
     }
 

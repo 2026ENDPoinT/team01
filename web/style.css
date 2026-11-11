@@ -45,7 +45,7 @@ body {
 #tabs button:hover { color: var(--text); }
 #tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
-main { max-width: 1040px; margin: 24px auto; padding: 0 16px; }
+main { max-width: 1240px; margin: 24px auto; padding: 0 16px; }
 .tab { display: none; }
 .tab.active { display: block; }
 
@@ -97,6 +97,8 @@ tbody tr:hover { background: #fafbff; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 td:last-child { text-align: right; white-space: nowrap; }
 td.empty { text-align: center; color: var(--muted); padding: 32px; }
+td .sub { display: block; color: var(--muted); font-size: 12px; font-weight: normal; }
+.tag { display: inline-block; padding: 1px 6px; border-radius: 4px; background: var(--accent-weak); color: var(--accent); font-size: 11px; }
 .clickable { cursor: pointer; }
 
 /* 등급 배지 */

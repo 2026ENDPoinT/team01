@@ -47,14 +47,14 @@ std::string ReportExporter::studentReport(const GradeManager& gm, const std::str
     const bool showReplaced = Retake::admittedSince2018(studentId);
 
     std::string csv = kUtf8Bom;
-    csv += joinCsvLine({"과목코드", "과목명", "학점", "학기", "점수", "등급"});
+    csv += joinCsvLine({"과목코드", "과목명", "이수구분", "학점", "학기", "점수", "등급"});
     for (const Grade& g : grades) {
         const bool replaced = Retake::isReplaced(g, grades);
         if (replaced && !showReplaced) {
             continue;
         }
         const Course* course = gm.findCourse(g.courseCode);
-        csv += joinCsvLine({g.courseCode, course ? course->name : "",
+        csv += joinCsvLine({g.courseCode, course ? course->name : "", course ? course->category : "",
                             course ? std::to_string(course->credit) : "", g.semester,
                             replaced ? "" : scoreToString(g.score),
                             Retake::officialLetter(g, grades)});

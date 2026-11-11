@@ -11,7 +11,7 @@
 
 class ReportExporter {
 public:
-    // 학생 한 명의 성적표: 과목코드, 과목명, 학점, 학기, 점수, 등급 + 마지막 줄에 "GPA,4.25"
+    // 학생 한 명의 성적표: 과목코드, 과목명, 이수구분, 학점, 학기, 점수, 등급 + 마지막 줄에 "GPA,4.25"
     //   재수강으로 삭제된 과목: 2018년 이후 입학생은 점수 칸 비우고 등급 "R", 그 전 입학생은 줄을 뺌
     // 없는 학생이면 빈 문자열
     static std::string studentReport(const GradeManager& gm, const std::string& studentId);

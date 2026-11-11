@@ -1,5 +1,6 @@
 #include "server.h"
 
+#include <algorithm>
 #include <iostream>
 
 #include "httplib.h"
@@ -62,6 +63,16 @@ bool readNumber(const json& body, const char* key, httplib::Response& res, doubl
     return true;
 }
 
+bool readBool(const json& body, const char* key, httplib::Response& res, bool& out) {
+    auto it = body.find(key);
+    if (it == body.end() || !it->is_boolean()) {
+        fail(res, 400, std::string("'") + key + "' 값이 없거나 true/false 가 아닙니다");
+        return false;
+    }
+    out = it->get<bool>();
+    return true;
+}
+
 bool readStudent(const httplib::Request& req, httplib::Response& res, Student& s) {
     json body;
     return parseBody(req, res, body) && readString(body, "id", res, s.id) &&
@@ -73,8 +84,19 @@ bool readCourse(const httplib::Request& req, httplib::Response& res, Course& c) 
     json body;
     return parseBody(req, res, body) && readString(body, "code", res, c.code) &&
            readString(body, "name", res, c.name) && readInt(body, "credit", res, c.credit) &&
-           readString(body, "professor", res, c.professor);
+           readString(body, "professor", res, c.professor) && readString(body, "category", res, c.category) &&
+           readString(body, "area", res, c.area) && readString(body, "schedule", res, c.schedule) &&
+           readString(body, "language", res, c.language) && readInt(body, "capacity", res, c.capacity) &&
+           readBool(body, "remote", res, c.remote);
 }
+
+// 과목 검사 실패 시 보여줄 규칙
+const char* const kCourseRules =
+    "과목 정보가 올바르지 않습니다 (과목코드 숫자 6자리, 과목명 필수, 학점 1~4, 이수구분·강의언어는 목록에서 선택, "
+    "강의시간 예: 월(1~4) 수(5~6), 정원 0~999)";
+// 성적 검사 실패 시 보여줄 규칙
+const char* const kGradeRules =
+    "성적 정보가 올바르지 않습니다 (학번 숫자 8자리, 과목코드 숫자 6자리, 학기 예: 2026-1, 점수 0~100)";
 
 bool readGrade(const httplib::Request& req, httplib::Response& res, Grade& g) {
     json body;
@@ -88,7 +110,10 @@ json studentJson(const Student& s) {
 }
 
 json courseJson(const Course& c) {
-    return {{"code", c.code}, {"name", c.name}, {"credit", c.credit}, {"professor", c.professor}};
+    return {{"code", c.code},         {"name", c.name},         {"credit", c.credit},
+            {"professor", c.professor}, {"category", c.category}, {"area", c.area},
+            {"schedule", c.schedule}, {"language", c.language}, {"capacity", c.capacity},
+            {"remote", c.remote}};
 }
 
 // letter 는 재수강 규칙을 적용한 등급
@@ -212,7 +237,7 @@ void Server::run() {
         std::lock_guard<std::mutex> lock(mtx);
         Course c;
         if (!readCourse(req, res, c)) return;
-        if (!c.isValid()) return fail(res, 400, "과목 정보가 올바르지 않습니다 (코드·과목명 필수, 학점 1~4)");
+        if (!c.isValid()) return fail(res, 400, kCourseRules);
         if (gm.findCourse(c.code)) return fail(res, 409, "이미 등록된 과목 코드입니다: " + c.code);
         if (!gm.addCourse(c)) return fail(res, 400, "과목을 등록할 수 없습니다");
         saveOrFail(gm, res, courseJson(c), 201);
@@ -224,7 +249,7 @@ void Server::run() {
         Course c;
         if (!readCourse(req, res, c)) return;
         if (!gm.findCourse(code)) return fail(res, 404, "없는 과목입니다: " + code);
-        if (!c.isValid()) return fail(res, 400, "과목 정보가 올바르지 않습니다 (코드·과목명 필수, 학점 1~4)");
+        if (!c.isValid()) return fail(res, 400, kCourseRules);
         if (c.code != code && gm.findCourse(c.code)) return fail(res, 409, "이미 등록된 과목 코드입니다: " + c.code);
         if (!gm.updateCourse(code, c)) return fail(res, 400, "과목을 수정할 수 없습니다");
         saveOrFail(gm, res, courseJson(c));
@@ -258,11 +283,21 @@ void Server::run() {
         std::lock_guard<std::mutex> lock(mtx);
         Grade g;
         if (!readGrade(req, res, g)) return;
-        if (!g.isValid()) return fail(res, 400, "성적 정보가 올바르지 않습니다 (학번·과목코드·학기 형식, 점수 0~100)");
+        if (!g.isValid()) return fail(res, 400, kGradeRules);
         if (!gm.findStudent(g.studentId)) return fail(res, 404, "없는 학생입니다: " + g.studentId);
-        if (!gm.findCourse(g.courseCode)) return fail(res, 404, "없는 과목입니다: " + g.courseCode);
+        const Course* course = gm.findCourse(g.courseCode);
+        if (!course) return fail(res, 404, "없는 과목입니다: " + g.courseCode);
         if (gradeExists(gm, g.studentId, g.courseCode, g.semester)) {
             return fail(res, 409, "이미 등록된 성적입니다 (같은 학생·과목·학기)");
+        }
+        if (course->capacity > 0) {
+            const std::vector<Grade> sameCourse = gm.getGradesByCourse(g.courseCode);
+            const auto enrolled = std::count_if(sameCourse.begin(), sameCourse.end(),
+                                                [&](const Grade& other) { return other.semester == g.semester; });
+            if (enrolled >= course->capacity) {
+                return fail(res, 409, g.semester + " " + course->name + " 정원(" +
+                                          std::to_string(course->capacity) + "명)이 찼습니다");
+            }
         }
         if (!gm.addGrade(g)) return fail(res, 400, "성적을 등록할 수 없습니다");
         saveOrFail(gm, res, gradeJson(gm, g), 201);
@@ -272,7 +307,7 @@ void Server::run() {
         std::lock_guard<std::mutex> lock(mtx);
         Grade g;
         if (!readGrade(req, res, g)) return;
-        if (!g.isValid()) return fail(res, 400, "성적 정보가 올바르지 않습니다 (학번·과목코드·학기 형식, 점수 0~100)");
+        if (!g.isValid()) return fail(res, 400, kGradeRules);
         if (!gradeExists(gm, g.studentId, g.courseCode, g.semester)) return fail(res, 404, "없는 성적입니다");
         if (!gm.updateGrade(g)) return fail(res, 400, "성적을 수정할 수 없습니다");
         saveOrFail(gm, res, gradeJson(gm, g));

@@ -4,14 +4,9 @@
 #include <cctype>
 #include <cmath>
 
-namespace {
+#include "course.h"
 
-bool isBlank(const std::string& s) {
-    for (unsigned char c : s) {
-        if (!std::isspace(c)) return false;
-    }
-    return true;
-}
+namespace {
 
 // 학번: 숫자 8자리 (Student::isValid 와 같은 규칙)
 bool isEightDigits(const std::string& s) {
@@ -37,7 +32,7 @@ bool isValidSemester(const std::string& s) {
 
 bool Grade::isValid() const {
     if (!isEightDigits(studentId)) return false;
-    if (isBlank(courseCode)) return false;
+    if (!isValidCourseCode(courseCode)) return false;  // 과목코드: 숫자 6자리 (course.h)
     if (!isValidSemester(semester)) return false;
     if (std::isnan(score) || score < 0.0 || score > 100.0) return false;  // NaN 도 거름
     return true;

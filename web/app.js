@@ -83,8 +83,9 @@ $('dlg-form').addEventListener('submit', async (e) => {
 });
 
 // 입력 폼 창 만들기
-//   fields: [{name, label, type, readonly, step, placeholder, options:[{value,label}]}]
+//   fields: [{name, label, type, readonly, optional, step, placeholder, options:[{value,label}]}]
 //     options 가 있으면 선택 상자, 없으면 입력칸. readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
+//     optional 이면 빈칸으로 저장할 수 있음 (그 외 입력칸은 필수)
 //   values: 처음 채워둘 값, onSubmit: 저장할 때 실행할 함수 (폼 값 객체를 받음)
 function openForm({ title, fields, values = {}, onSubmit }) {
     const html = fields.map((f) => {
@@ -99,7 +100,7 @@ function openForm({ title, fields, values = {}, onSubmit }) {
             if (f.readonly) input += `<input type="hidden" name="${f.name}" value="${v}">`;
         } else {
             input = `<input name="${f.name}" type="${f.type || 'text'}" value="${v}" ${f.step ? `step="${f.step}"` : ''}
-                ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} required>`;
+                ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.optional ? '' : 'required'}>`;
         }
         return `<div class="field"><label>${f.label}</label>${input}</div>`;
     }).join('') + '<div class="form-error"></div>';
@@ -260,18 +261,33 @@ async function showStudentReport(s) {
 
 // ───────── 과목 ─────────
 
-// 과목 등록/수정 폼 항목. 수정할 때는 과목 코드를 못 바꿈
-const courseFields = (editing) => [
-    { name: 'code', label: '과목 코드', readonly: editing, placeholder: '예: CS101' },
+// 과목 등록/수정 폼 항목. 과목코드는 숫자 6자리 (예: 109004)
+//   수정 때 과목코드를 바꾸면 서버가 그 과목의 성적에 적힌 코드도 같이 바꿈 (GradeManager::updateCourse)
+//   이수구분·강의언어 목록은 서버(course.cpp)의 courseCategories / courseLanguages 와 같아야 함
+const COURSE_CATEGORIES = ['전공필수', '전공선택', '교양필수', '교양선택', '일반선택'];
+const COURSE_LANGUAGES = ['한국어전용', '영어전용', '모듈강좌(M)'];
+const asOptions = (list) => list.map((v) => ({ value: v, label: v }));
+const courseFields = () => [
+    { name: 'code', label: '과목 코드 (숫자 6자리)', placeholder: '예: 109004' },
     { name: 'name', label: '과목명' },
-    { name: 'credit', label: '학점', type: 'number' },
-    { name: 'professor', label: '담당 교수' },
+    { name: 'category', label: '이수구분', options: asOptions(COURSE_CATEGORIES) },
+    { name: 'credit', label: '학점 (1~4)', type: 'number' },
+    { name: 'professor', label: '담당 교수', optional: true },
+    { name: 'schedule', label: '강의시간', optional: true, placeholder: '예: 월(1~4) 또는 화(2~3) 목(2~3)' },
+    { name: 'language', label: '강의언어', options: asOptions(COURSE_LANGUAGES) },
+    { name: 'area', label: '교양영역 (교양 과목만)', optional: true, placeholder: '예: 인문, 자연과학' },
+    { name: 'capacity', label: '학기당 정원 (0 = 제한 없음)', type: 'number' },
+    { name: 'remote', label: '원격강좌', options: [{ value: 'N', label: '아니오' }, { value: 'Y', label: '예' }] },
 ];
+// 폼 값 → API 본문 (숫자·참거짓 변환)
+const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.capacity), remote: d.remote === 'Y' });
+// API 값 → 폼 처음 값 (remote 는 선택 상자 값 Y/N 으로)
+const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 
-// 과목 표 그리기. 과목마다 통계 API 를 불러 수강 인원·평균·최고/최저를 채움 (성적이 없으면 '-')
+// 과목 표 그리기. 과목마다 통계 API 를 불러 수강 인원(전체 학기)·평균·최고/최저를 채움 (성적이 없으면 '-')
 async function renderCourses() {
     const body = $('course-body');
-    if (!state.courses.length) { body.innerHTML = emptyRow(8, '등록된 과목이 없습니다'); return; }
+    if (!state.courses.length) { body.innerHTML = emptyRow(11, '등록된 과목이 없습니다'); return; }
     const stats = await Promise.all(state.courses.map((c) =>
         api('GET', '/api/stats/course/' + encodeURIComponent(c.code)).catch(() => null)));
     body.innerHTML = state.courses.map((c, i) => {
@@ -279,12 +295,15 @@ async function renderCourses() {
         const has = st && st.count > 0;
         return `<tr>
             <td>${esc(c.code)}</td>
-            <td><b>${esc(c.name)}</b></td>
+            <td><b>${esc(c.name)}</b>${c.area ? `<span class="sub">${esc(c.area)}</span>` : ''}</td>
+            <td>${esc(c.category)}</td>
             <td class="num">${esc(c.credit)}</td>
             <td>${esc(c.professor)}</td>
+            <td>${esc(c.schedule) || '-'}${c.remote ? ' <span class="tag">원격</span>' : ''}</td>
+            <td>${esc(c.language)}</td>
+            <td class="num">${c.capacity > 0 ? c.capacity + '명' : '제한 없음'}</td>
             <td class="num">${has ? st.count + '명' : '-'}</td>
-            <td class="num">${has ? fmt(st.average, 1) : '-'}</td>
-            <td class="num">${has ? `${fmt(st.max, 0)} / ${fmt(st.min, 0)}` : '-'}</td>
+            <td class="num">${has ? `${fmt(st.average, 1)} <span class="sub">${fmt(st.max, 0)} / ${fmt(st.min, 0)}</span>` : '-'}</td>
             <td>
                 <a href="/api/export/course/${encodeURIComponent(c.code)}"><button class="link">CSV</button></a>
                 <button class="link" data-act="edit" data-code="${esc(c.code)}">수정</button>
@@ -295,9 +314,10 @@ async function renderCourses() {
 
 $('course-add').onclick = () => openForm({
     title: '과목 등록',
-    fields: courseFields(false),
+    fields: courseFields(),
+    values: { category: '전공선택', credit: 3, language: '한국어전용', capacity: 0, remote: 'N' },
     onSubmit: async (d) => {
-        await api('POST', '/api/courses', { ...d, credit: Number(d.credit) });
+        await api('POST', '/api/courses', courseBody(d));
         toast('과목을 등록했습니다');
         await refreshAll();
     },
@@ -309,10 +329,10 @@ $('course-body').onclick = (e) => {
     const c = state.courses.find((x) => x.code === b.dataset.code);
     if (b.dataset.act === 'edit') openForm({
         title: '과목 수정',
-        fields: courseFields(true),
-        values: c,
+        fields: courseFields(),
+        values: courseFormValues(c),
         onSubmit: async (d) => {
-            await api('PUT', '/api/courses/' + encodeURIComponent(c.code), { ...d, credit: Number(d.credit) });
+            await api('PUT', '/api/courses/' + encodeURIComponent(c.code), courseBody(d));
             toast('수정했습니다');
             await refreshAll();
         },
@@ -363,12 +383,12 @@ async function renderGrades() {
 ['grade-f-student', 'grade-f-course', 'grade-f-semester'].forEach((id) => ($(id).onchange = renderGrades));
 
 // 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수만 고침
-// (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문)
+// (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문). 등급은 서버가 점수로 정함
 const gradeFields = (editing) => [
     { name: 'studentId', label: '학생', options: studentOptions(), readonly: editing },
     { name: 'courseCode', label: '과목', options: courseOptions(), readonly: editing },
     { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1' },
-    { name: 'score', label: '점수 (0~100)', type: 'number', step: 'any' },
+    { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any' },
 ];
 
 // 성적 등록. 학생과 과목이 하나도 없으면 등록할 수 없으므로 안내만 띄움
@@ -379,8 +399,8 @@ $('grade-add').onclick = () => {
         fields: gradeFields(false),
         values: { semester: '2026-1' },
         onSubmit: async (d) => {
-            await api('POST', '/api/grades', { ...d, score: Number(d.score) });
-            toast('성적을 등록했습니다');
+            const g = await api('POST', '/api/grades', { ...d, score: Number(d.score) });
+            toast(`성적을 등록했습니다: ${g.score}점 → ${g.letter}`);
             await refreshAll();
         },
     });
@@ -398,8 +418,8 @@ $('grade-body').onclick = async (e) => {
             fields: gradeFields(true),
             values: g,
             onSubmit: async (d) => {
-                await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
-                toast('수정했습니다');
+                const updated = await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
+                toast(`수정했습니다: ${updated.score}점 → ${updated.letter}`);
                 await refreshAll();
             },
         });
