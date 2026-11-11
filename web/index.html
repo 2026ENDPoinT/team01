@@ -7,9 +7,84 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>성적 관리</h1>
-    <h2>학생 목록</h2>
-    <ul id="student-list"></ul>
+    <header class="topbar">
+        <h1>📚 성적 관리</h1>
+        <nav id="tabs">
+            <button data-tab="students" class="active">학생</button>
+            <button data-tab="courses">과목</button>
+            <button data-tab="grades">성적</button>
+            <button data-tab="ranking">석차</button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- 학생 -->
+        <section id="tab-students" class="tab active">
+            <div class="toolbar">
+                <input id="student-search" type="search" placeholder="학번 또는 이름 검색">
+                <span class="spacer"></span>
+                <button class="primary" id="student-add">+ 학생 등록</button>
+            </div>
+            <table>
+                <thead><tr><th>학번</th><th>이름</th><th>학과</th><th>학년</th><th class="num">GPA</th><th></th></tr></thead>
+                <tbody id="student-body"></tbody>
+            </table>
+        </section>
+
+        <!-- 과목 -->
+        <section id="tab-courses" class="tab">
+            <div class="toolbar">
+                <span class="spacer"></span>
+                <button class="primary" id="course-add">+ 과목 등록</button>
+            </div>
+            <table>
+                <thead><tr><th>코드</th><th>과목명</th><th class="num">학점</th><th>담당 교수</th><th class="num">수강</th><th class="num">평균</th><th class="num">최고/최저</th><th></th></tr></thead>
+                <tbody id="course-body"></tbody>
+            </table>
+        </section>
+
+        <!-- 성적 -->
+        <section id="tab-grades" class="tab">
+            <div class="toolbar">
+                <select id="grade-f-student"></select>
+                <select id="grade-f-course"></select>
+                <select id="grade-f-semester"></select>
+                <span class="spacer"></span>
+                <button class="primary" id="grade-add">+ 성적 등록</button>
+            </div>
+            <table>
+                <thead><tr><th>학기</th><th>학번</th><th>이름</th><th>과목</th><th class="num">점수</th><th>등급</th><th></th></tr></thead>
+                <tbody id="grade-body"></tbody>
+            </table>
+        </section>
+
+        <!-- 석차 -->
+        <section id="tab-ranking" class="tab">
+            <div class="toolbar">
+                <label>학기 <select id="rank-semester"></select></label>
+                <span class="spacer"></span>
+                <span class="hint">GPA 4.5 만점 · 동점이면 같은 등수</span>
+            </div>
+            <table>
+                <thead><tr><th>등수</th><th>학번</th><th>이름</th><th class="num">GPA</th><th>GPA 막대</th></tr></thead>
+                <tbody id="rank-body"></tbody>
+            </table>
+        </section>
+    </main>
+
+    <!-- 공용 입력 / 상세 대화상자 -->
+    <dialog id="dlg">
+        <form method="dialog" id="dlg-form">
+            <h2 id="dlg-title"></h2>
+            <div id="dlg-body"></div>
+            <div class="dlg-actions">
+                <button type="button" id="dlg-cancel">닫기</button>
+                <button type="submit" class="primary" id="dlg-ok">저장</button>
+            </div>
+        </form>
+    </dialog>
+
+    <div id="toast" role="status"></div>
     <script src="app.js"></script>
 </body>
 </html>
