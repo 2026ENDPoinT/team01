@@ -5,6 +5,5 @@ cmake-build-*/
 out/
 *.bak
 *.tmp
-data/*.csv
 .claude/
 CLAUDE.local.md
