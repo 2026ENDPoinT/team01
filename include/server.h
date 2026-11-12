@@ -22,6 +22,11 @@
 //   GET    /api/courses               과목 목록 (로그인)
 //   POST   /api/courses               과목 등록        (admin)
 //   PUT    /api/courses/:code         과목 수정        DELETE /api/courses/:code 과목 삭제 (admin)
+//   GET    /api/courses/:code/posts   과목 게시물 목록 (semester·week·id 순)
+//                                     (admin 전체, professor 담당 과목만, student 는 수강신청한 과목의 수강신청 학기 게시물만)
+//   POST   /api/courses/:code/posts   게시물 추가 {semester,category,week,title,body,link,dueDate}
+//   PUT    /api/courses/:code/posts/:id   게시물 수정 (같은 본문)    DELETE /api/courses/:code/posts/:id   게시물 삭제
+//                                     (admin, professor 는 담당 과목만. 작성자·작성시각은 서버가 채움)
 //   GET    /api/grades                성적 목록 (?studentId= ?courseCode= ?semester= 로 거르기)
 //                                     (admin 전체, professor 담당 과목만, student 본인 것만)
 //   POST   /api/grades                성적 등록        PUT /api/grades           성적 수정

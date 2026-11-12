@@ -7,7 +7,13 @@ const $ = (id) => document.getElementById(id);
 // students·courses: 여러 탭이 같이 쓰는 학생·과목 목록 (loadBase 로 채움, 서버가 역할에 맞게 걸러 줌)
 // stats: 과목코드 → 과목 통계 (수강과목 탭을 그릴 때 채움, 통계를 못 받은 과목은 null)
 // enrollCtx: 수강신청 탭에서 지금 보고 있는 {학번, 학기} (신청·취소 버튼이 사용)
-const state = { me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null };
+// myEnrollments: 학생 자기 수강신청 목록 (loadBase 가 채움, 다른 역할은 빈 목록) → 학생이 볼 수 있는 과목을 정함
+// courseCode·courseSem·postFilter: 과목 페이지에서 지금 보는 과목 · 학기 · 분류 칩 ('all' = 전체)
+// coursePosts: 지금 과목 페이지의 게시물 (서버가 권한에 맞게 걸러 줌, 학기·분류는 화면에서 거름)
+const state = {
+    me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
+    myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
+};
 
 // ───────── 공용 도우미 ─────────
 
@@ -70,6 +76,14 @@ const teaches = (c) => state.me?.role === 'professor' &&
     String(c.professor ?? '').split(',').map((s) => s.trim()).includes(state.me.name);
 // 성적 탭에서 고를 수 있는 과목: 관리자는 전체, 교수는 담당 과목만
 const gradeCourses = () => (isAdmin() ? state.courses : state.courses.filter(teaches));
+// 수강과목 목록·과목 탭에 보이는 과목: 관리자는 전체, 교수는 담당 과목, 학생은 수강신청한 과목
+const myCourses = () => {
+    if (isAdmin()) return state.courses;
+    if (state.me?.role === 'professor') return state.courses.filter(teaches);
+    if (state.me?.role !== 'student') return [];
+    const mine = new Set(state.myEnrollments.map((e) => e.courseCode));
+    return state.courses.filter((c) => mine.has(c.code));
+};
 
 // ───────── 대화상자 ─────────
 
@@ -105,7 +119,8 @@ $('dlg-form').addEventListener('submit', async (e) => {
 
 // 입력 폼 창 만들기
 //   fields: [{name, label, type, readonly, optional, step, placeholder, autocomplete, options:[{value,label}]}]
-//     options 가 있으면 선택 상자, 없으면 입력칸. readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
+//     options 가 있으면 선택 상자, type 이 'textarea' 면 여러 줄 입력칸, 그 외는 입력칸
+//     readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
 //     optional 이면 빈칸으로 저장할 수 있음 (그 외 입력칸은 필수)
 //   values: 처음 채워둘 값, onSubmit: 저장할 때 실행할 함수 (폼 값 객체를 받음)
 function openForm({ title, fields, values = {}, onSubmit }) {
@@ -119,6 +134,10 @@ function openForm({ title, fields, values = {}, onSubmit }) {
                 ).join('') + '</select>';
             // disabled 항목은 FormData 에서 빠지므로 숨은 값으로 보냄
             if (f.readonly) input += `<input type="hidden" name="${f.name}" value="${v}">`;
+        } else if (f.type === 'textarea') {
+            // 시작 태그 바로 뒤 줄바꿈 하나는 HTML 이 버리므로, 값이 줄바꿈으로 시작해도 남도록 하나를 먼저 넣음
+            input = `<textarea name="${f.name}" rows="6" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
+                ${f.optional ? '' : 'required'}>\n${v}</textarea>`;
         } else {
             input = `<input name="${f.name}" type="${f.type || 'text'}" value="${v}" ${f.step ? `step="${f.step}"` : ''}
                 ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
@@ -143,7 +162,7 @@ async function confirmDelete(msg, fn) {
 
 // ───────── 탭 ─────────
 
-// 탭 이름 → 그 탭을 그리는 함수
+// 탭 이름 → 그 탭을 그리는 함수 (course = 과목 탭, 어떤 과목인지는 state.courseCode)
 const renderers = {
     courses: renderCourses,
     enroll: renderEnroll,
@@ -152,29 +171,55 @@ const renderers = {
     myreport: renderMyReport,
     ranking: renderRanking,
     accounts: renderAccounts,
+    course: renderCoursePage,
 };
-// 지금 열린 탭 이름
-const currentTab = () => document.querySelector('#tabs button.active').dataset.tab;
+// 지금 열린 탭 이름 (보이는 화면 section 의 id 'tab-이름' 에서 꺼냄. 과목 탭 버튼이 다시 그려져도 그대로)
+const currentTab = () => document.querySelector('main .tab.active').id.slice('tab-'.length);
 
 // 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
-function showTab(name) {
-    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류 선택을 처음으로 되돌림
+function showTab(name, code) {
+    if (code && code !== state.courseCode) {
+        state.courseCode = code;
+        state.courseSem = null;
+        state.postFilter = 'all';
+    }
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active',
+        b.dataset.tab === 'course' ? name === 'course' && b.dataset.code === state.courseCode : b.dataset.tab === name));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
     refreshAll().catch((e) => toast(e.message, true));
 }
 $('tabs').onclick = (e) => {
     const b = e.target.closest('button[data-tab]');
-    if (b && !b.hidden) showTab(b.dataset.tab);
+    if (b && !b.hidden) showTab(b.dataset.tab, b.dataset.code);
 };
 
 // 학생·과목 목록을 서버에서 받아 state 에 저장 (학생 목록은 서버가 역할에 맞게 걸러 줌)
+// 학생이면 자기 수강신청도 받음 (서버가 자기 것만 줌) → myCourses 가 사용
 async function loadBase() {
-    [state.students, state.courses] = await Promise.all([api('GET', '/api/students'), api('GET', '/api/courses')]);
+    [state.students, state.courses, state.myEnrollments] = await Promise.all([
+        api('GET', '/api/students'),
+        api('GET', '/api/courses'),
+        state.me.role === 'student' ? api('GET', '/api/enrollments') : [],
+    ]);
+}
+// 상단 과목 탭을 myCourses() 순서대로 다시 채움. 지금 과목 페이지의 과목 탭은 active
+function renderCourseTabs() {
+    const onCourse = currentTab() === 'course';
+    $('course-tabs').innerHTML = myCourses().map((c) =>
+        `<button data-tab="course" data-code="${esc(c.code)}"${onCourse && c.code === state.courseCode ? ' class="active"' : ''}>${esc(c.name)}</button>`
+    ).join('');
 }
 // 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 지금 탭을 다시 그림
+// 과목 페이지를 보던 중 그 과목을 볼 수 없게 되면(과목 삭제·권한 변경) 수강과목 탭으로 돌아감
 async function refreshAll() {
     if (!state.me) return;
     await loadBase();
+    renderCourseTabs();
+    if (currentTab() === 'course' && !myCourses().some((c) => c.code === state.courseCode)) {
+        showTab('courses');
+        return;
+    }
     await renderers[currentTab()]();
 }
 
@@ -201,9 +246,15 @@ function resetView() {
     state.stats = {};
     state.accounts = [];
     state.enrollCtx = null;
+    state.myEnrollments = [];
+    state.courseCode = null;
+    state.courseSem = null;
+    state.postFilter = 'all';
+    state.coursePosts = [];
     ['course-list', 'student-body', 'grade-body', 'rank-body', 'enroll-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester', 'rank-semester',
-        'enroll-student', 'enroll-course', 'enroll-sem-select'].forEach((id) => ($(id).innerHTML = ''));
+        'enroll-student', 'enroll-course', 'enroll-sem-select',
+        'course-tabs', 'course-hero', 'course-filter', 'course-posts', 'course-sem'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
     $('enroll-period').textContent = '';
@@ -223,12 +274,12 @@ function showLogin() {
     $('login-username').focus();
 }
 
-// 로그인한 계정으로 앱 시작: 역할에 허용된 탭만 보이고 첫 탭(수강과목)을 엶
+// 로그인한 계정으로 앱 시작: 역할에 허용된 탭만 보이고 첫 탭(수강과목)을 엶 (과목 탭은 refreshAll 이 채움)
 function startApp(me) {
     state.me = me;
     resetView();
     $('user-label').textContent = `${me.name || me.username} · ${ROLE_LABEL[me.role] ?? me.role}`;
-    document.querySelectorAll('#tabs button').forEach((b) => (b.hidden = !b.dataset.roles.split(' ').includes(me.role)));
+    document.querySelectorAll('#tabs button[data-roles]').forEach((b) => (b.hidden = !b.dataset.roles.split(' ').includes(me.role)));
     $('course-add').hidden = me.role !== 'admin';
     $('login-view').hidden = true;
     $('tabs').hidden = false;
@@ -300,16 +351,22 @@ const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.
 // API 값 → 폼 처음 값 (remote 는 선택 상자 값 Y/N 으로)
 const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 
-// 과목 목록 그리기: 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
+// 과목 목록 그리기 (myCourses: 교수는 담당 과목, 학생은 수강신청한 과목만)
+// 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
 // 한 줄에 과목 정보(왼쪽)와 최근 학기 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
 //   최근 학기 = 수강신청이 1건 이상 있는 가장 늦은 학기 (신청 기록이 없으면 학기 없이 "수강 0")
 async function renderCourses() {
     const list = $('course-list');
-    const stats = await Promise.all(state.courses.map((c) =>
+    const courses = myCourses();
+    const stats = await Promise.all(courses.map((c) =>
         api('GET', '/api/stats/course/' + encodeURIComponent(c.code)).catch(() => null)));
-    state.stats = Object.fromEntries(state.courses.map((c, i) => [c.code, stats[i]]));
-    if (!state.courses.length) { list.innerHTML = '<li class="empty">등록된 과목이 없습니다</li>'; return; }
-    list.innerHTML = state.courses.map((c) => {
+    state.stats = Object.fromEntries(courses.map((c, i) => [c.code, stats[i]]));
+    if (!courses.length) {
+        const msg = { professor: '담당 과목이 없습니다', student: '수강신청한 과목이 없습니다' }[state.me.role] ?? '등록된 과목이 없습니다';
+        list.innerHTML = `<li class="empty">${msg}</li>`;
+        return;
+    }
+    list.innerHTML = courses.map((c) => {
         const st = state.stats[c.code];
         const has = st && st.count > 0;
         const sem = st?.latestSemester ?? '';
@@ -372,6 +429,8 @@ function editCourse(c) {
         values: courseFormValues(c),
         onSubmit: async (d) => {
             await api('PUT', '/api/courses/' + encodeURIComponent(c.code), courseBody(d));
+            // 과목 페이지에서 과목코드를 바꿨으면 새 코드의 과목 페이지에 그대로 머묾
+            if (state.courseCode === c.code) state.courseCode = d.code;
             toast('수정했습니다');
             await refreshAll();
         },
@@ -381,16 +440,14 @@ function editCourse(c) {
 // 과목 삭제 (확인 후)
 function deleteCourse(c) {
     confirmDelete(
-        `${c.name}(${c.code}) 과목을 삭제할까요?\n이 과목의 성적과 수강신청도 함께 삭제됩니다.`,
+        `${c.name}(${c.code}) 과목을 삭제할까요?\n이 과목의 성적·수강신청·게시물도 함께 삭제됩니다.`,
         () => api('DELETE', '/api/courses/' + encodeURIComponent(c.code)));
 }
 
-// 행을 누르면 그 과목의 상세 창
+// 행을 누르면 그 과목의 과목 탭 (상세 창은 과목 페이지의 "과목 정보" 버튼)
 $('course-list').onclick = (e) => {
     const row = e.target.closest('.course-row');
-    if (!row) return;
-    const c = state.courses.find((x) => x.code === row.dataset.code);
-    if (c) showCourseDetail(c, state.stats[c.code]);
+    if (row) showTab('course', row.dataset.code);
 };
 
 $('course-add').onclick = () => openForm({
@@ -403,6 +460,196 @@ $('course-add').onclick = () => openForm({
         await refreshAll();
     },
 });
+
+// ───────── 과목 페이지 ─────────
+
+// 게시물 분류 (서버 postCategories 와 같은 값). icon: 목록 아이콘 글자, dateLabel: 날짜 칸 이름
+const POST_CATEGORIES = [
+    { value: 'material', label: '수업자료', icon: '자', dateLabel: '날짜' },
+    { value: 'midterm', label: '중간고사', icon: '중', dateLabel: '시험일' },
+    { value: 'final', label: '기말고사', icon: '기', dateLabel: '시험일' },
+    { value: 'assignment', label: '과제', icon: '과', dateLabel: '마감' },
+];
+const postCategory = (v) => POST_CATEGORIES.find((k) => k.value === v) ?? { value: v, label: v, icon: '?', dateLabel: '날짜' };
+// 과목의 게시물 API 주소
+const postsUrl = (code) => '/api/courses/' + encodeURIComponent(code) + '/posts';
+// 지금 과목 페이지의 과목 (없으면 undefined)
+const pageCourse = () => state.courses.find((c) => c.code === state.courseCode);
+// 게시물을 추가·수정·삭제할 수 있는지: 관리자 또는 담당 교수
+const canEditPosts = (c) => isAdmin() || teaches(c);
+// 마감·시험일이 지났는지 (날짜만 있으면 그날 23:59 기준, 시각은 브라우저 지역 시간)
+function isExpired(due) {
+    if (!due) return false;
+    const t = new Date((due.length === 10 ? due + ' 23:59' : due).replace(' ', 'T'));
+    return !Number.isNaN(t.getTime()) && t < new Date();
+}
+
+// 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
+//   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
+//   처음 보이는 학기: 이전 선택 → 게시물이 있는 가장 최근 학기 → (관리자·교수) 신청 학기 → 가장 최근 학기
+async function renderCoursePage() {
+    const code = state.courseCode;
+    const c = pageCourse();
+    if (!c) { showTab('courses'); return; }
+    $('post-add').hidden = !canEditPosts(c);
+    const staff = state.me.role !== 'student';
+    const [posts, staffInfo] = await Promise.all([
+        api('GET', postsUrl(code)),
+        staff ? Promise.all([
+            api('GET', '/api/enrollments?courseCode=' + encodeURIComponent(code)),
+            api('GET', '/api/enrollment/settings'),
+        ]) : null,
+    ]);
+    // 기다리는 사이 다른 과목·탭으로 옮겼으면 그리지 않음 (나중에 끝난 요청이 화면을 덮지 않게)
+    if (currentTab() !== 'course' || state.courseCode !== code) return;
+
+    let sems, fallback;
+    if (staff) {
+        const [list, settings] = staffInfo;
+        sems = sortSemesters([...posts.map((p) => p.semester), ...list.map((e) => e.semester), settings.semester]);
+        fallback = settings.semester || sems[0] || '';
+    } else {
+        sems = sortSemesters(state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester));
+        fallback = sems[0] || '';
+    }
+    if (!sems.includes(state.courseSem)) state.courseSem = sems.find((s) => posts.some((p) => p.semester === s)) ?? fallback;
+    fillSelect($('course-sem'), sems.map((s) => ({ value: s, label: s })), '', state.courseSem);
+
+    state.coursePosts = posts;
+    drawPosts();
+}
+
+// 과목 카드 + 분류 칩 + 주차별 게시물 목록 그리기 (선택 학기의 게시물만, 서버를 다시 부르지 않음)
+function drawPosts() {
+    const c = pageCourse();
+    if (!c) return;
+    const sem = state.courseSem ?? '';
+    $('course-hero').innerHTML = `
+        <div class="course-hero-info">
+            <div class="course-hero-sem">${sem ? esc(sem) + '학기' : '학기 없음'}</div>
+            <div class="course-hero-name">${esc(c.name)}</div>
+            <div class="course-line">${esc(c.schedule) || '-'} · ${esc(c.code)} · ${esc(c.professor) || '-'} · ${esc(c.credit)}학점</div>
+        </div>
+        <button type="button" data-act="info">과목 정보</button>`;
+
+    const inSem = state.coursePosts.filter((p) => p.semester === sem);
+    const chips = [{ value: 'all', label: '전체' }, ...POST_CATEGORIES];
+    $('course-filter').innerHTML = chips.map((k) => {
+        const n = k.value === 'all' ? inSem.length : inSem.filter((p) => p.category === k.value).length;
+        return `<button type="button" class="chip${state.postFilter === k.value ? ' active' : ''}" data-cat="${k.value}">${k.label} ${n}</button>`;
+    }).join('');
+
+    // 주차 → 분류(POST_CATEGORIES 순서) → id 순
+    const order = (v) => POST_CATEGORIES.findIndex((k) => k.value === v);
+    const shown = inSem.filter((p) => state.postFilter === 'all' || p.category === state.postFilter)
+        .sort((a, b) => a.week - b.week || order(a.category) - order(b.category) || a.id - b.id);
+    const box = $('course-posts');
+    if (!shown.length) { box.innerHTML = '<p class="empty">이 학기에 등록된 게시물이 없습니다</p>'; return; }
+    const editable = canEditPosts(c);
+    const weeks = [...new Set(shown.map((p) => p.week))];
+    box.innerHTML = weeks.map((w) => `
+        <h3 class="week-head">${esc(w)}주</h3>
+        <ul class="post-list">${shown.filter((p) => p.week === w).map((p) => postItem(p, editable)).join('')}</ul>`
+    ).join('');
+}
+
+// 게시물 한 줄: 분류 아이콘 · 제목(누르면 본문 펼침) · 분류/날짜/만료/링크 · 수정·삭제 버튼
+function postItem(p, editable) {
+    const k = postCategory(p.category);
+    const meta = [esc(k.label)];
+    if (p.dueDate) {
+        meta.push(`${k.dateLabel} ${esc(p.dueDate)}${isExpired(p.dueDate) ? ' <span class="tag expired">만료됨</span>' : ''}`);
+    }
+    // 서버가 http/https 링크만 받지만, 다른 주소(javascript: 등)는 화면에서도 링크로 만들지 않음
+    if (/^https?:\/\//.test(p.link ?? '')) {
+        meta.push(`<a href="${esc(p.link)}" target="_blank" rel="noopener noreferrer">링크 열기</a>`);
+    }
+    return `<li class="post" data-id="${esc(p.id)}">
+        <span class="post-icon cat-${esc(k.value)}">${esc(k.icon)}</span>
+        <div class="post-main">
+            <div class="post-title">${esc(p.title)}</div>
+            <div class="post-meta">${meta.join(' · ')}</div>
+            ${p.body ? `<div class="post-body" hidden>${esc(p.body)}</div>` : ''}
+        </div>
+        ${editable ? `<div class="post-actions">
+            <button type="button" class="link" data-act="edit">수정</button>
+            <button type="button" class="link danger" data-act="del">삭제</button>
+        </div>` : ''}
+    </li>`;
+}
+
+// 게시물 추가/수정 폼 항목과 API 본문 (날짜·링크는 앞뒤 공백을 지움, 빈칸이면 "")
+const postFields = () => [
+    { name: 'category', label: '분류', options: POST_CATEGORIES.map((k) => ({ value: k.value, label: k.label })) },
+    { name: 'semester', label: '학기', placeholder: '예: 2026-2' },
+    { name: 'week', label: '주차 (1~16)', type: 'number' },
+    { name: 'title', label: '제목' },
+    { name: 'body', label: '내용', type: 'textarea', optional: true },
+    { name: 'dueDate', label: '날짜 (과제 마감·시험일, 선택)', optional: true, placeholder: '예: 2026-10-20 13:00' },
+    { name: 'link', label: '링크 (선택)', optional: true, placeholder: 'https://...' },
+];
+const postBody = (d) => ({
+    semester: d.semester.trim(), category: d.category, week: Number(d.week), title: d.title,
+    body: d.body ?? '', link: d.link.trim(), dueDate: d.dueDate.trim(),
+});
+
+// 게시물 추가(p 없음) / 수정(p = 기존 게시물) 폼. 저장하면 그 게시물의 학기를 보여 줌
+function openPostForm(p) {
+    const code = state.courseCode;
+    openForm({
+        title: p ? '게시물 수정' : '게시물 추가',
+        fields: postFields(),
+        values: p ?? { category: 'material', semester: state.courseSem ?? '', week: 1 },
+        onSubmit: async (d) => {
+            const body = postBody(d);
+            if (p) {
+                await api('PUT', postsUrl(code) + '/' + encodeURIComponent(p.id), body);
+                toast('수정했습니다');
+            } else {
+                await api('POST', postsUrl(code), body);
+                toast('게시물을 추가했습니다');
+            }
+            state.courseSem = body.semester;
+            await refreshAll();
+        },
+    });
+}
+
+$('post-add').onclick = () => openPostForm(null);
+// 학기를 바꾸면 받아 둔 게시물로 다시 그림
+$('course-sem').onchange = () => { state.courseSem = $('course-sem').value; drawPosts(); };
+// 분류 칩: 고른 분류만 보임
+$('course-filter').onclick = (e) => {
+    const b = e.target.closest('[data-cat]');
+    if (!b) return;
+    state.postFilter = b.dataset.cat;
+    drawPosts();
+};
+// 과목 정보: 통계를 받아 기존 과목 상세 창을 엶
+$('course-hero').onclick = async (e) => {
+    const c = pageCourse();
+    if (!c || !e.target.closest('[data-act=info]')) return;
+    try {
+        showCourseDetail(c, await api('GET', '/api/stats/course/' + encodeURIComponent(c.code)));
+    } catch (err) { toast(err.message, true); }
+};
+// 게시물 목록: 제목을 누르면 본문을 펼치고/접음, 수정·삭제 버튼
+$('course-posts').onclick = (e) => {
+    const li = e.target.closest('.post');
+    const p = li && state.coursePosts.find((x) => String(x.id) === li.dataset.id);
+    if (!p) return;
+    if (e.target.closest('.post-title')) {
+        const body = li.querySelector('.post-body');
+        if (body) body.hidden = !body.hidden;
+        return;
+    }
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'edit') openPostForm(p);
+    if (act === 'del') {
+        confirmDelete(`"${p.title}" 게시물을 삭제할까요?`,
+            () => api('DELETE', postsUrl(state.courseCode) + '/' + encodeURIComponent(p.id)));
+    }
+};
 
 // ───────── 수강신청 ─────────
 

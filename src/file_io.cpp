@@ -163,6 +163,35 @@ void warnBadNumber(const std::string& path, int lineNumber, const std::string& v
               << "\")" << std::endl;
 }
 
+// 게시물 본문의 줄바꿈을 한 줄로 저장하기 위한 변환: \ → \\, 줄바꿈 → 두 글자 \n, \r 은 버림
+std::string encodeLineBreaks(const std::string& text) {
+    std::string result;
+    for (char c : text) {
+        if (c == '\\') {
+            result += "\\\\";
+        } else if (c == '\n') {
+            result += "\\n";
+        } else if (c != '\r') {
+            result += c;
+        }
+    }
+    return result;
+}
+
+// encodeLineBreaks 의 반대: \n → 줄바꿈, \\ → \, 그 밖의 \x 는 그대로 둠
+std::string decodeLineBreaks(const std::string& text) {
+    std::string result;
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] == '\\' && i + 1 < text.size() && (text[i + 1] == 'n' || text[i + 1] == '\\')) {
+            result += text[i + 1] == 'n' ? '\n' : '\\';
+            i++;
+        } else {
+            result += text[i];
+        }
+    }
+    return result;
+}
+
 }  // namespace
 
 // 값 여러 개를 쉼표로 이어서 한 줄로 만듦 (끝에 줄바꿈 포함)
@@ -373,6 +402,61 @@ bool FileIO::loadAccounts(std::vector<Account>& accounts) {
             continue;
         }
         accounts.push_back({f[0], f[1], f[2], f[3], f[4], f[5]});
+    }
+    return true;
+}
+
+// course_posts.csv : id,courseCode,semester,category,week,title,body,link,dueDate,author,createdAt
+
+const char* const kPostsHeader = "id,courseCode,semester,category,week,title,body,link,dueDate,author,createdAt";
+
+bool FileIO::savePosts(const std::vector<CoursePost>& posts) {
+    std::string content = std::string(kPostsHeader) + "\n";
+    for (const CoursePost& p : posts) {
+        content += joinCsvLine({std::to_string(p.id), p.courseCode, p.semester, p.category, std::to_string(p.week),
+                                p.title, encodeLineBreaks(p.body), p.link, p.dueDate, p.author, p.createdAt});
+    }
+    return atomicWrite(dataDir + "/course_posts.csv", content);
+}
+
+bool FileIO::loadPosts(std::vector<CoursePost>& posts) {
+    const std::string path = dataDir + "/course_posts.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kPostsHeader}, rows)) {
+        return false;
+    }
+
+    posts.clear();
+    for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
+        CoursePost post;
+        if (!parseInt(f[0], post.id)) {
+            warnBadNumber(path, row.lineNumber, f[0]);
+            continue;
+        }
+        if (!parseInt(f[4], post.week)) {
+            warnBadNumber(path, row.lineNumber, f[4]);
+            continue;
+        }
+        post.courseCode = f[1];
+        post.semester = f[2];
+        post.category = f[3];
+        post.title = f[5];
+        post.body = decodeLineBreaks(f[6]);
+        post.link = f[7];
+        post.dueDate = f[8];
+        post.author = f[9];
+        post.createdAt = f[10];
+
+        const bool duplicateId = std::any_of(posts.begin(), posts.end(), [&](const CoursePost& other) {
+            return other.id == post.id;
+        });
+        if (post.id < 1 || !post.isValid() || duplicateId) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (게시물 값이 올바르지 않음)"
+                      << std::endl;
+            continue;
+        }
+        posts.push_back(post);
     }
     return true;
 }

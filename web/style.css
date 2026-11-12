@@ -63,6 +63,17 @@ body {
 #tabs button:hover { background: none; color: var(--text); }
 #tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
+/* 과목 탭: 고정 탭 뒤에 구분선을 두고 과목마다 하나 (과목이 없으면 숨김) */
+#course-tabs {
+    display: flex;
+    align-self: stretch;
+    gap: 4px;
+    margin-left: 4px;
+    padding-left: 4px;
+    border-left: 1px solid var(--line);
+}
+#course-tabs:empty { display: none; }
+
 /* 상단 바 오른쪽: 로그인한 사용자 · 비밀번호 변경 · 로그아웃 */
 #user-box { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
 #user-label { color: var(--muted); margin-right: 6px; }
@@ -102,7 +113,8 @@ input, select, textarea {
     background: var(--bg);
     color: var(--text);
 }
-input:focus, select:focus { outline: 2px solid var(--accent-weak); border-color: var(--accent); }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-weak); border-color: var(--accent); }
+textarea { resize: vertical; line-height: 1.5; }
 input[readonly] { color: var(--muted); }
 input::placeholder { color: #6b7280; }
 
@@ -270,6 +282,68 @@ dialog table { min-width: 420px; font-size: 13px; }
 #enroll-content .table-wrap, .report .table-wrap { margin-bottom: 20px; }
 #enroll-content > .hint { margin: 0 0 12px; }
 
+/* 과목 페이지: 과목 카드, 분류 칩, 주차별 게시물 목록 */
+.course-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+.course-hero-info { min-width: 0; }
+.course-hero-sem { color: var(--accent); font-size: 13px; font-weight: 600; }
+.course-hero-name { font-size: 24px; font-weight: 700; margin: 4px 0 6px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { padding: 4px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); }
+.chip.active { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.week-head { font-size: 15px; font-weight: 600; color: var(--muted); margin: 20px 0 8px; }
+.week-head:first-child { margin-top: 4px; }
+.post-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.post { display: flex; gap: 12px; align-items: flex-start; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+.post:last-child { border-bottom: 0; }
+.post-icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    font-weight: 700;
+}
+.post-icon.cat-material { background: var(--accent-weak); color: var(--accent); }
+.post-icon.cat-midterm, .post-icon.cat-final { background: rgba(239, 68, 68, .18); color: #f87171; }
+.post-icon.cat-assignment { background: rgba(34, 197, 94, .18); color: #4ade80; }
+.post-main { flex: 1; min-width: 0; }
+.post-title { cursor: pointer; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.post-title:hover { color: var(--accent); }
+.post-meta { color: var(--muted); font-size: 13px; margin-top: 2px; line-height: 1.6; }
+.post-meta a { color: var(--accent); }
+.post-body {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.6;
+}
+.post-actions { flex: none; white-space: nowrap; }
+.tag.expired { background: rgba(239, 68, 68, .15); color: var(--danger); }
+
 /* 토스트 */
 #toast {
     position: fixed;
@@ -297,5 +371,7 @@ dialog table { min-width: 420px; font-size: 13px; }
     .course-row { flex-wrap: wrap; padding: 14px 16px; }
     .course-meta { min-width: 0; width: 100%; text-align: left; }
     .course-meta .stat-line { display: inline; margin-right: 12px; }
+    .course-hero { flex-wrap: wrap; padding: 16px; }
+    .post { padding: 12px 14px; }
     .stat-boxes { grid-template-columns: repeat(2, 1fr); }
 }

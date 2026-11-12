@@ -1,5 +1,6 @@
 #include "server.h"
 #include "statistics.h"
+#include "course_post.h"
 #include "retake.h"
 
 #include <algorithm>
@@ -129,6 +130,62 @@ bool parseJsonBody(const httplib::Request& req, json& body, httplib::Response& r
     } catch (...) {
         setError(res, 400, "요청 본문이 올바르지 않습니다");
         return false;
+    }
+}
+
+constexpr const char* kPostRules =
+    "게시물 정보가 올바르지 않습니다 (분류, 학기, 주차 1~16, 제목 필수, "
+    "링크는 http:// 또는 https://, 날짜 예: 2026-10-20 또는 2026-10-20 13:00)";
+
+json postJson(const CoursePost& p) {
+    return {
+        {"id", p.id}, {"courseCode", p.courseCode}, {"semester", p.semester},
+        {"category", p.category}, {"week", p.week}, {"title", p.title},
+        {"body", p.body}, {"link", p.link}, {"dueDate", p.dueDate},
+        {"author", p.author}, {"createdAt", p.createdAt},
+    };
+}
+
+// 지금 시각 "YYYY-MM-DD HH:MM" (mtx 안에서만 호출)
+std::string nowText() {
+    const std::time_t now = std::time(nullptr);
+    const std::tm* local = std::localtime(&now);
+    if (!local) return "";
+    char buffer[32];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", local);
+    return buffer;
+}
+
+// 요청 본문에서 semester·category·week·title·body·link·dueDate 를 읽음 (형식이 틀리면 false)
+bool readPostBody(const json& body, CoursePost& post) {
+    try {
+        post.semester = body.at("semester").get<std::string>();
+        post.category = body.at("category").get<std::string>();
+        post.title = body.at("title").get<std::string>();
+        if (!body.at("week").is_number_integer()) return false;
+        post.week = body.at("week").get<int>();
+        post.body = body.value("body", "");
+        post.link = body.value("link", "");
+        post.dueDate = body.value("dueDate", "");
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// 경로의 게시물 id: 숫자만 있으면 그 값, 아니면 0
+int parsePostId(const std::string& text) {
+    if (text.empty() || !std::all_of(text.begin(), text.end(), [](unsigned char c) {
+            return std::isdigit(c);
+        })) {
+        return 0;
+    }
+    try {
+        std::size_t used = 0;
+        const int id = std::stoi(text, &used);
+        return used == text.size() ? id : 0;
+    } catch (...) {
+        return 0;
     }
 }
 
@@ -1042,6 +1099,171 @@ void Server::run() {
             return;
         }
         setText(res, 200, "과목 정보가 삭제되었습니다.");
+    });
+
+    // 과목 게시물 (수업자료·중간고사·기말고사·과제)
+    svr.Get("/api/courses/:code/posts", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor", "student"});
+        if (!account) return;
+        const std::string code = req.path_params.at("code");
+        const Course* course = gm.findCourse(code);
+        if (!course) {
+            setError(res, 404, "없는 과목입니다: " + code);
+            return;
+        }
+
+        // 학생은 자기가 수강신청한 학기의 게시물만 본다
+        std::unordered_set<std::string> semesters;
+        if (account->role == "professor" && !teaches(*account, *course)) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        if (account->role == "student") {
+            for (const Enrollment& enrollment : gm.getEnrollments()) {
+                if (enrollment.studentId == account->studentId && enrollment.courseCode == code) {
+                    semesters.insert(enrollment.semester);
+                }
+            }
+            if (semesters.empty()) {
+                setError(res, 403, "권한이 없습니다");
+                return;
+            }
+        }
+
+        std::vector<CoursePost> posts;
+        for (const CoursePost& post : gm.getPosts()) {
+            if (post.courseCode != code) continue;
+            if (account->role == "student" && !semesters.count(post.semester)) continue;
+            posts.push_back(post);
+        }
+        std::sort(posts.begin(), posts.end(), [](const CoursePost& a, const CoursePost& b) {
+            if (a.semester != b.semester) return a.semester < b.semester;
+            if (a.week != b.week) return a.week < b.week;
+            return a.id < b.id;
+        });
+        json arr = json::array();
+        for (const CoursePost& post : posts) arr.push_back(postJson(post));
+        res.set_content(arr.dump(), "application/json; charset=utf-8");
+    });
+
+    svr.Post("/api/courses/:code/posts", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        const std::string code = req.path_params.at("code");
+        const Course* course = gm.findCourse(code);
+        if (!course) {
+            setError(res, 404, "없는 과목입니다: " + code);
+            return;
+        }
+        if (account->role == "professor" && !teaches(*account, *course)) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        CoursePost post;
+        if (!readPostBody(body, post)) {
+            setError(res, 400, kPostRules);
+            return;
+        }
+        post.courseCode = code;
+        post.author = account->username;
+        post.createdAt = nowText();
+        if (!post.isValid()) {
+            setError(res, 400, kPostRules);
+            return;
+        }
+        const int id = gm.addPost(post);
+        if (id == 0) {
+            setError(res, 400, kPostRules);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, "게시물 저장에 실패했습니다");
+            return;
+        }
+        res.status = 201;
+        res.set_content(postJson(*gm.findPost(id)).dump(), "application/json; charset=utf-8");
+    });
+
+    svr.Put("/api/courses/:code/posts/:id", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        const std::string code = req.path_params.at("code");
+        const Course* course = gm.findCourse(code);
+        if (!course) {
+            setError(res, 404, "없는 과목입니다: " + code);
+            return;
+        }
+        if (account->role == "professor" && !teaches(*account, *course)) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        const std::string idText = req.path_params.at("id");
+        const int id = parsePostId(idText);
+        const CoursePost* existing = id == 0 ? nullptr : gm.findPost(id);
+        if (!existing || existing->courseCode != code) {
+            setError(res, 404, "없는 게시물입니다: " + idText);
+            return;
+        }
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        // id·courseCode·author·createdAt 은 기존 값을 유지
+        CoursePost input;
+        if (!readPostBody(body, input)) {
+            setError(res, 400, kPostRules);
+            return;
+        }
+        CoursePost post = *existing;
+        post.semester = input.semester;
+        post.category = input.category;
+        post.week = input.week;
+        post.title = input.title;
+        post.body = input.body;
+        post.link = input.link;
+        post.dueDate = input.dueDate;
+        if (!post.isValid() || !gm.updatePost(post)) {
+            setError(res, 400, kPostRules);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, "게시물 저장에 실패했습니다");
+            return;
+        }
+        res.set_content(postJson(*gm.findPost(id)).dump(), "application/json; charset=utf-8");
+    });
+
+    svr.Delete("/api/courses/:code/posts/:id", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        const std::string code = req.path_params.at("code");
+        const Course* course = gm.findCourse(code);
+        if (!course) {
+            setError(res, 404, "없는 과목입니다: " + code);
+            return;
+        }
+        if (account->role == "professor" && !teaches(*account, *course)) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        const std::string idText = req.path_params.at("id");
+        const int id = parsePostId(idText);
+        const CoursePost* existing = id == 0 ? nullptr : gm.findPost(id);
+        if (!existing || existing->courseCode != code) {
+            setError(res, 404, "없는 게시물입니다: " + idText);
+            return;
+        }
+        if (!gm.removePost(id) || !gm.save()) {
+            setError(res, 500, "게시물 저장에 실패했습니다");
+            return;
+        }
+        res.set_content(json{{"deleted", true}}.dump(), "application/json; charset=utf-8");
     });
 
     // 성적 등록: 수강신청 여부 확인, 과목 정원은 여기서 검사하지 않음
