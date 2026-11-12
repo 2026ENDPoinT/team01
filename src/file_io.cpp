@@ -461,6 +461,75 @@ bool FileIO::loadPosts(std::vector<CoursePost>& posts) {
     return true;
 }
 
+// assessments.csv : courseCode,semester,name,weight
+
+const char* const kAssessmentsHeader = "courseCode,semester,name,weight";
+
+bool FileIO::saveAssessments(const std::vector<Assessment>& items) {
+    std::string content = std::string(kAssessmentsHeader) + "\n";
+    for (const Assessment& a : items) {
+        content += joinCsvLine({a.courseCode, a.semester, a.name, std::to_string(a.weight)});
+    }
+    return atomicWrite(dataDir + "/assessments.csv", content);
+}
+
+bool FileIO::loadAssessments(std::vector<Assessment>& items) {
+    const std::string path = dataDir + "/assessments.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kAssessmentsHeader}, rows)) {
+        return false;
+    }
+
+    items.clear();
+    for (const CsvRow& row : rows) {
+        Assessment a;
+        a.courseCode = row.fields[0];
+        a.semester = row.fields[1];
+        a.name = row.fields[2];
+        if (!parseInt(row.fields[3], a.weight)) {
+            warnBadNumber(path, row.lineNumber, row.fields[3]);
+            continue;
+        }
+        items.push_back(a);
+    }
+    return true;
+}
+
+// assessment_scores.csv : studentId,courseCode,semester,name,score
+
+const char* const kAssessmentScoresHeader = "studentId,courseCode,semester,name,score";
+
+bool FileIO::saveAssessmentScores(const std::vector<AssessmentScore>& scores) {
+    std::string content = std::string(kAssessmentScoresHeader) + "\n";
+    for (const AssessmentScore& s : scores) {
+        content += joinCsvLine({s.studentId, s.courseCode, s.semester, s.name, doubleToString(s.score)});
+    }
+    return atomicWrite(dataDir + "/assessment_scores.csv", content);
+}
+
+bool FileIO::loadAssessmentScores(std::vector<AssessmentScore>& scores) {
+    const std::string path = dataDir + "/assessment_scores.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kAssessmentScoresHeader}, rows)) {
+        return false;
+    }
+
+    scores.clear();
+    for (const CsvRow& row : rows) {
+        AssessmentScore s;
+        s.studentId = row.fields[0];
+        s.courseCode = row.fields[1];
+        s.semester = row.fields[2];
+        s.name = row.fields[3];
+        if (!parseDouble(row.fields[4], s.score)) {
+            warnBadNumber(path, row.lineNumber, row.fields[4]);
+            continue;
+        }
+        scores.push_back(s);
+    }
+    return true;
+}
+
 // 저장 순서: 백업 → path.tmp 에 쓰기 → path.tmp 를 path 로 이름 바꾸기
 //   쓰는 도중에 프로그램이 꺼져도 원래 path 는 그대로 남아 있음
 bool FileIO::atomicWrite(const std::string& path, const std::string& content) {

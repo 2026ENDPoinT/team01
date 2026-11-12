@@ -10,7 +10,8 @@ GradeManager::GradeManager(const std::string& dataDir) : fileIO(dataDir) {}
 bool GradeManager::load() {
     if (!(fileIO.loadStudents(students) && fileIO.loadCourses(courses) && fileIO.loadGrades(grades) &&
           fileIO.loadEnrollments(enrollments) && fileIO.loadSettings(enrollmentSemester) &&
-          fileIO.loadPosts(posts))) {
+          fileIO.loadPosts(posts) && fileIO.loadAssessments(assessments) &&
+          fileIO.loadAssessmentScores(assessmentScores))) {
         return false;
     }
     // 신청 학기 값이 깨져 있으면 "신청 기간 아님" 으로 시작
@@ -26,7 +27,8 @@ bool GradeManager::load() {
 bool GradeManager::save() {
     return fileIO.saveStudents(students) && fileIO.saveCourses(courses) && fileIO.saveGrades(grades) &&
            fileIO.saveEnrollments(enrollments) && fileIO.saveSettings(enrollmentSemester) &&
-           fileIO.savePosts(posts);
+           fileIO.savePosts(posts) && fileIO.saveAssessments(assessments) &&
+           fileIO.saveAssessmentScores(assessmentScores);
 }
 
 // ----- 학생 -----
@@ -68,6 +70,11 @@ bool GradeManager::updateStudent(const std::string& id, const Student& student) 
                 enrollment.studentId = student.id;
             }
         }
+        for (AssessmentScore& score : assessmentScores) {
+            if (score.studentId == id) {
+                score.studentId = student.id;
+            }
+        }
     }
     // 모든 검사를 통과한 뒤에 마지막으로 덮어쓴다.
     *it = student;
@@ -91,6 +98,9 @@ bool GradeManager::removeStudent(const std::string& id) {
     enrollments.erase(std::remove_if(enrollments.begin(), enrollments.end(), [&](const Enrollment& enrollment) {
         return enrollment.studentId == id;
     }), enrollments.end());
+    assessmentScores.erase(std::remove_if(assessmentScores.begin(), assessmentScores.end(),
+                                          [&](const AssessmentScore& score) { return score.studentId == id; }),
+                           assessmentScores.end());
     return true;
 }
 
@@ -161,6 +171,16 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
                 post.courseCode = course.code;
             }
         }
+        for (Assessment& item : assessments) {
+            if (item.courseCode == code) {
+                item.courseCode = course.code;
+            }
+        }
+        for (AssessmentScore& score : assessmentScores) {
+            if (score.courseCode == code) {
+                score.courseCode = course.code;
+            }
+        }
     }
     // 모든 검사를 통과한 뒤에 마지막으로 덮어쓴다.
     *it = course;
@@ -187,6 +207,12 @@ bool GradeManager::removeCourse(const std::string& code) {
     posts.erase(std::remove_if(posts.begin(), posts.end(), [&](const CoursePost& post) {
         return post.courseCode == code;
     }), posts.end());
+    assessments.erase(std::remove_if(assessments.begin(), assessments.end(),
+                                     [&](const Assessment& item) { return item.courseCode == code; }),
+                      assessments.end());
+    assessmentScores.erase(std::remove_if(assessmentScores.begin(), assessmentScores.end(),
+                                          [&](const AssessmentScore& score) { return score.courseCode == code; }),
+                           assessmentScores.end());
     return true;
 }
 
@@ -403,3 +429,240 @@ const CoursePost* GradeManager::findPost(int id) const {
 
 // 전체 게시물 목록 (읽기 전용 참조).
 const std::vector<CoursePost>& GradeManager::getPosts() const { return posts; }
+
+// ----- 평가 항목 -----
+namespace {
+
+// 그 (과목, 학기) 항목 비율 합계. skipName 항목은 빼고 더함 (수정할 때 원래 값을 빼기 위해)
+int weightSum(const std::vector<Assessment>& items, const std::string& courseCode, const std::string& semester,
+              const std::string* skipName = nullptr) {
+    int sum = 0;
+    for (const Assessment& item : items) {
+        if (item.courseCode == courseCode && item.semester == semester &&
+            (skipName == nullptr || item.name != *skipName)) {
+            sum += item.weight;
+        }
+    }
+    return sum;
+}
+
+}  // namespace
+
+// 그 (과목, 학기) 에 항목이 1개 이상 있으면 true (= 항목 계산 과목).
+bool GradeManager::hasAssessments(const std::string& courseCode, const std::string& semester) const {
+    return std::any_of(assessments.begin(), assessments.end(), [&](const Assessment& item) {
+        return item.courseCode == courseCode && item.semester == semester;
+    });
+}
+
+// 그 (과목, 학기) 의 항목들 (복사본, 추가한 순서).
+std::vector<Assessment> GradeManager::getAssessments(const std::string& courseCode,
+                                                     const std::string& semester) const {
+    std::vector<Assessment> result;
+    for (const Assessment& item : assessments) {
+        if (item.courseCode == courseCode && item.semester == semester) {
+            result.push_back(item);
+        }
+    }
+    return result;
+}
+
+// 전체 항목 목록 (읽기 전용 참조).
+const std::vector<Assessment>& GradeManager::getAllAssessments() const { return assessments; }
+
+// 항목 추가: 과목 없음, 형식 오류, 같은 이름 중복, 비율 합계 100 초과,
+// 첫 항목인데 이미 직접 입력한 성적이 있으면 false. 성공하면 수강생 전원 다시 계산.
+bool GradeManager::addAssessment(const Assessment& item) {
+    if (!item.isValid() || findCourse(item.courseCode) == nullptr) {
+        return false;
+    }
+    const bool duplicateName = std::any_of(assessments.begin(), assessments.end(), [&](const Assessment& current) {
+        return current.courseCode == item.courseCode && current.semester == item.semester &&
+               current.name == item.name;
+    });
+    if (duplicateName || weightSum(assessments, item.courseCode, item.semester) + item.weight > 100) {
+        return false;
+    }
+    // 첫 항목: 직접 입력한 성적이 이미 있으면 덮어쓰지 않도록 거부
+    if (!hasAssessments(item.courseCode, item.semester)) {
+        const bool hasGrades = std::any_of(grades.begin(), grades.end(), [&](const Grade& grade) {
+            return grade.courseCode == item.courseCode && grade.semester == item.semester;
+        });
+        if (hasGrades) {
+            return false;
+        }
+    }
+
+    assessments.push_back(item);
+    syncCourse(item.courseCode, item.semester);
+    return true;
+}
+
+// 항목 수정: name 항목을 item 으로 바꾼다. 이름이 바뀌면 그 항목 점수의 이름도 바꾼다.
+// 없음, 형식 오류, 과목·학기 변경, 다른 항목과 이름 중복, 비율 합계 100 초과면 false.
+bool GradeManager::updateAssessment(const std::string& courseCode, const std::string& semester,
+                                    const std::string& name, const Assessment& item) {
+    auto it = std::find_if(assessments.begin(), assessments.end(), [&](const Assessment& current) {
+        return current.courseCode == courseCode && current.semester == semester && current.name == name;
+    });
+    if (it == assessments.end() || !item.isValid() || item.courseCode != courseCode ||
+        item.semester != semester) {
+        return false;
+    }
+    const bool duplicateName = std::any_of(assessments.begin(), assessments.end(), [&](const Assessment& current) {
+        return current.courseCode == courseCode && current.semester == semester && current.name == item.name &&
+               current.name != name;
+    });
+    if (duplicateName || weightSum(assessments, courseCode, semester, &name) + item.weight > 100) {
+        return false;
+    }
+
+    if (item.name != name) {
+        for (AssessmentScore& score : assessmentScores) {
+            if (score.courseCode == courseCode && score.semester == semester && score.name == name) {
+                score.name = item.name;
+            }
+        }
+    }
+    *it = item;
+    syncCourse(courseCode, semester);
+    return true;
+}
+
+// 항목 삭제: 항목과 그 항목의 점수를 지운다. 없으면 false.
+// 마지막 항목이었으면 그 과목·학기의 항목 점수와 성적을 모두 지운다.
+bool GradeManager::removeAssessment(const std::string& courseCode, const std::string& semester,
+                                    const std::string& name) {
+    auto it = std::find_if(assessments.begin(), assessments.end(), [&](const Assessment& current) {
+        return current.courseCode == courseCode && current.semester == semester && current.name == name;
+    });
+    if (it == assessments.end()) {
+        return false;
+    }
+    assessments.erase(it);
+
+    const bool wasLast = !hasAssessments(courseCode, semester);
+    assessmentScores.erase(std::remove_if(assessmentScores.begin(), assessmentScores.end(),
+                                          [&](const AssessmentScore& score) {
+                                              return score.courseCode == courseCode && score.semester == semester &&
+                                                     (wasLast || score.name == name);
+                                          }),
+                           assessmentScores.end());
+    if (wasLast) {
+        grades.erase(std::remove_if(grades.begin(), grades.end(), [&](const Grade& grade) {
+            return grade.courseCode == courseCode && grade.semester == semester;
+        }), grades.end());
+    } else {
+        syncCourse(courseCode, semester);
+    }
+    return true;
+}
+
+// ----- 항목 점수 -----
+// 그 (과목, 학기) 의 항목 점수 전부 (복사본).
+std::vector<AssessmentScore> GradeManager::getAssessmentScores(const std::string& courseCode,
+                                                               const std::string& semester) const {
+    std::vector<AssessmentScore> result;
+    for (const AssessmentScore& score : assessmentScores) {
+        if (score.courseCode == courseCode && score.semester == semester) {
+            result.push_back(score);
+        }
+    }
+    return result;
+}
+
+// 한 학생의 항목 점수 전부 (복사본).
+std::vector<AssessmentScore> GradeManager::getAssessmentScoresByStudent(const std::string& studentId) const {
+    std::vector<AssessmentScore> result;
+    for (const AssessmentScore& score : assessmentScores) {
+        if (score.studentId == studentId) {
+            result.push_back(score);
+        }
+    }
+    return result;
+}
+
+// 항목 점수 넣기: 있으면 수정, 없으면 추가. 그 학생만 다시 계산.
+// 형식 오류, 항목 없음, 같은 (학번, 과목, 학기) 수강신청 없음이면 false.
+bool GradeManager::setAssessmentScore(const AssessmentScore& score) {
+    if (!score.isValid()) {
+        return false;
+    }
+    const bool itemExists = std::any_of(assessments.begin(), assessments.end(), [&](const Assessment& item) {
+        return item.courseCode == score.courseCode && item.semester == score.semester && item.name == score.name;
+    });
+    if (!itemExists || findEnrollment(score.studentId, score.courseCode, score.semester) == nullptr) {
+        return false;
+    }
+
+    auto it = std::find_if(assessmentScores.begin(), assessmentScores.end(), [&](const AssessmentScore& current) {
+        return current.studentId == score.studentId && current.courseCode == score.courseCode &&
+               current.semester == score.semester && current.name == score.name;
+    });
+    if (it == assessmentScores.end()) {
+        assessmentScores.push_back(score);
+    } else {
+        it->score = score.score;
+    }
+    syncGrade(score.studentId, score.courseCode, score.semester);
+    return true;
+}
+
+// 항목 점수 삭제: 없으면 false. 그 학생만 다시 계산 (미완성이 되므로 성적이 지워짐).
+bool GradeManager::removeAssessmentScore(const std::string& studentId, const std::string& courseCode,
+                                         const std::string& semester, const std::string& name) {
+    auto it = std::find_if(assessmentScores.begin(), assessmentScores.end(), [&](const AssessmentScore& current) {
+        return current.studentId == studentId && current.courseCode == courseCode &&
+               current.semester == semester && current.name == name;
+    });
+    if (it == assessmentScores.end()) {
+        return false;
+    }
+    assessmentScores.erase(it);
+    syncGrade(studentId, courseCode, semester);
+    return true;
+}
+
+// ----- 최종 성적 동기화 -----
+// 완성(≥ 0)이면 grades 의 (학번, 과목, 학기) 성적을 추가하거나 점수를 바꾸고, 미완성(-1)이면 있을 때 지운다.
+void GradeManager::syncGrade(const std::string& studentId, const std::string& courseCode,
+                             const std::string& semester) {
+    if (!hasAssessments(courseCode, semester)) {
+        return;  // 직접 입력 과목은 건드리지 않음
+    }
+
+    std::vector<AssessmentScore> scores;
+    for (const AssessmentScore& score : assessmentScores) {
+        if (score.studentId == studentId && score.courseCode == courseCode && score.semester == semester) {
+            scores.push_back(score);
+        }
+    }
+    const double result = finalScore(getAssessments(courseCode, semester), scores);
+
+    auto it = std::find_if(grades.begin(), grades.end(), [&](const Grade& grade) {
+        return grade.studentId == studentId && grade.courseCode == courseCode && grade.semester == semester;
+    });
+    if (result >= 0) {
+        if (it == grades.end()) {
+            Grade grade;
+            grade.studentId = studentId;
+            grade.courseCode = courseCode;
+            grade.semester = semester;
+            grade.score = result;
+            grades.push_back(grade);
+        } else {
+            it->score = result;
+        }
+    } else if (it != grades.end()) {
+        grades.erase(it);
+    }
+}
+
+// 그 과목·학기에 수강신청한 학생 전원을 다시 계산한다.
+void GradeManager::syncCourse(const std::string& courseCode, const std::string& semester) {
+    for (const Enrollment& enrollment : enrollments) {
+        if (enrollment.courseCode == courseCode && enrollment.semester == semester) {
+            syncGrade(enrollment.studentId, courseCode, semester);
+        }
+    }
+}
