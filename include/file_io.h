@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "course.h"
+#include "course_post.h"
 #include "enrollment.h"
 #include "grade.h"
 #include "student.h"
@@ -44,6 +45,11 @@ public:
     // accounts.csv : username,role,name,studentId,salt,passwordHash
     bool saveAccounts(const std::vector<Account>& accounts);
     bool loadAccounts(std::vector<Account>& accounts);
+
+    // course_posts.csv : id,courseCode,semester,category,week,title,body,link,dueDate,author,createdAt
+    //   body 의 줄바꿈은 파일에서 두 글자 \n 으로 저장 (\ 는 \\)
+    bool savePosts(const std::vector<CoursePost>& posts);
+    bool loadPosts(std::vector<CoursePost>& posts);
 
 private:
     std::string dataDir;

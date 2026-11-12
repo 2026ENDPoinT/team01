@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "course.h"
+#include "course_post.h"
 #include "enrollment.h"
 #include "file_io.h"
 #include "grade.h"
@@ -17,7 +18,7 @@ class GradeManager {
 public:
     explicit GradeManager(const std::string& dataDir);
 
-    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정)
+    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물)
     bool load();
     bool save();
 
@@ -31,8 +32,8 @@ public:
 
     // ----- 과목 -----
     bool addCourse(const Course& course);                       // 과목코드 중복이면 false
-    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청 코드도 바꿈
-    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청도 같이 삭제
+    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물 코드도 바꿈
+    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물도 같이 삭제
     const Course* findCourse(const std::string& code) const;
     const std::vector<Course>& getCourses() const;
 
@@ -61,6 +62,13 @@ public:
     const std::string& getEnrollmentSemester() const;
     bool setEnrollmentSemester(const std::string& semester);  // "" 또는 올바른 학기 형식이면 true
 
+    // ----- 과목 게시물 -----
+    int addPost(const CoursePost& post);        // 값 오류·없는 과목이면 0, 성공하면 새 id (최대 id + 1)
+    bool updatePost(const CoursePost& post);    // 같은 id 를 post 로 교체. 없음·값 오류·없는 과목이면 false
+    bool removePost(int id);                    // 없으면 false
+    const CoursePost* findPost(int id) const;
+    const std::vector<CoursePost>& getPosts() const;
+
 private:
     FileIO fileIO;
     std::vector<Student> students;
@@ -68,4 +76,5 @@ private:
     std::vector<Grade> grades;
     std::vector<Enrollment> enrollments;
     std::string enrollmentSemester;
+    std::vector<CoursePost> posts;
 };

@@ -12,7 +12,8 @@
             <span class="logo" aria-hidden="true">G</span>
             <h1>성적 관리</h1>
         </div>
-        <!-- data-roles: 그 탭을 볼 수 있는 역할 (로그인 후 app.js 가 나머지 탭을 숨김) -->
+        <!-- data-roles: 그 탭을 볼 수 있는 역할 (로그인 후 app.js 가 나머지 탭을 숨김)
+             course-tabs: 볼 수 있는 과목마다 탭 하나 (app.js renderCourseTabs 가 채움) -->
         <nav id="tabs" hidden>
             <button data-tab="courses" data-roles="admin professor student" class="active">수강과목</button>
             <button data-tab="enroll" data-roles="admin professor student">수강신청</button>
@@ -21,6 +22,7 @@
             <button data-tab="myreport" data-roles="student">내 성적</button>
             <button data-tab="ranking" data-roles="admin">석차</button>
             <button data-tab="accounts" data-roles="admin">계정</button>
+            <span id="course-tabs"></span>
         </nav>
         <div id="user-box" hidden>
             <span id="user-label"></span>
@@ -152,6 +154,18 @@
                     <tbody id="account-body"></tbody>
                 </table>
             </div>
+        </section>
+
+        <!-- 과목 페이지 (과목 탭 하나에 화면 하나, 지금 고른 과목은 app.js state.courseCode) -->
+        <section id="tab-course" class="tab">
+            <div id="course-hero" class="course-hero"></div>
+            <div class="toolbar">
+                <label for="course-sem">학기</label><select id="course-sem"></select>
+                <div id="course-filter" class="chips"></div>
+                <span class="spacer"></span>
+                <button class="primary" id="post-add">+ 게시물 추가</button>
+            </div>
+            <div id="course-posts"></div>
         </section>
     </main>
 

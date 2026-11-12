@@ -41,6 +41,7 @@ cmake -B build && cmake --build build && ctest --test-dir build --output-on-fail
 | `enrollments.csv` | `studentId,courseCode,semester` (수강신청) |
 | `settings.csv` | `key,value` (`enrollmentSemester` = 수강신청 학기, 비어 있으면 신청 기간이 아님) |
 | `accounts.csv` | `username,role,name,studentId,salt,passwordHash` (로그인 계정, 비밀번호는 salt + SHA-256 반복 해시) |
+| `course_posts.csv` | `id,courseCode,semester,category,week,title,body,link,dueDate,author,createdAt` (과목 게시물, body 의 줄바꿈은 `\n` 두 글자로, `\` 는 `\\` 로 저장) |
 
 프로그램이 등록·수정·삭제할 때마다 이 파일을 바로 고쳐 씁니다 (직전 내용은 `.bak`, git 제외).
 화면에서 테스트하느라 바뀐 내용은 커밋 전에 `git diff data/` 로 확인하고, 되돌리려면 `git checkout -- data/` 를 쓰면 됩니다.
@@ -70,7 +71,7 @@ cmake -B build && cmake --build build && ctest --test-dir build --output-on-fail
 include/      헤더 (함수 시그니처)
 src/          구현 + main.cpp
 web/          index.html, style.css, app.js
-data/         students.csv, courses.csv, grades.csv, enrollments.csv, settings.csv, accounts.csv (위 "데이터" 참고)
+data/         students.csv, courses.csv, grades.csv, enrollments.csv, settings.csv, accounts.csv, course_posts.csv (위 "데이터" 참고)
 third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 ```
@@ -130,6 +131,17 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 - 성적 등록은 같은 (학번, 과목, 학기)의 수강신청이 있어야 합니다 (없으면 `409`). 성적이 있는 수강은 취소할 수 없습니다 (`409`).
 - 과목 목록의 수강 표시 (#14): 수강신청이 있는 가장 늦은 학기의 신청 인원 / 학기당 정원 (`GET /api/stats/course/:code` 의 `latestSemester`, `latestEnrolled`)
 
+## 과목 페이지
+
+- 상단 탭 줄에 보이는 과목마다 탭이 하나씩 생깁니다. 보이는 과목은 관리자는 전체, 교수는 담당 과목, 학생은 수강신청한 과목입니다. 수강과목 목록도 같은 과목만 보여 줍니다.
+- 과목 페이지는 학기별로 나뉘고, 게시물은 주차(1~16)별로 묶어 보여 줍니다. 분류는 수업자료 `material` · 중간고사 `midterm` · 기말고사 `final` · 과제 `assignment` 4가지입니다.
+- 게시물은 제목(필수), 내용, 링크(`http://` 또는 `https://`, 파일 업로드는 없음), 날짜(과제 마감·시험일, `2026-10-20` 또는 `2026-10-20 13:00`)를 가집니다. 작성자와 작성 시각은 서버가 채웁니다.
+
+| 기능 | 관리자 | 교수 | 학생 |
+|---|---|---|---|
+| 게시물 조회 | 모든 과목 | 담당 과목 | 수강신청한 과목 (그 수강신청 학기의 게시물만) |
+| 게시물 추가·수정·삭제 | O | 담당 과목 | X |
+
 ## API
 
 요청/응답 본문은 JSON. `/api/login` 외 모든 `/api/*` 는 로그인이 필요합니다 (안 했으면 `401`, 권한 없음 `403`). 실패 시 `400` 잘못된 값 / `404` 없음 / `409` 중복·정원 초과·수강신청 규칙 위반 + `{"error": "메시지"}`
@@ -154,7 +166,11 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | GET | `/api/courses` | 과목 목록 |
 | POST | `/api/courses` | 과목 등록 (관리자) |
 | PUT | `/api/courses/:code` | 과목 수정 (관리자) |
-| DELETE | `/api/courses/:code` | 과목 삭제 (성적·수강신청도 삭제, 관리자) |
+| DELETE | `/api/courses/:code` | 과목 삭제 (성적·수강신청·게시물도 삭제, 관리자) |
+| GET | `/api/courses/:code/posts` | 과목 게시물 목록 (학기·주차·id 순, 관리자·담당 교수·수강신청한 학생) |
+| POST | `/api/courses/:code/posts` | 게시물 추가 `{semester, category, week, title, body, link, dueDate}`, `201` (관리자·담당 교수) |
+| PUT | `/api/courses/:code/posts/:id` | 게시물 수정 (같은 본문, 관리자·담당 교수) |
+| DELETE | `/api/courses/:code/posts/:id` | 게시물 삭제 `{"deleted": true}` (관리자·담당 교수) |
 | GET | `/api/grades` | 성적 목록 (`?studentId=` `?courseCode=` `?semester=` 로 거르기, 교수는 담당 과목, 학생은 본인 것만) |
 | POST | `/api/grades` | 성적 등록 (관리자, 교수는 담당 과목만. 수강신청이 있어야 함) |
 | PUT | `/api/grades` | 성적 수정 (본문의 studentId·courseCode·semester 로 찾음, 관리자·담당 교수) |
@@ -185,6 +201,7 @@ JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
   - 예전 형식 `courses.csv` (`code,name,credit,professor`) 도 읽고, 다음 저장 때 새 형식으로 바뀜
 - 성적 `{"studentId", "courseCode", "semester", "score", "letter"}` — 점수만 입력하면 `letter` 는 서버가 정함 (`scoreToLetter` + 재수강 규칙 `Retake::officialLetter`)
 - 수강신청 `{"studentId", "courseCode", "semester", "hasGrade"}` — 같은 (학번, 과목코드, 학기) 하나가 신청 1건
+- 게시물 `{"id", "courseCode", "semester", "category", "week", "title", "body", "link", "dueDate", "author", "createdAt"}`
 - 계정 `{"username", "role", "name", "studentId"}` — 응답에 비밀번호 해시는 없음. 학생 계정의 `name` 은 학생 이름으로 채워서 내보냄
 
 ## 재수강 규칙

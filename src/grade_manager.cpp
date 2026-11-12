@@ -6,10 +6,11 @@
 // 생성자: CSV 파일이 있는 폴더 경로를 FileIO 에 넘겨 준다.
 GradeManager::GradeManager(const std::string& dataDir) : fileIO(dataDir) {}
 
-// CSV 5개(학생/과목/성적/수강신청/설정)를 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
+// CSV 6개(학생/과목/성적/수강신청/설정/게시물)를 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
 bool GradeManager::load() {
     if (!(fileIO.loadStudents(students) && fileIO.loadCourses(courses) && fileIO.loadGrades(grades) &&
-          fileIO.loadEnrollments(enrollments) && fileIO.loadSettings(enrollmentSemester))) {
+          fileIO.loadEnrollments(enrollments) && fileIO.loadSettings(enrollmentSemester) &&
+          fileIO.loadPosts(posts))) {
         return false;
     }
     // 신청 학기 값이 깨져 있으면 "신청 기간 아님" 으로 시작
@@ -21,10 +22,11 @@ bool GradeManager::load() {
     return true;
 }
 
-// 메모리의 학생/과목/성적/수강신청/설정을 CSV 5개에 모두 저장한다. 하나라도 실패하면 false.
+// 메모리의 학생/과목/성적/수강신청/설정/게시물을 CSV 6개에 모두 저장한다. 하나라도 실패하면 false.
 bool GradeManager::save() {
     return fileIO.saveStudents(students) && fileIO.saveCourses(courses) && fileIO.saveGrades(grades) &&
-           fileIO.saveEnrollments(enrollments) && fileIO.saveSettings(enrollmentSemester);
+           fileIO.saveEnrollments(enrollments) && fileIO.saveSettings(enrollmentSemester) &&
+           fileIO.savePosts(posts);
 }
 
 // ----- 학생 -----
@@ -126,7 +128,7 @@ bool GradeManager::addCourse(const Course& course) {
     return true;
 }
 
-// 과목 수정: updateStudent 와 같은 규칙. 과목코드가 바뀌면 성적·수강신청의 과목코드도 같이 바꾼다.
+// 과목 수정: updateStudent 와 같은 규칙. 과목코드가 바뀌면 성적·수강신청·게시물의 과목코드도 같이 바꾼다.
 bool GradeManager::updateCourse(const std::string& code, const Course& course) {
     auto it = std::find_if(courses.begin(), courses.end(), [&](const Course& current) {
         return current.code == code;
@@ -154,13 +156,18 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
                 enrollment.courseCode = course.code;
             }
         }
+        for (CoursePost& post : posts) {
+            if (post.courseCode == code) {
+                post.courseCode = course.code;
+            }
+        }
     }
     // 모든 검사를 통과한 뒤에 마지막으로 덮어쓴다.
     *it = course;
     return true;
 }
 
-// 과목 삭제: 과목과 그 과목의 성적·수강신청을 함께 지운다. 대상이 없으면 false.
+// 과목 삭제: 과목과 그 과목의 성적·수강신청·게시물을 함께 지운다. 대상이 없으면 false.
 bool GradeManager::removeCourse(const std::string& code) {
     auto it = std::find_if(courses.begin(), courses.end(), [&](const Course& course) {
         return course.code == code;
@@ -177,6 +184,9 @@ bool GradeManager::removeCourse(const std::string& code) {
     enrollments.erase(std::remove_if(enrollments.begin(), enrollments.end(), [&](const Enrollment& enrollment) {
         return enrollment.courseCode == code;
     }), enrollments.end());
+    posts.erase(std::remove_if(posts.begin(), posts.end(), [&](const CoursePost& post) {
+        return post.courseCode == code;
+    }), posts.end());
     return true;
 }
 
@@ -341,3 +351,55 @@ bool GradeManager::setEnrollmentSemester(const std::string& semester) {
     enrollmentSemester = semester;
     return true;
 }
+
+// ----- 과목 게시물 -----
+// 게시물 등록: 값이 잘못됐거나 없는 과목이면 0, 성공하면 새 id (현재 최대 id + 1, 처음이면 1).
+// post.id 는 무시하고 새로 정한다.
+int GradeManager::addPost(const CoursePost& post) {
+    if (!post.isValid() || findCourse(post.courseCode) == nullptr) {
+        return 0;
+    }
+    int maxId = 0;
+    for (const CoursePost& current : posts) {
+        maxId = std::max(maxId, current.id);
+    }
+    posts.push_back(post);
+    posts.back().id = maxId + 1;
+    return maxId + 1;
+}
+
+// 게시물 수정: 같은 id 의 게시물을 post 로 통째로 교체한다.
+// 없는 id 이거나, 값이 잘못됐거나, 없는 과목이면 false.
+bool GradeManager::updatePost(const CoursePost& post) {
+    auto it = std::find_if(posts.begin(), posts.end(), [&](const CoursePost& current) {
+        return current.id == post.id;
+    });
+    if (it == posts.end() || !post.isValid() || findCourse(post.courseCode) == nullptr) {
+        return false;
+    }
+    *it = post;
+    return true;
+}
+
+// 게시물 삭제: id 로 찾아 지운다. 없으면 false.
+bool GradeManager::removePost(int id) {
+    auto it = std::find_if(posts.begin(), posts.end(), [&](const CoursePost& current) {
+        return current.id == id;
+    });
+    if (it == posts.end()) {
+        return false;
+    }
+    posts.erase(it);
+    return true;
+}
+
+// 게시물 찾기: 있으면 벡터 원소의 주소, 없으면 nullptr.
+const CoursePost* GradeManager::findPost(int id) const {
+    auto it = std::find_if(posts.begin(), posts.end(), [&](const CoursePost& current) {
+        return current.id == id;
+    });
+    return it == posts.end() ? nullptr : &*it;
+}
+
+// 전체 게시물 목록 (읽기 전용 참조).
+const std::vector<CoursePost>& GradeManager::getPosts() const { return posts; }
