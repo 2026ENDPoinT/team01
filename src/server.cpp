@@ -547,7 +547,10 @@ void Server::run() {
             return;
         }
         const double gpa = Statistics::calcGPA(gm, id, req.get_param_value("semester"));
-        res.set_content(json{{"GPA", gpa}}.dump(), "application/json; charset=utf-8");
+        res.set_content(json{{"studentId", id},
+                             {"semester", req.get_param_value("semester")},
+                             {"gpa", gpa}}.dump(),
+                        "application/json; charset=utf-8");
     });
 
     // 과목 통계
@@ -556,6 +559,7 @@ void Server::run() {
         if (!requireRole(req, res, {"admin", "professor", "student"})) return;
         const auto stats = Statistics::courseStats(gm, req.path_params.at("code"));
         json result = {
+            {"courseCode", stats.courseCode}, {"count", stats.count},
             {"average", stats.average}, {"max", stats.max}, {"min", stats.min},
             {"latestSemester", stats.latestSemester}, {"latestEnrolled", stats.latestEnrolled}
         };

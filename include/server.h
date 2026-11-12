@@ -1,5 +1,4 @@
 // 담당: C (원준)
-// 로그인·권한·수강신청 라우트 구현: 이슈 #25 (원준)
 // 브라우저(web/)와 GradeManager 를 연결하는 HTTP 서버 (cpp-httplib + nlohmann/json)
 //
 // API (요청/응답 본문은 JSON, 자세한 표는 README 참고)
@@ -77,18 +76,12 @@ struct Session {
 
 class Server {
 public:
-    // 임시: server.cpp가 이 생성자를 직접 정의하면 위임과 아래 기존 생성자를 지운다 (이슈 #25)
-    Server(GradeManager& gm, AccountStore& accounts, const std::string& webDir, int port)
-        : Server(gm, webDir, port) {
-        this->accounts = &accounts;
-    }
+    Server(GradeManager& gm, AccountStore& accounts, const std::string& webDir, int port);
 
     // 서버 실행 (Ctrl+C 로 종료할 때까지 반환하지 않음)
     void run();
 
 private:
-    Server(GradeManager& gm, const std::string& webDir, int port);
-
     GradeManager& gm;
     std::string webDir;
     int port;
@@ -96,7 +89,7 @@ private:
     AccountStore* accounts = nullptr;  // 계정 (main이 소유)
     std::unordered_map<std::string, Session> sessions;  // 로그인 세션 (mtx 안에서만 접근)
 
-    // 아래 도우미는 mtx 를 잡은 상태에서 호출 (정의는 이슈 #25 에서 server.cpp 에 추가)
+    // 아래 도우미는 mtx 를 잡은 상태에서 호출 (server.cpp 정의)
     // 요청의 Cookie 헤더에서 sid 값을 꺼냄 (없으면 "")
     std::string sessionToken(const httplib::Request& req) const;
     // 로그인한 계정 (세션이 없거나 만료됐거나 계정이 사라졌으면 nullptr, 만료된 세션은 지움)
