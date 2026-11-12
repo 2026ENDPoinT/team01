@@ -133,6 +133,23 @@ bool parseJsonBody(const httplib::Request& req, json& body, httplib::Response& r
     }
 }
 
+// 과목 값 검사: 문제가 있으면 사유 문구, 없으면 빈 문자열
+std::string courseInvalidReason(const Course& c) {
+    auto has = [](const std::vector<std::string>& v, const std::string& s) {
+        return std::find(v.begin(), v.end(), s) != v.end();
+    };
+    if (!isValidCourseCode(c.code)) return "과목코드는 숫자 6자리여야 합니다";
+    if (std::all_of(c.name.begin(), c.name.end(), [](unsigned char ch) { return std::isspace(ch) != 0; }))
+        return "과목명이 비어 있습니다";
+    if (c.credit < 1 || c.credit > 4) return "학점은 1~4 사이여야 합니다";
+    if (!has(courseCategories(), c.category)) return "이수구분이 올바르지 않습니다";
+    if (!has(courseLanguages(), c.language)) return "강의언어가 올바르지 않습니다";
+    if (!isValidSchedule(c.schedule)) return "강의시간 형식이 올바르지 않습니다 (예: 월(1~2) 수(3))";
+    if (c.capacity < 0 || c.capacity > 999) return "정원은 0~999 사이여야 합니다";
+    if (!c.isValid()) return "값을 확인해 주세요";
+    return "";
+}
+
 constexpr const char* kPostRules =
     "게시물 정보가 올바르지 않습니다 (분류, 학기, 주차 1~16, 제목 필수, "
     "링크는 http:// 또는 https://, 날짜 예: 2026-10-20 또는 2026-10-20 13:00)";
@@ -1044,8 +1061,13 @@ void Server::run() {
             setError(res, 400, "과목 정보가 올바르지 않습니다");
             return;
         }
+        const std::string reason = courseInvalidReason(course);
+        if (!reason.empty()) {
+            setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
+            return;
+        }
         if (!gm.addCourse(course)) {
-            setError(res, 409, "과목 등록 실패 (이미 등록된 과목입니다)");
+            setError(res, 409, "이미 등록된 과목입니다 (과목코드 " + course.code + ")");
             return;
         }
         if (!gm.save()) {
@@ -1076,8 +1098,22 @@ void Server::run() {
             setError(res, 400, "과목 정보가 올바르지 않습니다");
             return;
         }
-        if (!gm.updateCourse(req.path_params.at("code"), course)) {
+        const std::string reason = courseInvalidReason(course);
+        if (!reason.empty()) {
+            setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
+            return;
+        }
+        const std::string oldCode = req.path_params.at("code");
+        if (gm.findCourse(oldCode) == nullptr) {
             setError(res, 404, "수정할 과목을 찾을 수 없습니다.");
+            return;
+        }
+        if (course.code != oldCode && gm.findCourse(course.code) != nullptr) {
+            setError(res, 409, "이미 등록된 과목입니다 (과목코드 " + course.code + ")");
+            return;
+        }
+        if (!gm.updateCourse(oldCode, course)) {
+            setError(res, 400, "과목 정보를 수정할 수 없습니다");
             return;
         }
         if (!gm.save()) {
