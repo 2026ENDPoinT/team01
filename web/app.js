@@ -769,8 +769,8 @@ $('grade-add').onclick = () => {
         title: '성적 등록',
         fields: gradeFields(false),
         onSubmit: async (d) => {
-            const g = await api('POST', '/api/grades', { ...d, score: Number(d.score) });
-            toast(`성적을 등록했습니다: ${g.score}점 → ${g.letter}`);
+            await api('POST', '/api/grades', { ...d, score: Number(d.score) });
+            toast(`성적을 등록했습니다: ${Number(d.score)}점`);
             await refreshAll();
         },
     });
@@ -791,8 +791,8 @@ $('grade-body').onclick = async (e) => {
             fields: gradeFields(true),
             values: g,
             onSubmit: async (d) => {
-                const updated = await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
-                toast(`수정했습니다: ${updated.score}점 → ${updated.letter}`);
+                await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
+                toast(`수정했습니다: ${Number(d.score)}점`);
                 await refreshAll();
             },
         });
