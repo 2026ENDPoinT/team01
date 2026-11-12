@@ -34,3 +34,7 @@ const std::vector<std::string>& courseLanguages();
 //   한 칸: 요일(월~일) + "(교시)" 또는 "(시작~끝)", 교시는 1~30, 시작 <= 끝
 //   여러 칸은 공백이나 쉼표로 구분. 예) "월(1~4)", "화(2~3) 목(2~3)", "금(5)"
 bool isValidSchedule(const std::string& schedule);
+
+// 두 강의시간이 겹치는지: 같은 요일에 교시 구간이 하나라도 겹치면 true
+//   빈 문자열(시간 미정·원격강좌)이나 잘못된 칸은 무시 (겹침 없음). 예) "월(1~4)" 과 "월(3~5)" → true
+bool schedulesOverlap(const std::string& a, const std::string& b);

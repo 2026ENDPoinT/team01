@@ -6,6 +6,8 @@
 #include <iostream>
 #include <sstream>
 
+#include "account.h"
+
 namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
@@ -291,6 +293,86 @@ bool FileIO::loadGrades(std::vector<Grade>& grades) {
             continue;
         }
         grades.push_back(g);
+    }
+    return true;
+}
+
+// enrollments.csv : studentId,courseCode,semester
+
+const char* const kEnrollmentsHeader = "studentId,courseCode,semester";
+
+bool FileIO::saveEnrollments(const std::vector<Enrollment>& enrollments) {
+    std::string content = std::string(kEnrollmentsHeader) + "\n";
+    for (const Enrollment& e : enrollments) {
+        content += joinCsvLine({e.studentId, e.courseCode, e.semester});
+    }
+    return atomicWrite(dataDir + "/enrollments.csv", content);
+}
+
+bool FileIO::loadEnrollments(std::vector<Enrollment>& enrollments) {
+    std::vector<CsvRow> rows;
+    if (!readCsv(dataDir + "/enrollments.csv", {kEnrollmentsHeader}, rows)) {
+        return false;
+    }
+
+    enrollments.clear();
+    for (const CsvRow& row : rows) {
+        enrollments.push_back({row.fields[0], row.fields[1], row.fields[2]});
+    }
+    return true;
+}
+
+// settings.csv : key,value (지금은 enrollmentSemester 하나. 값이 "" 이면 수강신청 기간이 아님)
+
+bool FileIO::saveSettings(const std::string& enrollmentSemester) {
+    std::string content = "key,value\n";
+    content += joinCsvLine({"enrollmentSemester", enrollmentSemester});
+    return atomicWrite(dataDir + "/settings.csv", content);
+}
+
+bool FileIO::loadSettings(std::string& enrollmentSemester) {
+    std::vector<CsvRow> rows;
+    if (!readCsv(dataDir + "/settings.csv", {"key,value"}, rows)) {
+        return false;
+    }
+
+    enrollmentSemester.clear();
+    for (const CsvRow& row : rows) {
+        if (row.fields[0] == "enrollmentSemester") {
+            enrollmentSemester = row.fields[1];
+        }
+    }
+    return true;
+}
+
+// accounts.csv : username,role,name,studentId,salt,passwordHash
+
+const char* const kAccountsHeader = "username,role,name,studentId,salt,passwordHash";
+
+bool FileIO::saveAccounts(const std::vector<Account>& accounts) {
+    std::string content = std::string(kAccountsHeader) + "\n";
+    for (const Account& a : accounts) {
+        content += joinCsvLine({a.username, a.role, a.name, a.studentId, a.salt, a.passwordHash});
+    }
+    return atomicWrite(dataDir + "/accounts.csv", content);
+}
+
+bool FileIO::loadAccounts(std::vector<Account>& accounts) {
+    const std::string path = dataDir + "/accounts.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kAccountsHeader}, rows)) {
+        return false;
+    }
+
+    accounts.clear();
+    for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
+        if (f[0].empty() || !isValidRole(f[1])) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (아이디나 역할이 올바르지 않음)"
+                      << std::endl;
+            continue;
+        }
+        accounts.push_back({f[0], f[1], f[2], f[3], f[4], f[5]});
     }
     return true;
 }

@@ -26,3 +26,16 @@ std::string scoreToLetter(double score);
 //   A+ 4.5, A0 4.0, B+ 3.5, B0 3.0, C+ 2.5, C0 2.0, D+ 1.5, D0 1.0, F 0.0
 //   모르는 문자열이면 0.0
 double letterToPoint(const std::string& letter);
+
+// 학기 형식 검사: "YYYY-N", N: 1·2 정규학기, 3 여름 계절학기, 4 겨울 계절학기 (예: "2026-1")
+bool isValidSemester(const std::string& semester);
+
+// 형식이 맞고 정규학기(N 이 1 또는 2)이면 true
+bool isRegularSemester(const std::string& semester);
+
+// 학번 앞 2자리로 본 입학년도 (예: "23101001" → 2023). 학번이 숫자 8자리가 아니면 0
+int admissionYear(const std::string& studentId);
+
+// 이 학생이 등록할 수 있는 학기인지: 형식이 맞고 연도가 입학년도 ~ currentYear+1 이면 true (N 은 1~4 모두)
+//   currentYear 는 올해 (테스트하기 쉽게 인자로 받음)
+bool isSemesterInRange(const std::string& studentId, const std::string& semester, int currentYear);

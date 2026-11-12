@@ -1,43 +1,109 @@
 // 담당: C (원준)
+// 로그인·권한·수강신청 라우트 구현: 이슈 #25 (원준)
 // 브라우저(web/)와 GradeManager 를 연결하는 HTTP 서버 (cpp-httplib + nlohmann/json)
 //
 // API (요청/응답 본문은 JSON, 자세한 표는 README 참고)
-//   GET    /api/students              학생 목록        POST /api/students        학생 등록
-//   GET    /api/students/search?q=    학번·이름 검색
-//   PUT    /api/students/:id          학생 수정        DELETE /api/students/:id  학생 삭제
-//   GET    /api/courses               과목 목록        POST /api/courses         과목 등록
-//   PUT    /api/courses/:code         과목 수정        DELETE /api/courses/:code 과목 삭제
+//   권한: 로그인 없이 쓸 수 있는 것은 정적 파일(/)과 POST /api/login 뿐.
+//         나머지 /api/* 는 로그인 필요 → 안 했으면 401 {"error":"로그인이 필요합니다"},
+//         역할이 안 맞으면 403 {"error":"권한이 없습니다"}
+//   역할: admin(관리자) / professor(교수) / student(학생). 아래 괄호가 그 라우트의 권한
+//   교수의 담당 과목 = 과목의 professor 를 ',' 로 나눠 공백을 지운 이름 중 계정 name 과 같은 과목
+//
+//   POST   /api/login                 로그인 {username,password} (공개)
+//   POST   /api/logout                로그아웃 (로그인)
+//   GET    /api/me                    내 정보 {username,role,name,studentId} (로그인)
+//   PUT    /api/me/password           내 비밀번호 변경 {currentPassword,newPassword} (로그인)
+//   GET    /api/accounts              계정 목록        POST /api/accounts        계정 생성 (admin)
+//   PUT    /api/accounts/:username    계정 수정        DELETE /api/accounts/:username 계정 삭제 (admin)
+//
+//   GET    /api/students              학생 목록 (admin 전체, professor 담당 과목 수강생만, student 본인만)
+//   GET    /api/students/search?q=    학번·이름 검색 (위와 같은 범위)
+//   POST   /api/students              학생 등록        (admin)
+//   PUT    /api/students/:id          학생 수정        DELETE /api/students/:id  학생 삭제 (admin)
+//   GET    /api/courses               과목 목록 (로그인)
+//   POST   /api/courses               과목 등록        (admin)
+//   PUT    /api/courses/:code         과목 수정        DELETE /api/courses/:code 과목 삭제 (admin)
 //   GET    /api/grades                성적 목록 (?studentId= ?courseCode= ?semester= 로 거르기)
+//                                     (admin 전체, professor 담당 과목만, student 본인 것만)
 //   POST   /api/grades                성적 등록        PUT /api/grades           성적 수정
 //   DELETE /api/grades?studentId=&courseCode=&semester=   성적 삭제
-//   GET    /api/stats/gpa/:id         학생 GPA (?semester=)
-//   GET    /api/stats/course/:code    과목 평균/최고/최저
-//   GET    /api/stats/ranking         석차표 (?semester=)
-//   GET    /api/export/student/:id    학생 성적표 CSV 다운로드
-//   GET    /api/export/course/:code   과목 성적표 CSV 다운로드
-//   GET    /                          web/ 정적 파일
+//                                     (admin, professor 는 담당 과목만. 등록은 수강신청이 있어야 함)
+//   GET    /api/stats/gpa/:id         학생 GPA (?semester=) (admin, student 본인)
+//   GET    /api/stats/course/:code    과목 평균/최고/최저 + latestSemester·latestEnrolled (로그인)
+//   GET    /api/stats/ranking         석차표 (?semester=) (admin)
+//   GET    /api/stats/warnings        학사경고 전체 (admin)
+//   GET    /api/stats/warnings/:id    학생 학사경고 (admin, student 본인)
+//   GET    /api/export/student/:id    학생 성적표 CSV 다운로드 (admin, student 본인)
+//   GET    /api/export/course/:code   과목 성적표 CSV 다운로드 (admin, professor 담당 과목만)
 //
-// 실패 시: 400 (잘못된 값) / 404 (없음) / 409 (중복, 정원 초과) + {"error": "메시지"}
+//   GET    /api/enrollment/settings   수강신청 학기 {"semester"} (로그인)
+//   PUT    /api/enrollment/settings   수강신청 학기 설정 (admin, ""이면 신청 마감)
+//   GET    /api/enrollments           수강신청 목록 (?studentId= ?courseCode= ?semester=)
+//                                     (admin 전체, professor 담당 과목만, student 본인 것만)
+//   GET    /api/enrollments/counts?semester=   과목별 신청 인원 (로그인)
+//   POST   /api/enrollments           수강신청 {studentId,courseCode,semester} (admin, student 본인)
+//   DELETE /api/enrollments?studentId=&courseCode=&semester=   수강신청 취소 (admin, student 본인)
+//   GET    /                          web/ 정적 파일 (공개)
+//
+// 세션: 로그인하면 쿠키 sid=<토큰 hex 64자> (HttpOnly, SameSite=Strict, 8시간) 를 줌.
+//       세션은 메모리에만 있어서 서버를 다시 켜면 모두 로그아웃됨
+//
+// 실패 시: 400 (잘못된 값) / 401 (로그인 안 함) / 403 (권한 없음) / 404 (없음) /
+//          409 (중복, 정원 초과, 수강신청 규칙 위반) + {"error": "메시지"}
 //
 // 동시 접근: cpp-httplib 은 요청을 여러 스레드에서 동시에 처리함
-//   → gm 을 쓰는 모든 라우트는 첫 줄에 std::lock_guard<std::mutex> lock(mtx); (server.cpp 예시 라우트 참고)
+//   → gm, accounts, sessions 를 쓰는 모든 라우트는 첫 줄에 std::lock_guard<std::mutex> lock(mtx); (server.cpp 예시 라우트 참고)
 #pragma once
 
+#include <chrono>
+#include <initializer_list>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
+#include "account.h"
 #include "grade_manager.h"
+
+namespace httplib {
+struct Request;
+struct Response;
+}  // namespace httplib
+
+// 로그인 세션 (토큰은 Server::sessions 의 키)
+struct Session {
+    std::string username;
+    std::chrono::steady_clock::time_point expires;  // 로그인 후 8시간, 연장하지 않음
+};
 
 class Server {
 public:
-    Server(GradeManager& gm, const std::string& webDir, int port);
+    // 임시: server.cpp가 이 생성자를 직접 정의하면 위임과 아래 기존 생성자를 지운다 (이슈 #25)
+    Server(GradeManager& gm, AccountStore& accounts, const std::string& webDir, int port)
+        : Server(gm, webDir, port) {
+        this->accounts = &accounts;
+    }
 
     // 서버 실행 (Ctrl+C 로 종료할 때까지 반환하지 않음)
     void run();
 
 private:
+    Server(GradeManager& gm, const std::string& webDir, int port);
+
     GradeManager& gm;
     std::string webDir;
     int port;
     std::mutex mtx;  // gm 을 한 번에 한 요청만 쓰도록 잠금
+    AccountStore* accounts = nullptr;  // 계정 (main이 소유)
+    std::unordered_map<std::string, Session> sessions;  // 로그인 세션 (mtx 안에서만 접근)
+
+    // 아래 도우미는 mtx 를 잡은 상태에서 호출 (정의는 이슈 #25 에서 server.cpp 에 추가)
+    // 요청의 Cookie 헤더에서 sid 값을 꺼냄 (없으면 "")
+    std::string sessionToken(const httplib::Request& req) const;
+    // 로그인한 계정 (세션이 없거나 만료됐거나 계정이 사라졌으면 nullptr, 만료된 세션은 지움)
+    const Account* currentAccount(const httplib::Request& req);
+    // 로그인·역할 확인: 안 했으면 401, 역할이 roles 에 없으면 403 을 채우고 nullptr
+    const Account* requireRole(const httplib::Request& req, httplib::Response& res,
+                               std::initializer_list<const char*> roles);
+    // 계정을 응답 JSON 문자열로 (해시·salt 제외, student 는 name 을 학생 이름으로 채움)
+    std::string accountJson(const Account& account) const;
 };

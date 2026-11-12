@@ -3,9 +3,11 @@
 
 // id 로 요소 찾기 (document.getElementById 줄임)
 const $ = (id) => document.getElementById(id);
-// 여러 탭이 같이 쓰는 학생·과목 목록 (loadBase 로 채움, 이름 표시·선택 상자에 사용)
+// me: 로그인한 계정 {username, role, name, studentId} (로그인 전 null)
+// students·courses: 여러 탭이 같이 쓰는 학생·과목 목록 (loadBase 로 채움, 서버가 역할에 맞게 걸러 줌)
 // stats: 과목코드 → 과목 통계 (수강과목 탭을 그릴 때 채움, 통계를 못 받은 과목은 null)
-const state = { students: [], courses: [], stats: {} };
+// enrollCtx: 수강신청 탭에서 지금 보고 있는 {학번, 학기} (신청·취소 버튼이 사용)
+const state = { me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null };
 
 // ───────── 공용 도우미 ─────────
 
@@ -17,6 +19,7 @@ function esc(v) {
 
 // 서버 API 호출. body 가 있으면 JSON 으로 보내고, 응답 JSON 을 돌려줌
 // 실패(4xx/5xx)하면 서버가 준 {"error"} 메시지로 Error 를 던짐 → 호출한 쪽에서 토스트/폼에 표시
+// 401(로그인 필요)이면 로그인 화면으로 돌아감. 단, 로그인 요청 자체의 401 은 로그인 폼에 오류로 표시
 async function api(method, url, body) {
     const opt = { method, headers: {} };
     if (body !== undefined) {
@@ -25,6 +28,7 @@ async function api(method, url, body) {
     }
     const res = await fetch(url, opt);
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && url !== '/api/login') showLogin();
     if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
     return data;
 }
@@ -50,6 +54,22 @@ const studentName = (id) => state.students.find((s) => s.id === id)?.name ?? '';
 const courseName = (code) => state.courses.find((c) => c.code === code)?.name ?? '';
 // 표가 비었을 때 넣는 안내 줄
 const emptyRow = (cols, msg) => `<tr><td class="empty" colspan="${cols}">${msg}</td></tr>`;
+// 정원 표시 (0 = 제한 없음)
+const capacityText = (c) => (c.capacity > 0 ? esc(c.capacity) : '제한 없음');
+// 학기 형식 YYYY-N (1·2 정규학기, 3 여름·4 겨울 계절학기)
+const SEMESTER_RE = /^\d{4}-[1-4]$/;
+// 중복을 지운 학기 목록 (최신 학기가 위로, 빈 값 제외)
+const sortSemesters = (list) => [...new Set(list.filter(Boolean))].sort().reverse();
+
+// ───────── 역할 ─────────
+
+const ROLE_LABEL = { admin: '관리자', professor: '교수', student: '학생' };
+const isAdmin = () => state.me?.role === 'admin';
+// 담당 과목 판정 (서버 teaches 와 같은 규칙): 교수 계정이고, 과목 담당 교수를 , 로 나눈 이름 중 하나가 내 이름
+const teaches = (c) => state.me?.role === 'professor' &&
+    String(c.professor ?? '').split(',').map((s) => s.trim()).includes(state.me.name);
+// 성적 탭에서 고를 수 있는 과목: 관리자는 전체, 교수는 담당 과목만
+const gradeCourses = () => (isAdmin() ? state.courses : state.courses.filter(teaches));
 
 // ───────── 대화상자 ─────────
 
@@ -84,7 +104,7 @@ $('dlg-form').addEventListener('submit', async (e) => {
 });
 
 // 입력 폼 창 만들기
-//   fields: [{name, label, type, readonly, optional, step, placeholder, options:[{value,label}]}]
+//   fields: [{name, label, type, readonly, optional, step, placeholder, autocomplete, options:[{value,label}]}]
 //     options 가 있으면 선택 상자, 없으면 입력칸. readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
 //     optional 이면 빈칸으로 저장할 수 있음 (그 외 입력칸은 필수)
 //   values: 처음 채워둘 값, onSubmit: 저장할 때 실행할 함수 (폼 값 객체를 받음)
@@ -101,7 +121,8 @@ function openForm({ title, fields, values = {}, onSubmit }) {
             if (f.readonly) input += `<input type="hidden" name="${f.name}" value="${v}">`;
         } else {
             input = `<input name="${f.name}" type="${f.type || 'text'}" value="${v}" ${f.step ? `step="${f.step}"` : ''}
-                ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.optional ? '' : 'required'}>`;
+                ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
+                ${f.autocomplete ? `autocomplete="${f.autocomplete}"` : ''} ${f.optional ? '' : 'required'}>`;
         }
         return `<div class="field"><label>${f.label}</label>${input}</div>`;
     }).join('') + '<div class="form-error"></div>';
@@ -125,9 +146,12 @@ async function confirmDelete(msg, fn) {
 // 탭 이름 → 그 탭을 그리는 함수
 const renderers = {
     courses: renderCourses,
+    enroll: renderEnroll,
     students: renderStudents,
     grades: renderGrades,
+    myreport: renderMyReport,
     ranking: renderRanking,
+    accounts: renderAccounts,
 };
 // 지금 열린 탭 이름
 const currentTab = () => document.querySelector('#tabs button.active').dataset.tab;
@@ -140,15 +164,16 @@ function showTab(name) {
 }
 $('tabs').onclick = (e) => {
     const b = e.target.closest('button[data-tab]');
-    if (b) showTab(b.dataset.tab);
+    if (b && !b.hidden) showTab(b.dataset.tab);
 };
 
-// 학생·과목 목록을 서버에서 받아 state 에 저장
+// 학생·과목 목록을 서버에서 받아 state 에 저장 (학생 목록은 서버가 역할에 맞게 걸러 줌)
 async function loadBase() {
     [state.students, state.courses] = await Promise.all([api('GET', '/api/students'), api('GET', '/api/courses')]);
 }
 // 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 지금 탭을 다시 그림
 async function refreshAll() {
+    if (!state.me) return;
     await loadBase();
     await renderers[currentTab()]();
 }
@@ -156,7 +181,7 @@ async function refreshAll() {
 // 성적에 나온 학기 목록 (최신 학기가 위로). 학기 선택 상자에 사용
 async function semesterList() {
     const grades = await api('GET', '/api/grades');
-    return [...new Set(grades.map((g) => g.semester))].sort().reverse();
+    return sortSemesters(grades.map((g) => g.semester));
 }
 
 // 선택 상자 채우기. allLabel 이 있으면 맨 위에 "전체" 항목(값 '')을 넣고,
@@ -166,6 +191,89 @@ function fillSelect(el, items, allLabel, keep) {
         items.map((i) => `<option value="${esc(i.value)}">${esc(i.label)}</option>`).join('');
     if (keep && [...el.options].some((o) => o.value === keep)) el.value = keep;
 }
+
+// ───────── 로그인 ─────────
+
+// 화면에 그려 둔 목록·선택 상자를 모두 비움 (다른 역할로 다시 로그인했을 때 이전 화면이 남지 않게)
+function resetView() {
+    state.students = [];
+    state.courses = [];
+    state.stats = {};
+    state.accounts = [];
+    state.enrollCtx = null;
+    ['course-list', 'student-body', 'grade-body', 'rank-body', 'enroll-content', 'myreport-body', 'account-body',
+        'grade-f-student', 'grade-f-course', 'grade-f-semester', 'rank-semester',
+        'enroll-student', 'enroll-course', 'enroll-sem-select'].forEach((id) => ($(id).innerHTML = ''));
+    ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
+    delete $('enroll-sem-select').dataset.course;
+    $('enroll-period').textContent = '';
+}
+
+// 로그인 화면 표시: 상단 탭·사용자 상자·본문을 숨김
+function showLogin() {
+    state.me = null;
+    if (dlg.open) dlg.close();
+    resetView();
+    $('tabs').hidden = true;
+    $('user-box').hidden = true;
+    $('app').hidden = true;
+    $('login-view').hidden = false;
+    $('login-error').textContent = '';
+    $('login-password').value = '';
+    $('login-username').focus();
+}
+
+// 로그인한 계정으로 앱 시작: 역할에 허용된 탭만 보이고 첫 탭(수강과목)을 엶
+function startApp(me) {
+    state.me = me;
+    resetView();
+    $('user-label').textContent = `${me.name || me.username} · ${ROLE_LABEL[me.role] ?? me.role}`;
+    document.querySelectorAll('#tabs button').forEach((b) => (b.hidden = !b.dataset.roles.split(' ').includes(me.role)));
+    $('course-add').hidden = me.role !== 'admin';
+    $('login-view').hidden = true;
+    $('tabs').hidden = false;
+    $('user-box').hidden = false;
+    $('app').hidden = false;
+    showTab('courses');
+}
+
+// 로그인 폼 (Enter 로도 제출). 실패하면 폼 안에 서버 메시지 표시
+$('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('login-error').textContent = '';
+    const d = Object.fromEntries(new FormData($('login-form')));
+    try {
+        const me = await api('POST', '/api/login', { username: d.username, password: d.password });
+        $('login-form').reset();
+        startApp(me);
+    } catch (err) {
+        $('login-error').textContent = err.message;
+        $('login-password').value = '';
+        $('login-password').focus();
+    }
+});
+
+// 내 비밀번호 변경. 새 비밀번호 두 칸이 다르면 서버에 보내지 않고 폼 오류
+$('pw-change').onclick = () => openForm({
+    title: '비밀번호 변경',
+    fields: [
+        { name: 'currentPassword', label: '현재 비밀번호', type: 'password', autocomplete: 'current-password' },
+        { name: 'newPassword', label: '새 비밀번호 (8~64자)', type: 'password', autocomplete: 'new-password' },
+        { name: 'newPassword2', label: '새 비밀번호 확인', type: 'password', autocomplete: 'new-password' },
+    ],
+    onSubmit: async (d) => {
+        if (d.newPassword !== d.newPassword2) throw new Error('새 비밀번호가 서로 다릅니다');
+        await api('PUT', '/api/me/password', { currentPassword: d.currentPassword, newPassword: d.newPassword });
+        toast('비밀번호를 바꿨습니다');
+    },
+});
+
+// 로그아웃: 서버 세션을 지우고 로그인 화면으로
+$('logout').onclick = async () => {
+    try { await api('POST', '/api/logout'); }
+    catch { /* 이미 세션이 끝났어도 로그인 화면으로 */ }
+    showLogin();
+};
 
 // ───────── 과목 ─────────
 
@@ -193,7 +301,8 @@ const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.
 const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 
 // 과목 목록 그리기: 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
-// 한 줄에 과목 정보(왼쪽)와 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
+// 한 줄에 과목 정보(왼쪽)와 최근 학기 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
+//   최근 학기 = 수강신청이 1건 이상 있는 가장 늦은 학기 (신청 기록이 없으면 학기 없이 "수강 0")
 async function renderCourses() {
     const list = $('course-list');
     const stats = await Promise.all(state.courses.map((c) =>
@@ -203,6 +312,7 @@ async function renderCourses() {
     list.innerHTML = state.courses.map((c) => {
         const st = state.stats[c.code];
         const has = st && st.count > 0;
+        const sem = st?.latestSemester ?? '';
         return `<li class="course-row" data-code="${esc(c.code)}">
             <div class="course-info">
                 <div class="course-name">${esc(c.name)}${c.area ? ` <span class="tag">${esc(c.area)}</span>` : ''}</div>
@@ -210,7 +320,7 @@ async function renderCourses() {
                 <div class="course-line">${esc(c.schedule) || '-'} · ${esc(c.credit)}학점 · ${esc(c.language)}${c.remote ? ' <span class="tag">원격</span>' : ''}</div>
             </div>
             <div class="course-meta">
-                <span class="stat-line">수강 <b>${st ? esc(st.count) : 0}</b> / ${c.capacity > 0 ? esc(c.capacity) : '제한 없음'}</span>
+                <span class="stat-line">${sem ? esc(sem) + ' ' : ''}수강 <b>${sem ? esc(st.latestEnrolled) : 0}</b> / ${capacityText(c)}</span>
                 <span class="stat-line">${has ? `평균 <b>${fmt(st.average, 1)}</b> (${fmt(st.max, 0)} / ${fmt(st.min, 0)})` : '평균 -'}</span>
             </div>
         </li>`;
@@ -218,8 +328,10 @@ async function renderCourses() {
 }
 
 // 과목 상세 창 (보기 전용): 전체 항목 + 통계 상자 + CSV / 수정 / 삭제 버튼
+//   CSV 는 관리자·담당 교수만, 수정·삭제는 관리자만
 function showCourseDetail(c, st) {
     const has = st && st.count > 0;
+    const sem = st?.latestSemester ?? '';
     const rows = [
         ['이수구분', esc(c.category)],
         ['학점', esc(c.credit)],
@@ -230,24 +342,26 @@ function showCourseDetail(c, st) {
         ['정원', c.capacity > 0 ? esc(c.capacity) + '명' : '제한 없음'],
         ['원격강좌', c.remote ? '예' : '아니오'],
     ];
-    const stat = (label, v) => `<div><span>${label}</span><b>${v}</b></div>`;
+    const stat = (label, v, sub) => `<div><span>${label}</span><b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+    const actions = [
+        isAdmin() || teaches(c) ? `<a class="btn-link" href="/api/export/course/${encodeURIComponent(c.code)}">CSV 내려받기</a>` : '',
+        isAdmin() ? '<button type="button" data-act="edit">수정</button><button type="button" class="danger" data-act="del">삭제</button>' : '',
+    ].join('');
     openDialog({
         title: `${c.name} (${c.code})`,
         bodyHtml: `<dl class="detail-grid">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
             <div class="stat-boxes">
-                ${stat('수강 인원', has ? esc(st.count) + '명' : '-')}
+                ${stat('최근 학기 수강', sem ? esc(st.latestEnrolled) + '명' : '-', sem ? esc(sem) : '')}
                 ${stat('평균', has ? fmt(st.average, 1) : '-')}
                 ${stat('최고', has ? fmt(st.max, 0) : '-')}
                 ${stat('최저', has ? fmt(st.min, 0) : '-')}
             </div>
-            <div class="detail-actions">
-                <a class="btn-link" href="/api/export/course/${encodeURIComponent(c.code)}">CSV 내려받기</a>
-                <button type="button" data-act="edit">수정</button>
-                <button type="button" class="danger" data-act="del">삭제</button>
-            </div>`,
+            ${actions ? `<div class="detail-actions">${actions}</div>` : ''}`,
     });
-    $('dlg-body').querySelector('[data-act=edit]').onclick = () => { dlg.close(); editCourse(c); };
-    $('dlg-body').querySelector('[data-act=del]').onclick = () => { dlg.close(); deleteCourse(c); };
+    const edit = $('dlg-body').querySelector('[data-act=edit]');
+    const del = $('dlg-body').querySelector('[data-act=del]');
+    if (edit) edit.onclick = () => { dlg.close(); editCourse(c); };
+    if (del) del.onclick = () => { dlg.close(); deleteCourse(c); };
 }
 
 // 과목 수정 폼
@@ -267,7 +381,7 @@ function editCourse(c) {
 // 과목 삭제 (확인 후)
 function deleteCourse(c) {
     confirmDelete(
-        `${c.name}(${c.code}) 과목을 삭제할까요?\n이 과목의 성적도 함께 삭제됩니다.`,
+        `${c.name}(${c.code}) 과목을 삭제할까요?\n이 과목의 성적과 수강신청도 함께 삭제됩니다.`,
         () => api('DELETE', '/api/courses/' + encodeURIComponent(c.code)));
 }
 
@@ -290,6 +404,179 @@ $('course-add').onclick = () => openForm({
     },
 });
 
+// ───────── 수강신청 ─────────
+
+// 수강신청 탭 그리기. 맨 위에 신청 학기(또는 기간 아님)를 보이고 역할별 화면으로 나눔
+//   학생: 자기 수강신청 (신청 학기에만 신청·취소)
+//   관리자: 신청 학기 설정 + 고른 학생의 수강신청 (모든 학기에서 신청·취소)
+//   교수: 담당 과목의 학기별 수강생 조회만
+async function renderEnroll() {
+    const role = state.me.role;
+    const { semester: open = '' } = await api('GET', '/api/enrollment/settings');
+    const period = $('enroll-period');
+    period.textContent = open ? `수강신청 학기: ${open}` : '수강신청 기간이 아닙니다';
+    period.classList.toggle('closed', !open);
+    $('enroll-admin').hidden = role !== 'admin';
+    $('enroll-student-wrap').hidden = role !== 'admin';
+    $('enroll-course-wrap').hidden = role !== 'professor';
+    $('enroll-sem-input').hidden = role !== 'admin';
+    $('enroll-sem-select').hidden = role === 'admin';
+    if (role === 'admin') $('enroll-set-sem').value = open;
+    if (role === 'professor') return renderEnrollProfessor(open);
+    return renderEnrollStudent(open, role === 'admin');
+}
+
+// 학생(또는 관리자가 고른 학생)의 "개설 과목" + "신청 내역" 두 목록
+async function renderEnrollStudent(open, admin) {
+    const content = $('enroll-content');
+    let sid = state.me.studentId;
+    if (admin) {
+        const pick = $('enroll-student');
+        fillSelect(pick, studentOptions(), '', pick.value);
+        if (!pick.value) { state.enrollCtx = null; content.innerHTML = '<p class="hint">등록된 학생이 없습니다</p>'; return; }
+        sid = pick.value;
+    }
+    const mine = await api('GET', '/api/enrollments?studentId=' + encodeURIComponent(sid));
+
+    // 학기: 관리자는 직접 입력(비면 신청 학기, 그것도 비면 가장 최근 성적 학기),
+    //       학생은 신청 학기 + 자기 수강신청에 나온 학기 중에서 선택
+    let sem;
+    if (admin) {
+        const input = $('enroll-sem-input');
+        if (!input.value.trim()) input.value = open || (await semesterList())[0] || '';
+        sem = input.value.trim();
+    } else {
+        const sel = $('enroll-sem-select');
+        const sems = sortSemesters([open, ...mine.map((e) => e.semester)]);
+        fillSelect(sel, sems.map((s) => ({ value: s, label: s })), '', sel.value || open);
+        sem = sel.value;
+    }
+    if (!SEMESTER_RE.test(sem)) {
+        state.enrollCtx = null;
+        content.innerHTML = `<p class="hint">${admin ? '학기를 입력하세요 (예: 2026-2, 1·2 정규, 3 여름, 4 겨울)' : '표시할 학기가 없습니다'}</p>`;
+        return;
+    }
+    state.enrollCtx = { studentId: sid, semester: sem };
+
+    const counts = await api('GET', '/api/enrollments/counts?semester=' + encodeURIComponent(sem));
+    const countOf = Object.fromEntries(counts.map((x) => [x.courseCode, x.count]));
+    const inSem = mine.filter((e) => e.semester === sem).sort((a, b) => a.courseCode.localeCompare(b.courseCode));
+    const applied = new Set(inSem.map((e) => e.courseCode));
+    // 학생은 신청 학기에만 신청·취소, 관리자는 모든 학기
+    const editable = admin || (open !== '' && sem === open);
+
+    const courseRows = state.courses.length ? state.courses.map((c) => `
+        <tr>
+            <td><b>${esc(c.name)}</b> <span class="hint">${esc(c.code)}</span></td>
+            <td>${esc(c.professor) || '-'}</td>
+            <td>${esc(c.schedule) || '-'}</td>
+            <td class="num">${esc(c.credit)}</td>
+            <td class="num">신청 ${esc(countOf[c.code] ?? 0)} / ${capacityText(c)}</td>
+            <td class="actions"><button class="link" data-act="apply" data-code="${esc(c.code)}"
+                ${applied.has(c.code) || !editable ? 'disabled' : ''}>신청</button></td>
+        </tr>`).join('') : emptyRow(6, '등록된 과목이 없습니다');
+
+    const course = (code) => state.courses.find((c) => c.code === code);
+    const totalCredits = inSem.reduce((t, e) => t + (Number(course(e.courseCode)?.credit) || 0), 0);
+    const mineRows = inSem.length ? inSem.map((e) => {
+        const c = course(e.courseCode);
+        return `
+        <tr>
+            <td><b>${esc(c?.name ?? '')}</b> <span class="hint">${esc(e.courseCode)}</span></td>
+            <td>${esc(c?.schedule) || '-'}</td>
+            <td class="num">${esc(c?.credit ?? 0)}</td>
+            <td>${e.hasGrade ? '성적 있음' : '-'}</td>
+            <td class="actions"><button class="link danger" data-act="cancel" data-code="${esc(e.courseCode)}"
+                ${e.hasGrade || !editable ? 'disabled' : ''}>취소</button></td>
+        </tr>`;
+    }).join('') : emptyRow(5, '이 학기에 신청한 과목이 없습니다');
+
+    const who = admin ? `${esc(studentName(sid))} (${esc(sid)}) 신청 내역` : '내 신청 내역';
+    content.innerHTML = `
+        ${editable ? '' : `<p class="hint">${open ? `신청·취소는 수강신청 학기(${esc(open)})에만 할 수 있습니다` : '지금은 수강신청 기간이 아닙니다'}</p>`}
+        <h3 class="sub-title">개설 과목 · ${esc(sem)}</h3>
+        <div class="table-wrap">
+            <table><thead><tr><th>과목</th><th>교수</th><th>강의시간</th><th class="num">학점</th><th class="num">신청 / 정원</th><th></th></tr></thead>
+            <tbody>${courseRows}</tbody></table>
+        </div>
+        <h3 class="sub-title">${who}</h3>
+        <div class="table-wrap">
+            <table><thead><tr><th>과목</th><th>강의시간</th><th class="num">학점</th><th>성적</th><th></th></tr></thead>
+            <tbody>${mineRows}</tbody>
+            <tfoot><tr><td colspan="2">학점 합계</td><td class="num"><b>${totalCredits}</b></td><td colspan="2"></td></tr></tfoot></table>
+        </div>`;
+}
+
+// 교수: 담당 과목 + 학기를 골라 수강생 표 (학번·이름·학과·성적 유무). 신청·취소 버튼 없음
+async function renderEnrollProfessor(open) {
+    const content = $('enroll-content');
+    state.enrollCtx = null;
+    const pick = $('enroll-course');
+    fillSelect(pick, state.courses.filter(teaches).map((c) => ({ value: c.code, label: `${c.name} (${c.code})` })), '', pick.value);
+    if (!pick.value) { content.innerHTML = '<p class="hint">담당 과목이 없습니다</p>'; return; }
+    const code = pick.value;
+    const list = await api('GET', '/api/enrollments?courseCode=' + encodeURIComponent(code));
+
+    // 학기: 신청 학기 + 이 과목 수강신청에 나온 학기 (최신순)
+    // 과목을 바꿨을 때 처음 보이는 학기: 신청 학기에 수강생이 있으면 그 학기, 없으면 수강생이 있는 가장 최근 학기
+    const sel = $('enroll-sem-select');
+    const listSems = sortSemesters(list.map((e) => e.semester));
+    let keep = sel.dataset.course === code ? sel.value : '';
+    if (!keep) keep = open && listSems.includes(open) ? open : (listSems[0] || open);
+    fillSelect(sel, sortSemesters([open, ...listSems]).map((s) => ({ value: s, label: s })), '', keep);
+    sel.dataset.course = code;
+    const sem = sel.value;
+
+    const rows = list.filter((e) => e.semester === sem).sort((a, b) => a.studentId.localeCompare(b.studentId));
+    const major = (id) => state.students.find((s) => s.id === id)?.major ?? '';
+    content.innerHTML = `
+        <h3 class="sub-title">${esc(courseName(code))} · ${sem ? esc(sem) : '-'} 수강생 ${rows.length}명</h3>
+        <div class="table-wrap">
+            <table><thead><tr><th>학번</th><th>이름</th><th>학과</th><th>성적</th></tr></thead>
+            <tbody>${rows.length ? rows.map((e) => `
+                <tr><td>${esc(e.studentId)}</td><td><b>${esc(studentName(e.studentId))}</b></td>
+                <td>${esc(major(e.studentId))}</td><td>${e.hasGrade ? '있음' : '없음'}</td></tr>`).join('')
+                : emptyRow(4, '수강생이 없습니다')}</tbody></table>
+        </div>`;
+}
+
+// 선택을 바꾸면 수강신청 화면을 다시 그림
+['enroll-student', 'enroll-course', 'enroll-sem-select', 'enroll-sem-input'].forEach((id) =>
+    ($(id).onchange = () => renderEnroll().catch((e) => toast(e.message, true))));
+
+// 신청·취소 버튼 (state.enrollCtx 의 학생·학기 기준)
+$('enroll-content').onclick = async (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b || !state.enrollCtx) return;
+    const { studentId, semester } = state.enrollCtx;
+    const courseCode = b.dataset.code;
+    try {
+        if (b.dataset.act === 'apply') {
+            await api('POST', '/api/enrollments', { studentId, courseCode, semester });
+            toast('신청했습니다');
+        } else if (b.dataset.act === 'cancel') {
+            await api('DELETE', '/api/enrollments?studentId=' + encodeURIComponent(studentId) +
+                '&courseCode=' + encodeURIComponent(courseCode) + '&semester=' + encodeURIComponent(semester));
+            toast('취소했습니다');
+        } else return;
+        await refreshAll();
+    } catch (err) { toast(err.message, true); }
+};
+
+// 관리자: 신청 학기 저장 / 신청 마감 (빈 학기로 저장)
+async function saveEnrollSemester(semester, msg) {
+    try {
+        await api('PUT', '/api/enrollment/settings', { semester });
+        toast(msg);
+        await refreshAll();
+    } catch (err) { toast(err.message, true); }
+}
+$('enroll-set-save').onclick = () => {
+    const sem = $('enroll-set-sem').value.trim();
+    saveEnrollSemester(sem, sem ? `신청 학기를 ${sem} 로 정했습니다` : '수강신청을 마감했습니다');
+};
+$('enroll-set-close').onclick = () => saveEnrollSemester('', '수강신청을 마감했습니다');
+
 // ───────── 학생 ─────────
 
 // 학생 등록/수정 폼 항목. 수정할 때는 학번을 못 바꿈 (서버가 URL 의 학번으로 찾음)
@@ -300,8 +587,8 @@ const studentFields = (editing) => [
     { name: 'year', label: '학년', type: 'number' },
 ];
 
-// 학생 표 그리기. 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
-// 학생마다 GPA API 를 한 번씩 불러서 GPA 열을 채움
+// 학생 표 그리기 (관리자). 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
+// 학생마다 GPA API 를 한 번씩 불러서 GPA 열을 채우고, 학사경고 목록으로 학생별 경고 횟수를 셈
 async function renderStudents() {
     const q = $('student-search').value.trim();
     let list = state.students;
@@ -310,10 +597,15 @@ async function renderStudents() {
         catch (e) { toast(e.message, true); }
     }
     const body = $('student-body');
-    if (!list.length) { body.innerHTML = emptyRow(6, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
+    if (!list.length) { body.innerHTML = emptyRow(7, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
 
-    const gpas = await Promise.all(list.map((s) =>
-        api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null)));
+    const [gpas, warnings] = await Promise.all([
+        Promise.all(list.map((s) =>
+            api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null))),
+        api('GET', '/api/stats/warnings').catch(() => []),
+    ]);
+    const warnCount = {};
+    warnings.forEach((w) => (warnCount[w.studentId] = (warnCount[w.studentId] ?? 0) + 1));
     body.innerHTML = list.map((s, i) => `
         <tr>
             <td>${esc(s.id)}</td>
@@ -321,6 +613,7 @@ async function renderStudents() {
             <td>${esc(s.major)}</td>
             <td>${esc(s.year)}학년</td>
             <td class="num">${fmt(gpas[i])}</td>
+            <td>${warnCount[s.id] ? `<span class="badge F">${warnCount[s.id]}회</span>` : '-'}</td>
             <td class="actions">
                 <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
                 <button class="link" data-act="edit" data-id="${esc(s.id)}">수정</button>
@@ -358,26 +651,35 @@ $('student-body').onclick = (e) => {
         },
     });
     if (b.dataset.act === 'del') confirmDelete(
-        `${s.name}(${s.id}) 학생을 삭제할까요?\n이 학생의 성적도 함께 삭제됩니다.`,
+        `${s.name}(${s.id}) 학생을 삭제할까요?\n이 학생의 성적·수강신청·계정도 함께 삭제됩니다.`,
         () => api('DELETE', '/api/students/' + encodeURIComponent(s.id)));
 };
 
-// 학생 한 명의 성적표 창: 요약(학번·GPA·수강 건수) + 학기별 성적 + CSV 내려받기 (보기 전용)
-async function showStudentReport(s) {
-    const [grades, gpaAll] = await Promise.all([
-        api('GET', '/api/grades?studentId=' + encodeURIComponent(s.id)),
-        api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null),
+// 학생 한 명의 성적표 HTML: 요약(학번·GPA·수강 건수) + 학기별 성적 + 학사경고 + CSV 내려받기
+// 성적표 창(관리자)과 내 성적 페이지(학생)가 같이 씀. s = {id, name}
+async function studentReportHtml(s) {
+    const id = encodeURIComponent(s.id);
+    const [grades, gpaAll, warnings] = await Promise.all([
+        api('GET', '/api/grades?studentId=' + id),
+        api('GET', '/api/stats/gpa/' + id).then(gpaOf).catch(() => null),
+        api('GET', '/api/stats/warnings/' + id),
     ]);
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
     const rows = grades.length ? grades.map((g) => `
         <tr><td>${esc(g.semester)}</td><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
         <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('')
         : emptyRow(4, '성적이 없습니다');
+    const warnHtml = warnings.length ? `
+        <div class="table-wrap">
+            <table><thead><tr><th>학기</th><th>사유</th><th class="num">평점</th><th class="num">신청 학점</th></tr></thead>
+            <tbody>${warnings.map((w) => `
+                <tr><td>${esc(w.semester)}</td><td><span class="badge F">${esc(w.reason)}</span></td>
+                <td class="num">${w.gpa === null ? '-' : fmt(w.gpa)}</td><td class="num">${esc(w.credits)}</td></tr>`).join('')}
+            </tbody></table>
+        </div>` : '<p class="hint">학사경고 없음</p>';
     const stat = (label, v, small) => `<div><span>${label}</span><b${small ? ' class="small"' : ''}>${v}</b></div>`;
-    openDialog({
-        title: `${s.name} 성적표`,
-        okText: '',
-        bodyHtml: `
+    return `
+        <div class="report">
             <div class="stat-boxes cols-3">
                 ${stat('학번', esc(s.id), true)}
                 ${stat('전체 GPA', fmt(gpaAll))}
@@ -386,15 +688,28 @@ async function showStudentReport(s) {
             <div class="table-wrap">
                 <table><thead><tr><th>학기</th><th>과목</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
             </div>
-            <div class="detail-actions"><a class="btn-link" href="/api/export/student/${encodeURIComponent(s.id)}">CSV 내려받기</a></div>`,
-    });
+            <h3 class="sub-title">학사경고</h3>
+            ${warnHtml}
+            <div class="detail-actions"><a class="btn-link" href="/api/export/student/${id}">CSV 내려받기</a></div>
+        </div>`;
+}
+
+// 학생 성적표 창 (보기 전용)
+async function showStudentReport(s) {
+    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: await studentReportHtml(s) });
+}
+
+// ───────── 내 성적 (학생) ─────────
+
+async function renderMyReport() {
+    $('myreport-body').innerHTML = await studentReportHtml({ id: state.me.studentId, name: state.me.name });
 }
 
 // ───────── 성적 ─────────
 
-// 성적 폼·필터의 학생/과목 선택 항목
+// 성적 폼·필터의 학생/과목 선택 항목 (교수는 담당 과목만, 학생 목록은 서버가 걸러 준 그대로)
 const studentOptions = () => state.students.map((s) => ({ value: s.id, label: `${s.name} (${s.id})` }));
-const courseOptions = () => state.courses.map((c) => ({ value: c.code, label: `${c.name} (${c.code})` }));
+const courseOptions = () => gradeCourses().map((c) => ({ value: c.code, label: `${c.name} (${c.code})` }));
 
 // 성적 표 그리기. 필터 선택 상자를 최신 목록으로 채우고, 고른 조건을 쿼리로 붙여 성적을 받아옴
 // 수정/삭제 버튼에는 성적을 구분하는 키 [학번, 과목코드, 학기] 를 JSON 으로 담아 둠
@@ -402,7 +717,7 @@ async function renderGrades() {
     const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
     const semesters = await semesterList();
     fillSelect(fs, studentOptions(), '전체 학생', fs.value);
-    fillSelect(fc, courseOptions(), '전체 과목', fc.value);
+    fillSelect(fc, courseOptions(), isAdmin() ? '전체 과목' : '전체 담당 과목', fc.value);
     fillSelect(fm, semesters.map((s) => ({ value: s, label: s })), '전체 학기', fm.value);
 
     const params = new URLSearchParams();
@@ -440,17 +755,19 @@ async function renderGrades() {
 const gradeFields = (editing) => [
     { name: 'studentId', label: '학생', options: studentOptions(), readonly: editing },
     { name: 'courseCode', label: '과목', options: courseOptions(), readonly: editing },
-    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1' },
+    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1 (1·2 정규, 3 여름, 4 겨울)' },
     { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any' },
 ];
 
-// 성적 등록. 학생과 과목이 하나도 없으면 등록할 수 없으므로 안내만 띄움
+// 성적 등록 (수강신청한 학생·과목·학기만 가능). 고를 학생이나 과목이 없으면 안내만 띄움
 $('grade-add').onclick = () => {
-    if (!state.students.length || !state.courses.length) { toast('학생과 과목을 먼저 등록하세요', true); return; }
+    if (!state.students.length || !courseOptions().length) {
+        toast(isAdmin() ? '학생과 과목을 먼저 등록하세요' : '담당 과목 또는 수강생이 없습니다', true);
+        return;
+    }
     openForm({
         title: '성적 등록',
         fields: gradeFields(false),
-        values: { semester: '2026-1' },
         onSubmit: async (d) => {
             const g = await api('POST', '/api/grades', { ...d, score: Number(d.score) });
             toast(`성적을 등록했습니다: ${g.score}점 → ${g.letter}`);
@@ -505,7 +822,95 @@ async function renderRanking() {
 // 학기를 바꾸면 석차를 다시 그림
 $('rank-semester').onchange = () => renderRanking().catch((e) => toast(e.message, true));
 
+// ───────── 계정 (관리자) ─────────
+
+// 계정 폼 항목. 이름은 교수·관리자, 학생 선택은 학생 역할일 때만 보임 (bindRoleToggle)
+// 수정할 때는 아이디를 못 바꾸고, 비밀번호는 바꿀 때만 입력
+const accountFields = (editing) => [
+    { name: 'username', label: '아이디 (영문·숫자·_ 3~20자)', readonly: editing },
+    { name: 'role', label: '역할', options: Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label })) },
+    { name: 'name', label: '이름 (교수·관리자)', optional: true },
+    { name: 'studentId', label: '학생', options: studentOptions() },
+    {
+        name: 'password', label: '비밀번호 (8~64자)', type: 'password', autocomplete: 'new-password',
+        optional: editing, placeholder: editing ? '바꿀 때만 입력' : '',
+    },
+];
+// 폼 값 → API 본문. 학생 계정은 이름 없이 학번만, 교수·관리자는 학번 없이 이름만
+const accountBody = (d) => {
+    const student = d.role === 'student';
+    return { role: d.role, name: student ? '' : (d.name ?? '').trim(), studentId: student ? (d.studentId ?? '') : '', password: d.password ?? '' };
+};
+// 역할 선택에 따라 이름 / 학생 칸을 바꿔 보임
+function bindRoleToggle() {
+    const body = $('dlg-body');
+    const role = body.querySelector('select[name=role]');
+    const nameField = body.querySelector('[name=name]').closest('.field');
+    const studentField = body.querySelector('[name=studentId]').closest('.field');
+    const sync = () => {
+        nameField.hidden = role.value === 'student';
+        studentField.hidden = role.value !== 'student';
+    };
+    role.onchange = sync;
+    sync();
+}
+
+// 계정 표 그리기 (해시·salt 는 서버가 내보내지 않음)
+async function renderAccounts() {
+    state.accounts = await api('GET', '/api/accounts');
+    $('account-body').innerHTML = state.accounts.length ? state.accounts.map((a) => `
+        <tr>
+            <td><b>${esc(a.username)}</b>${a.username === state.me.username ? ' <span class="tag">나</span>' : ''}</td>
+            <td>${esc(ROLE_LABEL[a.role] ?? a.role)}</td>
+            <td>${esc(a.name) || '-'}</td>
+            <td>${esc(a.studentId) || '-'}</td>
+            <td class="actions">
+                <button class="link" data-act="edit" data-u="${esc(a.username)}">수정</button>
+                <button class="link danger" data-act="del" data-u="${esc(a.username)}">삭제</button>
+            </td>
+        </tr>`).join('') : emptyRow(5, '계정이 없습니다');
+}
+
+$('account-add').onclick = () => {
+    openForm({
+        title: '계정 만들기',
+        fields: accountFields(false),
+        values: { role: 'professor' },
+        onSubmit: async (d) => {
+            await api('POST', '/api/accounts', { username: d.username.trim(), ...accountBody(d) });
+            toast('계정을 만들었습니다');
+            await refreshAll();
+        },
+    });
+    bindRoleToggle();
+};
+
+// 표 안 버튼(수정/삭제). 내 계정을 고친 뒤에는 내 정보를 다시 받아 화면(탭·이름)을 새로 그림
+$('account-body').onclick = (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const a = state.accounts.find((x) => x.username === b.dataset.u);
+    if (!a) return;
+    if (b.dataset.act === 'edit') {
+        openForm({
+            title: '계정 수정',
+            fields: accountFields(true),
+            values: { ...a, name: a.role === 'student' ? '' : a.name },
+            onSubmit: async (d) => {
+                await api('PUT', '/api/accounts/' + encodeURIComponent(a.username), accountBody(d));
+                toast('수정했습니다');
+                if (a.username === state.me.username) startApp(await api('GET', '/api/me'));
+                else await refreshAll();
+            },
+        });
+        bindRoleToggle();
+    }
+    if (b.dataset.act === 'del') confirmDelete(
+        `${a.username} 계정을 삭제할까요?`,
+        () => api('DELETE', '/api/accounts/' + encodeURIComponent(a.username)));
+};
+
 // ───────── 시작 ─────────
 
-// 처음 열면 학생·과목을 받아 수강과목 탭을 그림
-refreshAll().catch((e) => toast(e.message, true));
+// 처음 열면 로그인 상태를 확인: 로그인돼 있으면 앱을, 아니면(401) 로그인 화면을 띄움
+api('GET', '/api/me').then(startApp).catch(() => { if (!state.me) showLogin(); });

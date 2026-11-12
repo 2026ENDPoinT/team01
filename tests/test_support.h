@@ -1,5 +1,5 @@
 // 담당: 조장 (Eno74)
-// 테스트 공용 도우미: 임시 폴더, 학생·과목·성적 만들기
+// 테스트 공용 도우미: 임시 폴더, 학생·과목·성적·수강신청 만들기
 #pragma once
 
 #include <chrono>
@@ -9,6 +9,7 @@
 #include <system_error>
 
 #include "course.h"
+#include "enrollment.h"
 #include "grade.h"
 #include "student.h"
 
@@ -67,4 +68,13 @@ inline Grade makeGrade(const std::string& studentId, const std::string& courseCo
     g.semester = semester;
     g.score = score;
     return g;
+}
+
+inline Enrollment makeEnrollment(const std::string& studentId, const std::string& courseCode,
+                                 const std::string& semester) {
+    Enrollment e;
+    e.studentId = studentId;
+    e.courseCode = courseCode;
+    e.semester = semester;
+    return e;
 }

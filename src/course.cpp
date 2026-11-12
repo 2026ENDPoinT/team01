@@ -30,27 +30,70 @@ bool readNumber(const std::string& text, size_t& pos, int& out) {
     return pos > start;
 }
 
-// 한 칸 검사: 요일 + "(n)" 또는 "(n~m)"
-bool isValidSlot(const std::string& slot) {
+// 강의시간 한 칸: 요일 + 교시 구간
+struct Slot {
+    std::string day;
+    int first = 0;
+    int last = 0;
+};
+
+// 한 칸 읽기: 요일 + "(n)" 또는 "(n~m)". 형식이 틀리거나 범위(1~30, 시작 <= 끝)를 벗어나면 false
+bool parseSlot(const std::string& text, Slot& slot) {
     static const std::vector<std::string> days = {"월", "화", "수", "목", "금", "토", "일"};
     for (const std::string& day : days) {
-        if (slot.compare(0, day.size(), day) != 0) continue;
+        if (text.compare(0, day.size(), day) != 0) continue;
 
         size_t pos = day.size();
-        if (pos >= slot.size() || slot[pos] != '(') return false;
+        if (pos >= text.size() || text[pos] != '(') return false;
         pos++;
         int first = 0;
         int last = 0;
-        if (!readNumber(slot, pos, first)) return false;
+        if (!readNumber(text, pos, first)) return false;
         last = first;
-        if (pos < slot.size() && slot[pos] == '~') {
+        if (pos < text.size() && text[pos] == '~') {
             pos++;
-            if (!readNumber(slot, pos, last)) return false;
+            if (!readNumber(text, pos, last)) return false;
         }
-        if (pos + 1 != slot.size() || slot[pos] != ')') return false;
-        return first >= 1 && last <= 30 && first <= last;
+        if (pos + 1 != text.size() || text[pos] != ')') return false;
+        if (first < 1 || last > 30 || first > last) return false;
+        slot.day = day;
+        slot.first = first;
+        slot.last = last;
+        return true;
     }
     return false;
+}
+
+// 한 칸 검사: 요일 + "(n)" 또는 "(n~m)"
+bool isValidSlot(const std::string& text) {
+    Slot slot;
+    return parseSlot(text, slot);
+}
+
+// 강의시간 문자열을 공백·쉼표로 나눈 칸들 (빈 칸은 뺌)
+std::vector<std::string> splitSlots(const std::string& schedule) {
+    std::vector<std::string> result;
+    std::string slot;
+    for (size_t i = 0; i <= schedule.size(); i++) {
+        const bool separator = i == schedule.size() || schedule[i] == ' ' || schedule[i] == ',';
+        if (!separator) {
+            slot += schedule[i];
+            continue;
+        }
+        if (!slot.empty()) result.push_back(slot);
+        slot.clear();
+    }
+    return result;
+}
+
+// 올바른 칸만 꺼냄 (잘못된 칸은 무시)
+std::vector<Slot> validSlots(const std::string& schedule) {
+    std::vector<Slot> result;
+    for (const std::string& text : splitSlots(schedule)) {
+        Slot slot;
+        if (parseSlot(text, slot)) result.push_back(slot);
+    }
+    return result;
 }
 
 }  // namespace
@@ -74,17 +117,20 @@ bool isValidCourseCode(const std::string& code) {
 }
 
 bool isValidSchedule(const std::string& schedule) {
-    std::string slot;
-    for (size_t i = 0; i <= schedule.size(); i++) {
-        const bool separator = i == schedule.size() || schedule[i] == ' ' || schedule[i] == ',';
-        if (!separator) {
-            slot += schedule[i];
-            continue;
-        }
-        if (!slot.empty() && !isValidSlot(slot)) return false;
-        slot.clear();
+    for (const std::string& text : splitSlots(schedule)) {
+        if (!isValidSlot(text)) return false;
     }
     return true;
+}
+
+bool schedulesOverlap(const std::string& a, const std::string& b) {
+    const std::vector<Slot> slotsB = validSlots(b);
+    for (const Slot& s1 : validSlots(a)) {
+        for (const Slot& s2 : slotsB) {
+            if (s1.day == s2.day && s1.first <= s2.last && s2.first <= s1.last) return true;
+        }
+    }
+    return false;
 }
 
 bool Course::isValid() const {

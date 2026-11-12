@@ -55,3 +55,36 @@ TEST_CASE(gradeIsValid_score_range) {
     g.score = -0.01;
     CHECK(!g.isValid());
 }
+
+// 학기 형식 "YYYY-N": 1·2 정규학기, 3 여름·4 겨울 계절학기
+TEST_CASE(semester_regular_and_validity) {
+    CHECK(isValidSemester("2026-1"));
+    CHECK(isValidSemester("2026-4"));
+    CHECK(!isValidSemester("2026-5"));
+    CHECK(!isValidSemester("2026-0"));
+    CHECK(!isValidSemester("26-1"));
+    CHECK(!isValidSemester(""));
+    CHECK(isRegularSemester("2026-1"));
+    CHECK(isRegularSemester("2026-2"));
+    CHECK(!isRegularSemester("2026-3"));
+    CHECK(!isRegularSemester("2026-4"));
+    CHECK(!isRegularSemester("2026-5"));
+}
+
+TEST_CASE(admissionYear_from_id_prefix) {
+    CHECK_EQ(admissionYear("23101001"), 2023);
+    CHECK_EQ(admissionYear("17101009"), 2017);
+    CHECK_EQ(admissionYear("2310100"), 0);   // 7자리
+    CHECK_EQ(admissionYear("2310100a"), 0);  // 숫자가 아님
+    CHECK_EQ(admissionYear(""), 0);
+}
+
+// 허용 범위: 입학년도-1 ~ (올해+1)-4
+TEST_CASE(isSemesterInRange_admission_to_next_year) {
+    CHECK(isSemesterInRange("23101001", "2023-1", 2026));
+    CHECK(!isSemesterInRange("23101001", "2022-2", 2026));
+    CHECK(isSemesterInRange("23101001", "2027-4", 2026));
+    CHECK(!isSemesterInRange("23101001", "2028-1", 2026));
+    CHECK(!isSemesterInRange("23101001", "2026-5", 2026));  // 형식 오류
+    CHECK(!isSemesterInRange("abc", "2026-1", 2026));       // 잘못된 학번
+}
