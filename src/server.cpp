@@ -1,7 +1,10 @@
 #include "server.h"
+#include "statistics.h"
+#include "retake.h"
 
 #include <algorithm>
 #include <iostream>
+#include <algorithm>
 
 #include "httplib.h"
 #include "json.hpp"
@@ -11,152 +14,30 @@
 
 using json = nlohmann::json;
 
-namespace {
+/*
+CSV 형식으로 만들어줌
 
-void sendJson(httplib::Response& res, const json& body, int status = 200) {
-    res.status = status;
-    res.set_content(body.dump(), "application/json");
-}
+홍길동       → "홍길동"
+홍길동, 학생 → "홍길동, 학생"
+A"B          → "A""B"
 
-void fail(httplib::Response& res, int status, const std::string& message) {
-    sendJson(res, {{"error", message}}, status);
-}
+*/
+std::string escapeCSV(const std::string& value){
+    std::string result = "\"";
 
-// 본문을 JSON 객체로 읽음. 실패하면 400 을 채우고 false
-bool parseBody(const httplib::Request& req, httplib::Response& res, json& out) {
-    out = json::parse(req.body, nullptr, false);
-    if (out.is_discarded() || !out.is_object()) {
-        fail(res, 400, "요청 본문이 올바른 JSON 객체가 아닙니다");
-        return false;
+    for(char c:value){
+        if(c=='"'){
+            result+="\"\"";
+        }
+        else{
+            result+=c;
+        }
     }
-    return true;
+
+    result += "\"";
+    return result;
 }
 
-// 필드가 문자열이어야 함. 없거나 타입이 틀리면 400 을 채우고 false
-bool readString(const json& body, const char* key, httplib::Response& res, std::string& out) {
-    auto it = body.find(key);
-    if (it == body.end() || !it->is_string()) {
-        fail(res, 400, std::string("'") + key + "' 값이 없거나 문자열이 아닙니다");
-        return false;
-    }
-    out = it->get<std::string>();
-    return true;
-}
-
-bool readInt(const json& body, const char* key, httplib::Response& res, int& out) {
-    auto it = body.find(key);
-    if (it == body.end() || !it->is_number_integer()) {
-        fail(res, 400, std::string("'") + key + "' 값이 없거나 정수가 아닙니다");
-        return false;
-    }
-    out = it->get<int>();
-    return true;
-}
-
-bool readNumber(const json& body, const char* key, httplib::Response& res, double& out) {
-    auto it = body.find(key);
-    if (it == body.end() || !it->is_number()) {
-        fail(res, 400, std::string("'") + key + "' 값이 없거나 숫자가 아닙니다");
-        return false;
-    }
-    out = it->get<double>();
-    return true;
-}
-
-bool readBool(const json& body, const char* key, httplib::Response& res, bool& out) {
-    auto it = body.find(key);
-    if (it == body.end() || !it->is_boolean()) {
-        fail(res, 400, std::string("'") + key + "' 값이 없거나 true/false 가 아닙니다");
-        return false;
-    }
-    out = it->get<bool>();
-    return true;
-}
-
-bool readStudent(const httplib::Request& req, httplib::Response& res, Student& s) {
-    json body;
-    return parseBody(req, res, body) && readString(body, "id", res, s.id) &&
-           readString(body, "name", res, s.name) && readString(body, "major", res, s.major) &&
-           readInt(body, "year", res, s.year);
-}
-
-bool readCourse(const httplib::Request& req, httplib::Response& res, Course& c) {
-    json body;
-    return parseBody(req, res, body) && readString(body, "code", res, c.code) &&
-           readString(body, "name", res, c.name) && readInt(body, "credit", res, c.credit) &&
-           readString(body, "professor", res, c.professor) && readString(body, "category", res, c.category) &&
-           readString(body, "area", res, c.area) && readString(body, "schedule", res, c.schedule) &&
-           readString(body, "language", res, c.language) && readInt(body, "capacity", res, c.capacity) &&
-           readBool(body, "remote", res, c.remote);
-}
-
-// 과목 검사 실패 시 보여줄 규칙
-const char* const kCourseRules =
-    "과목 정보가 올바르지 않습니다 (과목코드 숫자 6자리, 과목명 필수, 학점 1~4, 이수구분·강의언어는 목록에서 선택, "
-    "강의시간 예: 월(1~4) 수(5~6), 정원 0~999)";
-// 성적 검사 실패 시 보여줄 규칙
-const char* const kGradeRules =
-    "성적 정보가 올바르지 않습니다 (학번 숫자 8자리, 과목코드 숫자 6자리, 학기 예: 2026-1, 점수 0~100)";
-
-bool readGrade(const httplib::Request& req, httplib::Response& res, Grade& g) {
-    json body;
-    return parseBody(req, res, body) && readString(body, "studentId", res, g.studentId) &&
-           readString(body, "courseCode", res, g.courseCode) &&
-           readString(body, "semester", res, g.semester) && readNumber(body, "score", res, g.score);
-}
-
-json studentJson(const Student& s) {
-    return {{"id", s.id}, {"name", s.name}, {"major", s.major}, {"year", s.year}};
-}
-
-json courseJson(const Course& c) {
-    return {{"code", c.code},         {"name", c.name},         {"credit", c.credit},
-            {"professor", c.professor}, {"category", c.category}, {"area", c.area},
-            {"schedule", c.schedule}, {"language", c.language}, {"capacity", c.capacity},
-            {"remote", c.remote}};
-}
-
-// letter 는 재수강 규칙을 적용한 등급
-json gradeJson(const GradeManager& gm, const Grade& g) {
-    return {{"studentId", g.studentId},
-            {"courseCode", g.courseCode},
-            {"semester", g.semester},
-            {"score", g.score},
-            {"letter", Retake::officialLetter(g, gm.getGrades())}};
-}
-
-bool sameKey(const Grade& g, const std::string& studentId, const std::string& courseCode,
-             const std::string& semester) {
-    return g.studentId == studentId && g.courseCode == courseCode && g.semester == semester;
-}
-
-bool gradeExists(const GradeManager& gm, const std::string& studentId, const std::string& courseCode,
-                 const std::string& semester) {
-    for (const Grade& g : gm.getGrades()) {
-        if (sameKey(g, studentId, courseCode, semester)) return true;
-    }
-    return false;
-}
-
-// 변경이 성공한 뒤 CSV 에 저장. 저장 실패는 500
-void saveOrFail(GradeManager& gm, httplib::Response& res, const json& okBody, int okStatus = 200) {
-    if (!gm.save()) {
-        fail(res, 500, "변경은 적용됐지만 CSV 파일 저장에 실패했습니다");
-        return;
-    }
-    sendJson(res, okBody, okStatus);
-}
-
-void sendCsv(httplib::Response& res, const std::string& csv, const std::string& filename) {
-    if (csv.empty()) {
-        fail(res, 404, "내보낼 대상을 찾을 수 없습니다");
-        return;
-    }
-    res.set_header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-    res.set_content(csv, "text/csv; charset=utf-8");
-}
-
-}  // namespace
 
 Server::Server(GradeManager& gm, const std::string& webDir, int port)
     : gm(gm), webDir(webDir), port(port) {}
@@ -167,208 +48,426 @@ void Server::run() {
     // web/ 폴더를 / 로 서비스 (index.html, style.css, app.js)
     svr.set_mount_point("/", webDir);
 
-    // 처리 중 예외가 나도 서버가 죽지 않고 JSON 으로 응답
-    svr.set_exception_handler([](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
-        std::string msg = "서버 내부 오류";
-        try {
-            if (ep) std::rethrow_exception(ep);
-        } catch (const std::exception& e) {
-            msg += std::string(": ") + e.what();
-        } catch (...) {
-        }
-        fail(res, 500, msg);
-    });
 
-    // ───────── 학생 ─────────
+    // TODO(C): server.h 에 적힌 나머지 API 라우트 추가
 
+//GET 사용
+
+    // 학생 목록
     svr.Get("/api/students", [this](const httplib::Request&, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
         json arr = json::array();
-        for (const Student& s : gm.getStudents()) arr.push_back(studentJson(s));
-        sendJson(res, arr);
-    });
-
-    svr.Get("/api/students/search", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        json arr = json::array();
-        for (const Student& s : gm.searchStudents(req.get_param_value("q"))) arr.push_back(studentJson(s));
-        sendJson(res, arr);
-    });
-
-    svr.Post("/api/students", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        Student s;
-        if (!readStudent(req, res, s)) return;
-        if (!s.isValid()) return fail(res, 400, "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)");
-        if (gm.findStudent(s.id)) return fail(res, 409, "이미 등록된 학번입니다: " + s.id);
-        if (!gm.addStudent(s)) return fail(res, 400, "학생을 등록할 수 없습니다");
-        saveOrFail(gm, res, studentJson(s), 201);
-    });
-
-    svr.Put("/api/students/:id", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string id = req.path_params.at("id");
-        Student s;
-        if (!readStudent(req, res, s)) return;
-        if (!gm.findStudent(id)) return fail(res, 404, "없는 학생입니다: " + id);
-        if (!s.isValid()) return fail(res, 400, "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)");
-        if (s.id != id && gm.findStudent(s.id)) return fail(res, 409, "이미 등록된 학번입니다: " + s.id);
-        if (!gm.updateStudent(id, s)) return fail(res, 400, "학생을 수정할 수 없습니다");
-        saveOrFail(gm, res, studentJson(s));
-    });
-
-    svr.Delete("/api/students/:id", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string id = req.path_params.at("id");
-        if (!gm.removeStudent(id)) return fail(res, 404, "없는 학생입니다: " + id);
-        saveOrFail(gm, res, {{"deleted", id}});
-    });
-
-    // ───────── 과목 ─────────
-
-    svr.Get("/api/courses", [this](const httplib::Request&, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        json arr = json::array();
-        for (const Course& c : gm.getCourses()) arr.push_back(courseJson(c));
-        sendJson(res, arr);
-    });
-
-    svr.Post("/api/courses", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        Course c;
-        if (!readCourse(req, res, c)) return;
-        if (!c.isValid()) return fail(res, 400, kCourseRules);
-        if (gm.findCourse(c.code)) return fail(res, 409, "이미 등록된 과목 코드입니다: " + c.code);
-        if (!gm.addCourse(c)) return fail(res, 400, "과목을 등록할 수 없습니다");
-        saveOrFail(gm, res, courseJson(c), 201);
-    });
-
-    svr.Put("/api/courses/:code", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string code = req.path_params.at("code");
-        Course c;
-        if (!readCourse(req, res, c)) return;
-        if (!gm.findCourse(code)) return fail(res, 404, "없는 과목입니다: " + code);
-        if (!c.isValid()) return fail(res, 400, kCourseRules);
-        if (c.code != code && gm.findCourse(c.code)) return fail(res, 409, "이미 등록된 과목 코드입니다: " + c.code);
-        if (!gm.updateCourse(code, c)) return fail(res, 400, "과목을 수정할 수 없습니다");
-        saveOrFail(gm, res, courseJson(c));
-    });
-
-    svr.Delete("/api/courses/:code", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string code = req.path_params.at("code");
-        if (!gm.removeCourse(code)) return fail(res, 404, "없는 과목입니다: " + code);
-        saveOrFail(gm, res, {{"deleted", code}});
-    });
-
-    // ───────── 성적 ─────────
-
-    svr.Get("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const bool byStudent = req.has_param("studentId");
-        const bool byCourse = req.has_param("courseCode");
-        const bool bySemester = req.has_param("semester");
-        json arr = json::array();
-        for (const Grade& g : gm.getGrades()) {
-            if (byStudent && g.studentId != req.get_param_value("studentId")) continue;
-            if (byCourse && g.courseCode != req.get_param_value("courseCode")) continue;
-            if (bySemester && g.semester != req.get_param_value("semester")) continue;
-            arr.push_back(gradeJson(gm, g));
+        for (const Student& s : gm.getStudents()) {
+            arr.push_back({
+                {"id", s.id},
+                {"name", s.name},
+                {"major", s.major},
+                {"year", s.year}});
         }
-        sendJson(res, arr);
+        res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
-    svr.Post("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        Grade g;
-        if (!readGrade(req, res, g)) return;
-        if (!g.isValid()) return fail(res, 400, kGradeRules);
-        if (!gm.findStudent(g.studentId)) return fail(res, 404, "없는 학생입니다: " + g.studentId);
-        const Course* course = gm.findCourse(g.courseCode);
-        if (!course) return fail(res, 404, "없는 과목입니다: " + g.courseCode);
-        if (gradeExists(gm, g.studentId, g.courseCode, g.semester)) {
-            return fail(res, 409, "이미 등록된 성적입니다 (같은 학생·과목·학기)");
+
+    // 학번, 이름 검색
+    svr.Get("/api/students/search", [this](const httplib::Request& req, httplib::Response& res){
+
+        //검색어가 비어있는 경우 -> 에러
+        if(req.get_param_value("q").empty()){
+            res.status = 400;
+            res.set_content("검색 키워드(학번 or 이름)를 입력해주세요", "text/plain; charset=utf-8");
+            return;
         }
-        if (course->capacity > 0) {
-            const std::vector<Grade> sameCourse = gm.getGradesByCourse(g.courseCode);
-            const auto enrolled = std::count_if(sameCourse.begin(), sameCourse.end(),
-                                                [&](const Grade& other) { return other.semester == g.semester; });
-            if (enrolled >= course->capacity) {
-                return fail(res, 409, g.semester + " " + course->name + " 정원(" +
-                                          std::to_string(course->capacity) + "명)이 찼습니다");
+
+        auto students = gm.searchStudents(req.get_param_value("q"));
+
+        json arr = json::array();
+        for(const Student& s:students){
+            arr.push_back({
+                {"id", s.id},
+                {"name", s.name},
+                {"major", s.major},
+                {"year", s.year}
+            });
+        }
+
+        if(arr.empty()){
+            res.status = 404;
+            res.set_content("등록되지 않은 학생입니다", "text/plain; charset=utf-8");
+        }
+        else{
+            res.set_content(arr.dump(), "application/json; charset=utf-8");
+        }
+    });
+
+
+    // 과목 목록
+    svr.Get("/api/courses", [this](const httplib::Request&, httplib::Response& res){
+        auto courses = gm.getCourses();
+
+        json arr = json::array();
+        for(const Course& c:courses){
+            arr.push_back({
+                {"code", c.code},
+                {"name", c.name},
+                {"credit", c.credit},
+                {"professor", c.professor},
+                {"category", c.category},
+                {"area", c.area},
+                {"schedule", c.schedule},
+                {"language", c.language},
+                {"capacity", c.capacity},
+                {"remote", c.remote}
+            });
+        }
+
+        res.set_content(arr.dump(), "application/json; charset=utf-8");
+    });
+
+
+    // 성적 목록
+    svr.Get("/api/grades", [this](const httplib::Request& req, httplib::Response& res){
+        auto grades = gm.getGrades();
+        auto studentId = req.get_param_value("studentId");
+        auto courseCode = req.get_param_value("courseCode");
+        auto semester = req.get_param_value("semester");
+
+        json arr = json::array();
+        for(const Grade& g:grades){
+            if( (studentId.empty()||g.studentId == studentId) &&
+                (courseCode.empty() || g.courseCode == courseCode) &&
+                (semester.empty()||g.semester == semester)){
+                arr.push_back({
+                    {"studentId", g.studentId},
+                    {"courseCode", g.courseCode},
+                    {"semester", g.semester},
+                    {"score", g.score},
+                    {"letter", Retake::officialLetter(g, grades)}
+                });
             }
         }
-        if (!gm.addGrade(g)) return fail(res, 400, "성적을 등록할 수 없습니다");
-        saveOrFail(gm, res, gradeJson(gm, g), 201);
+
+        res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
-    svr.Put("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        Grade g;
-        if (!readGrade(req, res, g)) return;
-        if (!g.isValid()) return fail(res, 400, kGradeRules);
-        if (!gradeExists(gm, g.studentId, g.courseCode, g.semester)) return fail(res, 404, "없는 성적입니다");
-        if (!gm.updateGrade(g)) return fail(res, 400, "성적을 수정할 수 없습니다");
-        saveOrFail(gm, res, gradeJson(gm, g));
+
+    // 학생 GPA
+    svr.Get("/api/stats/gpa/:id", [this](const httplib::Request& req, httplib::Response& res)
+    {
+        //:id -> 경로 파라미터 사용 -> id 입력 안 할 경우 -> 그건 프로그램이 자동적으로 오류 표시 해줌
+        auto gpa = Statistics::calcGPA(gm, req.path_params.at("id"), req.get_param_value("semester"));
+        json result = {{"GPA", gpa}};
+        res.set_content(result.dump(), "application/json; charset=utf-8");
     });
 
-    svr.Delete("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        if (!req.has_param("studentId") || !req.has_param("courseCode") || !req.has_param("semester")) {
-            return fail(res, 400, "studentId, courseCode, semester 를 모두 지정해야 합니다");
-        }
-        const std::string studentId = req.get_param_value("studentId");
-        const std::string courseCode = req.get_param_value("courseCode");
-        const std::string semester = req.get_param_value("semester");
-        if (!gm.removeGrade(studentId, courseCode, semester)) return fail(res, 404, "없는 성적입니다");
-        saveOrFail(gm, res, {{"deleted", true}});
+
+    //과목 평균/최고/최저
+    svr.Get("/api/stats/course/:code", [this](const httplib::Request& req, httplib::Response& res)
+    {
+        auto courseStats = Statistics::courseStats(gm, req.path_params.at("code"));
+        json result = {{"average", courseStats.average},
+                        {"max", courseStats.max},
+                        {"min", courseStats.min}};
+        res.set_content(result.dump(), "application/json; charset=utf-8");
     });
 
-    // ───────── 통계 ─────────
 
-    svr.Get("/api/stats/gpa/:id", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string id = req.path_params.at("id");
-        if (!gm.findStudent(id)) return fail(res, 404, "없는 학생입니다: " + id);
-        const std::string semester = req.get_param_value("semester");
-        sendJson(res, {{"studentId", id}, {"semester", semester}, {"gpa", Statistics::calcGPA(gm, id, semester)}});
-    });
-
-    svr.Get("/api/stats/course/:code", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string code = req.path_params.at("code");
-        if (!gm.findCourse(code)) return fail(res, 404, "없는 과목입니다: " + code);
-        const Statistics::CourseStats st = Statistics::courseStats(gm, code);
-        sendJson(res, {{"courseCode", st.courseCode},
-                       {"count", st.count},
-                       {"average", st.average},
-                       {"max", st.max},
-                       {"min", st.min}});
-    });
-
-    svr.Get("/api/stats/ranking", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
+    //석차표
+    svr.Get("/api/stats/ranking", [this](const httplib::Request& req, httplib::Response& res)
+    {
+        auto semester = req.get_param_value("semester");
         json arr = json::array();
-        for (const Statistics::RankEntry& r : Statistics::ranking(gm, req.get_param_value("semester"))) {
-            arr.push_back({{"rank", r.rank}, {"studentId", r.studentId}, {"name", r.name}, {"gpa", r.gpa}});
+
+        for(auto rankEntry:Statistics::ranking(gm, semester)){
+            arr.push_back({
+                {"rank", rankEntry.rank},
+                {"studentId", rankEntry.studentId},
+                {"name", rankEntry.name},
+                {"gpa", rankEntry.gpa}
+            });
         }
-        sendJson(res, arr);
+        res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
-    // ───────── 성적표 CSV ─────────
 
-    svr.Get("/api/export/student/:id", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string id = req.path_params.at("id");
-        sendCsv(res, ReportExporter::studentReport(gm, id), "student_" + id + ".csv");
+    //학생 성적표 CSV 다운로드
+    svr.Get("/api/export/student/:id", [this](const httplib::Request& req, httplib::Response& res)
+    {
+        // 찾으려는 학생 id
+        std::string id = req.path_params.at("id");
+
+        auto students = gm.getStudents();
+
+        // 학생 찾기
+        auto it = std::find_if(students.begin(), students.end(),
+            [&id](const Student& s){
+                return s.id == id;
+            });
+
+        // 없을시 404 에러
+        if (it == students.end()){
+            res.status = 404;
+            res.set_content("해당 학번의 학생을 찾지 못했습니다", "text/plain; charset=utf-8");
+            return;
+        }
+
+        // CSV 생성
+        std::string csv;
+        csv += "\xEF\xBB\xBF";  //UTF-8 인코딩임을 엑셀에게 알려줌
+        csv += "학생ID,이름,과목코드,학기,점수,등급\r\n";
+
+        auto grades = gm.getGrades();
+
+        for (const auto& grade : grades) {
+            if (grade.studentId == id) {
+                std::string letter = Retake::officialLetter(grade, grades);
+
+                // 2018년 이전 입학생은 삭제된 성적 행을 성적표에서 제외
+                if(letter == "R" && !Retake::admittedSince2018(id)){
+                    continue;
+                }
+
+                csv += escapeCSV(id) + ",";
+                csv += escapeCSV(it->name) + ",";
+                csv += escapeCSV(grade.courseCode) + ",";
+                csv += escapeCSV(grade.semester) + ",";
+                csv += std::to_string(grade.score) + ",";
+                csv += escapeCSV(letter) + "\r\n";
+            }
+        }
+
+        // 다운로드 응답
+        res.set_header(
+            "Content-Disposition",
+            "attachment; filename=\"student_grades.csv\""
+        );
+
+        res.set_content(csv, "text/csv; charset=utf-8");
     });
 
-    svr.Get("/api/export/course/:code", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const std::string code = req.path_params.at("code");
-        sendCsv(res, ReportExporter::courseReport(gm, code), "course_" + code + ".csv");
+
+    //과목 성적표 CSV 다운로드
+    svr.Get("/api/export/course/:code", [this](const httplib::Request& req, httplib::Response& res)
+    {
+        //찾고자 하는 과목 코드
+        std::string code = req.path_params.at("code");
+
+        std::string csv;
+        csv += "\xEF\xBB\xBF";  //UTF-8 인코딩임을 엑셀에게 알려줌
+        csv += "학생ID,과목코드,학기,점수,등급\r\n";
+
+        auto grades = gm.getGrades();
+        auto activeGrades = Retake::activeGrades(grades);
+
+        for(const auto& grade:activeGrades){
+            if(grade.courseCode == code){
+                csv += escapeCSV(grade.studentId) + ",";
+                csv += escapeCSV(grade.courseCode) + ",";
+                csv += escapeCSV(grade.semester) + ",";
+                csv += std::to_string(grade.score) + ",";
+                csv += escapeCSV(Retake::officialLetter(grade, grades)) + "\r\n";
+            }
+        }
+
+        // 다운로드 응답
+        res.set_header(
+            "Content-Disposition",
+            "attachment; filename=\"course_grades.csv\""
+        );
+
+        res.set_content(csv, "text/csv; charset=utf-8");
     });
+
+
+//POST 사용
+
+    //학생 등록
+    svr.Post("/api/students", [this](const httplib::Request& req, httplib::Response& res){
+        json body = json::parse(req.body);
+
+        Student student;
+        student.id = body.at("id");
+        student.name = body.at("name");
+        student.major = body.at("major");
+        student.year = body.at("year");
+
+        if(!gm.addStudent(student)){
+            res.status = 409;
+            res.set_content(json{
+                {"error", "학생 등록 실패 (이미 등록된 학번입니다)"}
+            }.dump(), "application/json; charset=utf-8");
+        }
+        else{
+            res.set_content("학생 정보가 등록되었습니다", "text/plain; charset=utf-8");
+        }
+    });
+
+
+    //과목 등록
+    svr.Post("/api/courses", [this](const httplib::Request& req, httplib::Response& res){
+        json body = json::parse(req.body);
+
+        Course course;
+        course.code = body.at("code");
+        course.name = body.at("name");
+        course.credit = body.at("credit");
+        course.professor = body.at("professor");
+        course.category = body.value("category", "전공선택");
+        course.area = body.value("area", "");
+        course.schedule = body.value("schedule", "");
+        course.language = body.value("language", "한국어전용");
+        course.capacity = body.value("capacity", 0);
+        course.remote = body.value("remote", false);
+
+        if(!gm.addCourse(course)){
+            res.status = 409;
+            res.set_content(json{
+                {"error", "과목 등록 실패 (이미 등록된 과목입니다)"}
+            }.dump(), "application/json; charset=utf-8");
+        }
+        else{
+            res.set_content("과목 정보가 등록되었습니다", "text/plain; charset=utf-8");
+        }
+    });
+
+
+    //성적 등록
+    svr.Post("/api/grades", [this](const httplib::Request& req, httplib::Response& res){
+        json body = json::parse(req.body);
+
+        Grade grade;
+        grade.studentId = body.at("studentId");
+        grade.courseCode = body.at("courseCode");
+        grade.semester = body.at("semester");
+        grade.score = body.at("score");
+
+        if(!gm.addGrade(grade)){
+            res.status = 409;
+            res.set_content(json{
+                {"error", "성적 등록 실패 (존재하지 않는 학생/과목이거나 이미 추가된 학생/과목입니다)"}
+            }.dump(), "application/json; charset=utf-8");
+        }
+        else{
+            res.set_content("성적 정보가 등록되었습니다", "text/plain; charset=utf-8");
+        }
+    });
+
+// PUT 사용
+
+    // 학생 수정
+    svr.Put("/api/students/:id", [this](const httplib::Request& req, httplib::Response& res){
+        json body = json::parse(req.body);
+        Student student;
+        student.id = req.path_params.at("id");
+        student.name = body.at("name");
+        student.major = body.at("major");
+        student.year = body.at("year");
+
+        if(!gm.updateStudent(student.id, student)){
+            res.status = 404;
+            res.set_content(
+                json{{"error", "수정할 학생을 찾을 수 없습니다."}}.dump(),
+                "application/json; charset=utf-8"
+            );
+            return;
+        }
+
+        res.set_content("학생 정보가 수정되었습니다", "text/plain; charset=utf-8");
+    });
+
+    //과목 수정
+    svr.Put("/api/courses/:code", [this](const httplib::Request& req, httplib::Response& res){
+        json body = json::parse(req.body);
+        Course course;
+        course.code = req.path_params.at("code");
+        course.name = body.at("name");
+        course.credit = body.at("credit");
+        course.professor = body.at("professor");
+        course.category = body.value("category", "전공선택");
+        course.area = body.value("area", "");
+        course.schedule = body.value("schedule", "");
+        course.language = body.value("language", "한국어전용");
+        course.capacity = body.value("capacity", 0);
+        course.remote = body.value("remote", false);
+
+        if(!gm.updateCourse(course.code, course)){
+            res.status = 404;
+            res.set_content(
+                json{{"error", "수정할 과목을 찾을 수 없습니다."}}.dump(),
+                "application/json; charset=utf-8"
+            );
+            return;
+        }
+
+        res.set_content("과목 정보가 수정되었습니다", "text/plain; charset=utf-8");
+    });
+
+    //성적 수정
+    svr.Put("/api/grades", [this](const httplib::Request& req, httplib::Response& res){
+        json body = json::parse(req.body);
+        Grade grade;
+        grade.studentId = body.at("studentId");
+        grade.courseCode = body.at("courseCode");
+        grade.semester = body.at("semester");
+        grade.score = body.at("score");
+
+        if(!gm.updateGrade(grade)){
+            res.status = 404;
+            res.set_content(
+                json{{"error", "수정할 성적을 찾을 수 없습니다."}}.dump(),
+                "application/json; charset=utf-8"
+            );
+            return;
+        }
+
+        res.set_content("성적 정보가 수정되었습니다", "text/plain; charset=utf-8");
+    });
+
+//DELETE
+
+    //학생 삭제
+    svr.Delete("/api/students/:id",[this](const httplib::Request& req, httplib::Response& res){
+        if(!gm.removeStudent(req.path_params.at("id"))){
+            res.status = 404;
+            res.set_content(
+                json{{"error", "삭제할 학생을 찾을 수 없습니다."}}.dump(),
+                "application/json; charset=utf-8"
+            );
+            return;
+        }
+
+        res.set_content("학생 정보가 삭제되었습니다.", "text/plain; charset=utf-8");
+
+    });
+
+    //과목 삭제
+    svr.Delete("/api/courses/:code",[this](const httplib::Request& req, httplib::Response& res){
+        if(!gm.removeCourse(req.path_params.at("code"))){
+            res.status = 404;
+            res.set_content(
+                json{{"error", "삭제할 과목을 찾을 수 없습니다."}}.dump(),
+                "application/json; charset=utf-8"
+            );
+            return;
+        }
+
+        res.set_content("과목 정보가 삭제되었습니다.", "text/plain; charset=utf-8");
+    });
+
+    //성적 삭제
+    svr.Delete("/api/grades",[this](const httplib::Request& req, httplib::Response& res){
+        if(!gm.removeGrade(req.get_param_value("studentId"),
+                       req.get_param_value("courseCode"),
+                       req.get_param_value("semester") )){
+            res.status = 404;
+            res.set_content(
+                json{{"error", "삭제할 성적을 찾을 수 없습니다."}}.dump(),
+                "application/json; charset=utf-8"
+            );
+            return;
+        }
+
+        res.set_content("성적 정보가 삭제되었습니다.", "text/plain; charset=utf-8");
+    });
+
 
     std::cout << "http://localhost:" << port << " 에서 실행 중 (종료: Ctrl+C)" << std::endl;
     // 이 PC 에서만 접속 가능 (같은 네트워크의 다른 기기에서는 접속 불가)
