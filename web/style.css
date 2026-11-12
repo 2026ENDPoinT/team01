@@ -48,11 +48,34 @@ body {
     font-size: 15px;
 }
 .topbar h1 { font-size: 18px; margin: 0; }
-.topbar-actions { display: flex; align-items: center; gap: 8px; }
+#tabs { display: flex; align-self: stretch; flex: 1; gap: 4px; overflow-x: auto; }
+#tabs button {
+    height: 100%;
+    padding: 0 14px;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    background: none;
+    color: var(--muted);
+    white-space: nowrap;
+}
+#tabs button:hover { background: none; color: var(--text); }
+#tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
 main { max-width: 960px; margin: 28px auto 48px; padding: 0 16px; }
+.tab { display: none; }
+.tab.active { display: block; }
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
 .page-title { font-size: 26px; font-weight: 700; margin: 0 0 20px; }
+.page-head .page-title { margin: 0; }
 .sub-title { font-size: 16px; font-weight: 600; color: var(--accent); margin: 0 0 12px; }
+
+/* 도구 줄 */
+.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar label { color: var(--muted); }
+.spacer { flex: 1; }
+.hint { color: var(--muted); font-size: 13px; }
+#student-search { width: 260px; max-width: 100%; }
 
 input, select, textarea {
     font: inherit;
@@ -80,6 +103,10 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary:hover { filter: brightness(1.1); }
 button.danger { color: var(--danger); }
 button.danger:hover { background: rgba(239, 68, 68, .15); }
+button.link { border: 0; background: none; color: var(--accent); padding: 4px 8px; }
+button.link:hover { background: var(--accent-weak); }
+button.link.danger { color: var(--danger); }
+button.link.danger:hover { background: rgba(239, 68, 68, .15); }
 .btn-link {
     display: inline-block;
     padding: 7px 14px;
@@ -90,6 +117,46 @@ button.danger:hover { background: rgba(239, 68, 68, .15); }
     text-decoration: none;
 }
 .btn-link:hover { background: var(--hover); }
+
+/* 표 (학생·성적·석차). 좁은 화면에서는 .table-wrap 안에서 가로로 스크롤 */
+.table-wrap {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow-x: auto;
+}
+table { width: 100%; min-width: 520px; border-collapse: collapse; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+th { background: rgba(255, 255, 255, .03); color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover > td:not(.empty) { background: var(--hover); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.actions { text-align: right; white-space: nowrap; }
+td.empty { text-align: center; color: var(--muted); padding: 32px; }
+
+/* 등급 배지 */
+.badge {
+    display: inline-block;
+    min-width: 28px;
+    text-align: center;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 12px;
+    background: var(--line);
+    color: var(--muted);
+}
+.badge.A { background: rgba(34, 197, 94, .18); color: #4ade80; }
+.badge.B { background: rgba(59, 130, 246, .18); color: #60a5fa; }
+.badge.C { background: rgba(234, 179, 8, .18); color: #facc15; }
+.badge.D { background: rgba(249, 115, 22, .18); color: #fb923c; }
+.badge.F { background: rgba(239, 68, 68, .18); color: #f87171; }
+.badge.R { background: rgba(156, 163, 175, .18); color: #9ca3af; }
+
+/* 석차 막대 */
+.bar-cell { width: 30%; }
+.bar { height: 8px; width: 100%; min-width: 120px; background: var(--line); border-radius: 4px; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
 
 /* 과목 목록 (세로 목록) */
 #course-list {
@@ -169,7 +236,11 @@ dialog h2 { margin: 0 0 16px; font-size: 18px; }
 .stat-boxes > div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
 .stat-boxes span { color: var(--muted); font-size: 12px; }
 .stat-boxes b { display: block; font-size: 20px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat-boxes.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.stat-boxes b.small { font-size: 16px; line-height: 28px; }
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+dialog .table-wrap { margin-bottom: 16px; background: transparent; }
+dialog table { min-width: 420px; font-size: 13px; }
 
 /* 토스트 */
 #toast {
@@ -189,9 +260,11 @@ dialog h2 { margin: 0 0 16px; font-size: 18px; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 #toast.error { background: var(--danger); }
 
-/* 좁은 화면: 오른쪽 정보를 아래로 */
+/* 좁은 화면: 오른쪽 정보를 아래로, 상단 바는 로고 글자를 숨겨 탭 자리를 확보 */
 @media (max-width: 640px) {
-    .topbar { padding: 0 16px; }
+    .topbar { padding: 0 12px; gap: 8px; }
+    .topbar h1 { display: none; }
+    #tabs button { padding: 0 10px; }
     .course-row { flex-wrap: wrap; padding: 14px 16px; }
     .course-meta { min-width: 0; width: 100%; text-align: left; }
     .course-meta .stat-line { display: inline; margin-right: 12px; }
