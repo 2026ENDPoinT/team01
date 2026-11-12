@@ -89,16 +89,19 @@ const myCourses = () => {
 
 // 등록·수정 폼과 과목 상세·성적표 창이 같이 쓰는 <dialog> 하나
 // dlgSubmit: 저장 버튼을 눌렀을 때 실행할 함수 (없으면 저장 버튼을 숨김 = 보기 전용 창)
+// dlgValidate: 저장 전에 폼 값을 검사하는 함수 (잘못되면 이유 문자열을 돌려줌 → 서버에 보내지 않고 창 안에 표시)
 const dlg = $('dlg');
 let dlgSubmit = null;
+let dlgValidate = null;
 
 // 제목·내용을 채우고 창을 띄움
-function openDialog({ title, bodyHtml, onSubmit, okText = '저장' }) {
+function openDialog({ title, bodyHtml, onSubmit, validate = null, okText = '저장' }) {
     $('dlg-title').textContent = title;
     $('dlg-body').innerHTML = bodyHtml;
     $('dlg-ok').textContent = okText;
     $('dlg-ok').style.display = onSubmit ? '' : 'none';
     dlgSubmit = onSubmit;
+    dlgValidate = validate;
     dlg.showModal();
 }
 
@@ -108,22 +111,30 @@ $('dlg-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!dlgSubmit) return;
     const data = Object.fromEntries(new FormData($('dlg-form')));
+    const box = $('dlg-body').querySelector('.form-error');
+    const invalid = dlgValidate?.(data);
+    if (invalid) {
+        if (box) box.textContent = invalid;
+        toast(invalid, true);
+        return;
+    }
     try {
         await dlgSubmit(data);
         dlg.close();
     } catch (err) {
-        const box = $('dlg-body').querySelector('.form-error');
         if (box) box.textContent = err.message;
     }
 });
 
 // 입력 폼 창 만들기
-//   fields: [{name, label, type, readonly, optional, step, placeholder, autocomplete, options:[{value,label}]}]
+//   fields: [{name, label, type, readonly, optional, step, min, max, pattern, hint, placeholder, autocomplete, options:[{value,label}]}]
+//     min·max·pattern·hint 는 입력칸 검사용 (hint 는 pattern 이 안 맞을 때 브라우저가 보여 줄 설명)
 //     options 가 있으면 선택 상자, type 이 'textarea' 면 여러 줄 입력칸, 그 외는 입력칸
 //     readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
 //     optional 이면 빈칸으로 저장할 수 있음 (그 외 입력칸은 필수)
 //   values: 처음 채워둘 값, onSubmit: 저장할 때 실행할 함수 (폼 값 객체를 받음)
-function openForm({ title, fields, values = {}, onSubmit }) {
+//   validate: 저장 전에 폼 값을 검사하는 함수 (잘못되면 이유 문자열을 돌려줌, 서버 호출 전에 막음)
+function openForm({ title, fields, values = {}, onSubmit, validate }) {
     const html = fields.map((f) => {
         const v = esc(values[f.name] ?? '');
         let input;
@@ -140,12 +151,14 @@ function openForm({ title, fields, values = {}, onSubmit }) {
                 ${f.optional ? '' : 'required'}>\n${v}</textarea>`;
         } else {
             input = `<input name="${f.name}" type="${f.type || 'text'}" value="${v}" ${f.step ? `step="${f.step}"` : ''}
+                ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}
+                ${f.pattern ? `pattern="${esc(f.pattern)}"` : ''} ${f.hint ? `title="${esc(f.hint)}"` : ''}
                 ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
                 ${f.autocomplete ? `autocomplete="${f.autocomplete}"` : ''} ${f.optional ? '' : 'required'}>`;
         }
         return `<div class="field"><label>${f.label}</label>${input}</div>`;
     }).join('') + '<div class="form-error"></div>';
-    openDialog({ title, bodyHtml: html, onSubmit });
+    openDialog({ title, bodyHtml: html, onSubmit, validate });
     const first = $('dlg-body').querySelector('input:not([readonly]):not([type=hidden])');
     if (first) first.focus();
 }
@@ -335,10 +348,10 @@ const COURSE_CATEGORIES = ['전공필수', '전공선택', '교양필수', '교�
 const COURSE_LANGUAGES = ['한국어전용', '영어전용', '모듈강좌(M)'];
 const asOptions = (list) => list.map((v) => ({ value: v, label: v }));
 const courseFields = () => [
-    { name: 'code', label: '과목 코드 (숫자 6자리)', placeholder: '예: 109004' },
+    { name: 'code', label: '과목 코드 (숫자 6자리)', placeholder: '예: 109004', pattern: '\\d{6}', hint: '과목 코드는 숫자 6자리여야 합니다' },
     { name: 'name', label: '과목명' },
     { name: 'category', label: '이수구분', options: asOptions(COURSE_CATEGORIES) },
-    { name: 'credit', label: '학점 (1~4)', type: 'number' },
+    { name: 'credit', label: '학점 (1~4)', type: 'number', min: 1, max: 4, step: 1 },
     { name: 'professor', label: '담당 교수', optional: true },
     { name: 'schedule', label: '강의시간', optional: true, placeholder: '예: 월(1~4) 또는 화(2~3) 목(2~3)' },
     { name: 'language', label: '강의언어', options: asOptions(COURSE_LANGUAGES) },
@@ -346,6 +359,15 @@ const courseFields = () => [
     { name: 'capacity', label: '학기당 정원 (0 = 제한 없음)', type: 'number' },
     { name: 'remote', label: '원격강좌', options: [{ value: 'N', label: '아니오' }, { value: 'Y', label: '예' }] },
 ];
+// 과목 폼 값 검사 (서버 course.cpp 규칙과 같게): 잘못되면 이유, 괜찮으면 빈 문자열
+const validateCourse = (d) => {
+    if (!/^\d{6}$/.test(d.code ?? '')) return '과목 코드는 숫자 6자리여야 합니다';
+    if (!(d.name ?? '').trim()) return '과목명을 입력하세요 (공백만으로는 안 됩니다)';
+    const credit = Number(d.credit);
+    if (d.credit === '' || !Number.isInteger(credit) || credit < 1 || credit > 4) return '학점은 1~4 사이의 정수여야 합니다';
+    if (d.capacity !== '' && (!Number.isInteger(Number(d.capacity)) || Number(d.capacity) < 0)) return '정원은 0 이상의 정수여야 합니다 (0 = 제한 없음)';
+    return '';
+};
 // 폼 값 → API 본문 (숫자·참거짓 변환)
 const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.capacity), remote: d.remote === 'Y' });
 // API 값 → 폼 처음 값 (remote 는 선택 상자 값 Y/N 으로)
@@ -427,6 +449,7 @@ function editCourse(c) {
         title: '과목 수정',
         fields: courseFields(),
         values: courseFormValues(c),
+        validate: validateCourse,
         onSubmit: async (d) => {
             await api('PUT', '/api/courses/' + encodeURIComponent(c.code), courseBody(d));
             // 과목 페이지에서 과목코드를 바꿨으면 새 코드의 과목 페이지에 그대로 머묾
@@ -454,6 +477,7 @@ $('course-add').onclick = () => openForm({
     title: '과목 등록',
     fields: courseFields(),
     values: { category: '전공선택', credit: 3, language: '한국어전용', capacity: 0, remote: 'N' },
+    validate: validateCourse,
     onSubmit: async (d) => {
         await api('POST', '/api/courses', courseBody(d));
         toast('과목을 등록했습니다');
@@ -836,6 +860,7 @@ const studentFields = (editing) => [
 
 // 학생 표 그리기 (관리자). 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
 // 학생마다 GPA API 를 한 번씩 불러서 GPA 열을 채우고, 학사경고 목록으로 학생별 경고 횟수를 셈
+// 성적이 한 건도 없는 학생은 GPA 를 0.00 대신 '-' 로 표시 (전체 성적을 한 번만 받아 학번별로 셈)
 async function renderStudents() {
     const q = $('student-search').value.trim();
     let list = state.students;
@@ -846,11 +871,13 @@ async function renderStudents() {
     const body = $('student-body');
     if (!list.length) { body.innerHTML = emptyRow(7, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
 
-    const [gpas, warnings] = await Promise.all([
+    const [gpas, warnings, allGrades] = await Promise.all([
         Promise.all(list.map((s) =>
             api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null))),
         api('GET', '/api/stats/warnings').catch(() => []),
+        api('GET', '/api/grades').catch(() => null),
     ]);
+    const hasGrade = new Set((allGrades ?? []).map((g) => g.studentId));
     const warnCount = {};
     warnings.forEach((w) => (warnCount[w.studentId] = (warnCount[w.studentId] ?? 0) + 1));
     body.innerHTML = list.map((s, i) => `
@@ -859,7 +886,7 @@ async function renderStudents() {
             <td><b>${esc(s.name)}</b></td>
             <td>${esc(s.major)}</td>
             <td>${esc(s.year)}학년</td>
-            <td class="num">${fmt(gpas[i])}</td>
+            <td class="num">${allGrades && !hasGrade.has(s.id) ? '-' : fmt(gpas[i])}</td>
             <td>${warnCount[s.id] ? `<span class="badge F">${warnCount[s.id]}회</span>` : '-'}</td>
             <td class="actions">
                 <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
@@ -902,8 +929,10 @@ $('student-body').onclick = (e) => {
         () => api('DELETE', '/api/students/' + encodeURIComponent(s.id)));
 };
 
-// 학생 한 명의 성적표 HTML: 요약(학번·GPA·수강 건수) + 학기별 성적 + 학사경고 + CSV 내려받기
+// 학생 한 명의 성적표 HTML: 요약(학번·전체 GPA·누적 등록 학점·수강 건수) + 학기별 성적(학기 GPA·등록 학점) + 학사경고 + CSV 내려받기
 // 성적표 창(관리자)과 내 성적 페이지(학생)가 같이 씀. s = {id, name}
+// 학기 GPA 는 서버(/api/stats/gpa/:id?semester=)가 계산한 값을 그대로 쓰고, 등록 학점은 과목 학점(credit)의 합
+// 재수강으로 지워진 성적(등급 R)은 GPA·학점에서 빠지므로 학점 합에서도 뺌
 async function studentReportHtml(s) {
     const id = encodeURIComponent(s.id);
     const [grades, gpaAll, warnings] = await Promise.all([
@@ -912,10 +941,27 @@ async function studentReportHtml(s) {
         api('GET', '/api/stats/warnings/' + id),
     ]);
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
-    const rows = grades.length ? grades.map((g) => `
-        <tr><td>${esc(g.semester)}</td><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
-        <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('')
-        : emptyRow(4, '성적이 없습니다');
+    const creditOf = (code) => Number(state.courses.find((c) => c.code === code)?.credit) || 0;
+    const semesters = sortSemesters(grades.map((g) => g.semester));
+    const semGpas = await Promise.all(semesters.map((sem) =>
+        api('GET', `/api/stats/gpa/${id}?semester=${encodeURIComponent(sem)}`).then(gpaOf).catch(() => null)));
+    let totalCredits = 0;
+    const semHtml = semesters.map((sem, i) => {
+        const inSem = grades.filter((g) => g.semester === sem);
+        const counted = inSem.filter((g) => g.letter !== 'R');
+        const credits = counted.reduce((t, g) => t + creditOf(g.courseCode), 0);
+        totalCredits += credits;
+        const gpaText = counted.length ? fmt(semGpas[i]) : '-';
+        const rows = inSem.map((g) => `
+            <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
+            <td class="num">${esc(creditOf(g.courseCode))}</td>
+            <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
+        return `
+            <h3 class="sub-title">${esc(sem)} <span class="hint">학기 GPA ${gpaText} · 등록 학점 ${credits}</span></h3>
+            <div class="table-wrap">
+                <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
+            </div>`;
+    }).join('');
     const warnHtml = warnings.length ? `
         <div class="table-wrap">
             <table><thead><tr><th>학기</th><th>사유</th><th class="num">평점</th><th class="num">신청 학점</th></tr></thead>
@@ -927,14 +973,13 @@ async function studentReportHtml(s) {
     const stat = (label, v, small) => `<div><span>${label}</span><b${small ? ' class="small"' : ''}>${v}</b></div>`;
     return `
         <div class="report">
-            <div class="stat-boxes cols-3">
+            <div class="stat-boxes">
                 ${stat('학번', esc(s.id), true)}
-                ${stat('전체 GPA', fmt(gpaAll))}
+                ${grades.length ? stat('전체 GPA', fmt(gpaAll)) : stat('전체 GPA', '성적 없음', true)}
+                ${stat('누적 등록 학점', totalCredits)}
                 ${stat('수강 건수', grades.length)}
             </div>
-            <div class="table-wrap">
-                <table><thead><tr><th>학기</th><th>과목</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
-            </div>
+            ${grades.length ? semHtml : '<p class="hint">등록된 성적이 없습니다</p>'}
             <h3 class="sub-title">학사경고</h3>
             ${warnHtml}
             <div class="detail-actions"><a class="btn-link" href="/api/export/student/${id}">CSV 내려받기</a></div>
@@ -1002,9 +1047,16 @@ async function renderGrades() {
 const gradeFields = (editing) => [
     { name: 'studentId', label: '학생', options: studentOptions(), readonly: editing },
     { name: 'courseCode', label: '과목', options: courseOptions(), readonly: editing },
-    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1 (1·2 정규, 3 여름, 4 겨울)' },
-    { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any' },
+    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1 (1·2 정규, 3 여름, 4 겨울)', pattern: '\\d{4}-[1-4]', hint: '학기는 YYYY-N 형식이어야 합니다 (N: 1~4)' },
+    { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any', min: 0, max: 100 },
 ];
+// 성적 폼 값 검사: 잘못되면 이유, 괜찮으면 빈 문자열
+const validateGrade = (d) => {
+    if (!SEMESTER_RE.test((d.semester ?? '').trim())) return '학기는 YYYY-N 형식이어야 합니다 (N: 1~4, 예: 2026-1)';
+    const score = Number(d.score);
+    if (d.score === '' || !Number.isFinite(score) || score < 0 || score > 100) return '점수는 0~100 사이의 숫자여야 합니다';
+    return '';
+};
 
 // 성적 등록 (수강신청한 학생·과목·학기만 가능). 고를 학생이나 과목이 없으면 안내만 띄움
 $('grade-add').onclick = () => {
@@ -1015,6 +1067,7 @@ $('grade-add').onclick = () => {
     openForm({
         title: '성적 등록',
         fields: gradeFields(false),
+        validate: validateGrade,
         onSubmit: async (d) => {
             await api('POST', '/api/grades', { ...d, score: Number(d.score) });
             toast(`성적을 등록했습니다: ${Number(d.score)}점`);
@@ -1037,6 +1090,7 @@ $('grade-body').onclick = async (e) => {
             title: '성적 수정',
             fields: gradeFields(true),
             values: g,
+            validate: validateGrade,
             onSubmit: async (d) => {
                 await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
                 toast(`수정했습니다: ${Number(d.score)}점`);
@@ -1055,14 +1109,20 @@ $('grade-body').onclick = async (e) => {
 async function renderRanking() {
     const sel = $('rank-semester');
     fillSelect(sel, (await semesterList()).map((s) => ({ value: s, label: s })), '전체 학기', sel.value);
-    const rows = await api('GET', '/api/stats/ranking' + (sel.value ? '?semester=' + encodeURIComponent(sel.value) : ''));
+    const semQuery = sel.value ? '?semester=' + encodeURIComponent(sel.value) : '';
+    // 고른 학기(없으면 전체)에 성적이 있는 학생: 성적이 없는 학생은 GPA 0.00 대신 '-' 로 표시
+    const [rows, graded] = await Promise.all([
+        api('GET', '/api/stats/ranking' + semQuery),
+        api('GET', '/api/grades' + semQuery).catch(() => null),
+    ]);
+    const hasGrade = new Set((graded ?? []).map((g) => g.studentId));
     const medal = ['🥇', '🥈', '🥉'];
     $('rank-body').innerHTML = rows.length ? rows.map((r) => `
         <tr>
             <td>${medal[r.rank - 1] ?? ''} <b>${esc(r.rank)}</b></td>
             <td>${esc(r.studentId)}</td>
             <td><b>${esc(r.name)}</b></td>
-            <td class="num">${fmt(r.gpa)}</td>
+            <td class="num">${graded && !hasGrade.has(r.studentId) ? '-' : fmt(r.gpa)}</td>
             <td class="bar-cell"><div class="bar"><i style="width:${Math.min(100, (r.gpa / 4.5) * 100)}%"></i></div></td>
         </tr>`).join('') : emptyRow(5, '표시할 학생이 없습니다');
 }
