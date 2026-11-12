@@ -371,7 +371,8 @@ void Server::run() {
     });
 
     std::cout << "http://localhost:" << port << " 에서 실행 중 (종료: Ctrl+C)" << std::endl;
-    if (!svr.listen("0.0.0.0", port)) {
+    // 이 PC 에서만 접속 가능 (같은 네트워크의 다른 기기에서는 접속 불가)
+    if (!svr.listen("127.0.0.1", port)) {
         std::cerr << "포트 " << port << " 를 열 수 없습니다 (이미 사용 중인지 확인)" << std::endl;
     }
 }
