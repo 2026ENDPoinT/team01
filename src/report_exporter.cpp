@@ -27,6 +27,16 @@ std::string fixed2(double value) {
     return out.str();
 }
 
+// CSV 수식 주입 방지: 셀이 = + - @ 탭 CR 로 시작하면 앞에 '를 붙여 엑셀이 수식으로 실행하지 못하게 함
+//   (내보내기 전용 — data/*.csv 에는 적용하지 않음)
+std::string safeCell(const std::string& v) {
+    if (!v.empty() && (v[0] == '=' || v[0] == '+' || v[0] == '-' || v[0] == '@' || v[0] == '\t' ||
+                       v[0] == '\r')) {
+        return "'" + v;
+    }
+    return v;
+}
+
 }  // namespace
 
 std::string ReportExporter::studentReport(const GradeManager& gm, const std::string& studentId) {
@@ -54,8 +64,9 @@ std::string ReportExporter::studentReport(const GradeManager& gm, const std::str
             continue;
         }
         const Course* course = gm.findCourse(g.courseCode);
-        csv += joinCsvLine({g.courseCode, course ? course->name : "", course ? course->category : "",
-                            course ? std::to_string(course->credit) : "", g.semester,
+        csv += joinCsvLine({safeCell(g.courseCode), safeCell(course ? course->name : ""),
+                            safeCell(course ? course->category : ""),
+                            course ? std::to_string(course->credit) : "", safeCell(g.semester),
                             replaced ? "" : scoreToString(g.score),
                             Retake::officialLetter(g, grades)});
     }
@@ -85,7 +96,8 @@ std::string ReportExporter::courseReport(const GradeManager& gm, const std::stri
     csv += joinCsvLine({"학번", "이름", "학기", "점수", "등급"});
     for (const Grade& g : grades) {
         const Student* student = gm.findStudent(g.studentId);
-        csv += joinCsvLine({g.studentId, student ? student->name : "", g.semester,
+        csv += joinCsvLine({safeCell(g.studentId), safeCell(student ? student->name : ""),
+                            safeCell(g.semester),
                             scoreToString(g.score), Retake::officialLetter(g, all)});
     }
 
