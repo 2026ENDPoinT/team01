@@ -3,8 +3,9 @@
 
 // id 로 요소 찾기 (document.getElementById 줄임)
 const $ = (id) => document.getElementById(id);
-// 과목 목록과 과목별 통계 (loadCourses 로 채움, 같은 순서로 대응)
-const state = { courses: [], stats: [] };
+// 여러 탭이 같이 쓰는 학생·과목 목록 (loadBase 로 채움, 이름 표시·선택 상자에 사용)
+// stats: 과목코드 → 과목 통계 (수강과목 탭을 그릴 때 채움, 통계를 못 받은 과목은 null)
+const state = { students: [], courses: [], stats: {} };
 
 // ───────── 공용 도우미 ─────────
 
@@ -40,10 +41,19 @@ function toast(msg, isError = false) {
 
 // 숫자를 소수 d 자리로, 숫자가 아니면 '-'
 const fmt = (n, d = 2) => (typeof n === 'number' ? n.toFixed(d) : '-');
+// GPA 응답에서 숫자만 꺼냄 ({gpa: 3.5} 또는 3.5 둘 다 처리)
+const gpaOf = (r) => (typeof r === 'number' ? r : r?.gpa);
+// 등급 배지. 첫 글자(A~F, R)로 색을 정함 (style.css 의 .badge.A 등)
+const letterBadge = (l) => l ? `<span class="badge ${esc(l[0])}">${esc(l)}</span>` : '-';
+// 학번/과목코드 → 이름 (state 에서 찾음, 없으면 빈 문자열)
+const studentName = (id) => state.students.find((s) => s.id === id)?.name ?? '';
+const courseName = (code) => state.courses.find((c) => c.code === code)?.name ?? '';
+// 표가 비었을 때 넣는 안내 줄
+const emptyRow = (cols, msg) => `<tr><td class="empty" colspan="${cols}">${msg}</td></tr>`;
 
 // ───────── 대화상자 ─────────
 
-// 등록·수정 폼과 과목 상세 창이 같이 쓰는 <dialog> 하나
+// 등록·수정 폼과 과목 상세·성적표 창이 같이 쓰는 <dialog> 하나
 // dlgSubmit: 저장 버튼을 눌렀을 때 실행할 함수 (없으면 저장 버튼을 숨김 = 보기 전용 창)
 const dlg = $('dlg');
 let dlgSubmit = null;
@@ -110,19 +120,54 @@ async function confirmDelete(msg, fn) {
     } catch (e) { toast(e.message, true); }
 }
 
-// ───────── 과목 ─────────
+// ───────── 탭 ─────────
 
-// 과목 목록을 서버에서 받아 state 에 저장 (과목마다 통계 API 도 같이 호출, 못 받으면 null)
-async function loadCourses() {
-    state.courses = await api('GET', '/api/courses');
-    state.stats = await Promise.all(state.courses.map((c) =>
-        api('GET', '/api/stats/course/' + encodeURIComponent(c.code)).catch(() => null)));
+// 탭 이름 → 그 탭을 그리는 함수
+const renderers = {
+    courses: renderCourses,
+    students: renderStudents,
+    grades: renderGrades,
+    ranking: renderRanking,
+};
+// 지금 열린 탭 이름
+const currentTab = () => document.querySelector('#tabs button.active').dataset.tab;
+
+// 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
+function showTab(name) {
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
+    refreshAll().catch((e) => toast(e.message, true));
 }
-// 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 다시 그림
+$('tabs').onclick = (e) => {
+    const b = e.target.closest('button[data-tab]');
+    if (b) showTab(b.dataset.tab);
+};
+
+// 학생·과목 목록을 서버에서 받아 state 에 저장
+async function loadBase() {
+    [state.students, state.courses] = await Promise.all([api('GET', '/api/students'), api('GET', '/api/courses')]);
+}
+// 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 지금 탭을 다시 그림
 async function refreshAll() {
-    await loadCourses();
-    renderCourses();
+    await loadBase();
+    await renderers[currentTab()]();
 }
+
+// 성적에 나온 학기 목록 (최신 학기가 위로). 학기 선택 상자에 사용
+async function semesterList() {
+    const grades = await api('GET', '/api/grades');
+    return [...new Set(grades.map((g) => g.semester))].sort().reverse();
+}
+
+// 선택 상자 채우기. allLabel 이 있으면 맨 위에 "전체" 항목(값 '')을 넣고,
+// keep(이전 선택값)이 새 목록에도 있으면 그대로 선택해 둠
+function fillSelect(el, items, allLabel, keep) {
+    el.innerHTML = (allLabel ? `<option value="">${allLabel}</option>` : '') +
+        items.map((i) => `<option value="${esc(i.value)}">${esc(i.label)}</option>`).join('');
+    if (keep && [...el.options].some((o) => o.value === keep)) el.value = keep;
+}
+
+// ───────── 과목 ─────────
 
 // 과목 등록/수정 폼 항목. 과목코드는 숫자 6자리 (예: 109004)
 //   수정 때 과목코드를 바꾸면 서버가 그 과목의 성적에 적힌 코드도 같이 바꿈 (GradeManager::updateCourse)
@@ -147,12 +192,16 @@ const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.
 // API 값 → 폼 처음 값 (remote 는 선택 상자 값 Y/N 으로)
 const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 
-// 과목 목록 그리기: 한 줄에 과목 정보(왼쪽)와 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
-function renderCourses() {
+// 과목 목록 그리기: 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
+// 한 줄에 과목 정보(왼쪽)와 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
+async function renderCourses() {
     const list = $('course-list');
+    const stats = await Promise.all(state.courses.map((c) =>
+        api('GET', '/api/stats/course/' + encodeURIComponent(c.code)).catch(() => null)));
+    state.stats = Object.fromEntries(state.courses.map((c, i) => [c.code, stats[i]]));
     if (!state.courses.length) { list.innerHTML = '<li class="empty">등록된 과목이 없습니다</li>'; return; }
-    list.innerHTML = state.courses.map((c, i) => {
-        const st = state.stats[i];
+    list.innerHTML = state.courses.map((c) => {
+        const st = state.stats[c.code];
         const has = st && st.count > 0;
         return `<li class="course-row" data-code="${esc(c.code)}">
             <div class="course-info">
@@ -226,8 +275,8 @@ function deleteCourse(c) {
 $('course-list').onclick = (e) => {
     const row = e.target.closest('.course-row');
     if (!row) return;
-    const i = state.courses.findIndex((x) => x.code === row.dataset.code);
-    if (i >= 0) showCourseDetail(state.courses[i], state.stats[i]);
+    const c = state.courses.find((x) => x.code === row.dataset.code);
+    if (c) showCourseDetail(c, state.stats[c.code]);
 };
 
 $('course-add').onclick = () => openForm({
@@ -241,7 +290,222 @@ $('course-add').onclick = () => openForm({
     },
 });
 
+// ───────── 학생 ─────────
+
+// 학생 등록/수정 폼 항목. 수정할 때는 학번을 못 바꿈 (서버가 URL 의 학번으로 찾음)
+const studentFields = (editing) => [
+    { name: 'id', label: '학번', readonly: editing, placeholder: '예: 24101001' },
+    { name: 'name', label: '이름' },
+    { name: 'major', label: '학과' },
+    { name: 'year', label: '학년', type: 'number' },
+];
+
+// 학생 표 그리기. 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
+// 학생마다 GPA API 를 한 번씩 불러서 GPA 열을 채움
+async function renderStudents() {
+    const q = $('student-search').value.trim();
+    let list = state.students;
+    if (q) {
+        try { list = await api('GET', '/api/students/search?q=' + encodeURIComponent(q)); }
+        catch (e) { toast(e.message, true); }
+    }
+    const body = $('student-body');
+    if (!list.length) { body.innerHTML = emptyRow(6, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
+
+    const gpas = await Promise.all(list.map((s) =>
+        api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null)));
+    body.innerHTML = list.map((s, i) => `
+        <tr>
+            <td>${esc(s.id)}</td>
+            <td><b>${esc(s.name)}</b></td>
+            <td>${esc(s.major)}</td>
+            <td>${esc(s.year)}학년</td>
+            <td class="num">${fmt(gpas[i])}</td>
+            <td class="actions">
+                <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
+                <button class="link" data-act="edit" data-id="${esc(s.id)}">수정</button>
+                <button class="link danger" data-act="del" data-id="${esc(s.id)}">삭제</button>
+            </td>
+        </tr>`).join('');
+}
+
+// 검색칸에 입력할 때마다 표를 다시 그림
+$('student-search').addEventListener('input', () => renderStudents().catch((e) => toast(e.message, true)));
+$('student-add').onclick = () => openForm({
+    title: '학생 등록',
+    fields: studentFields(false),
+    onSubmit: async (d) => {
+        await api('POST', '/api/students', { ...d, year: Number(d.year) });
+        toast('학생을 등록했습니다');
+        await refreshAll();
+    },
+});
+// 표 안 버튼(성적표/수정/삭제) 클릭을 한 곳에서 처리. data-act 로 어떤 버튼인지 구분
+$('student-body').onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const s = state.students.find((x) => x.id === b.dataset.id);
+    if (!s) return;
+    if (b.dataset.act === 'report') showStudentReport(s).catch((err) => toast(err.message, true));
+    if (b.dataset.act === 'edit') openForm({
+        title: '학생 수정',
+        fields: studentFields(true),
+        values: s,
+        onSubmit: async (d) => {
+            await api('PUT', '/api/students/' + encodeURIComponent(s.id), { ...d, year: Number(d.year) });
+            toast('수정했습니다');
+            await refreshAll();
+        },
+    });
+    if (b.dataset.act === 'del') confirmDelete(
+        `${s.name}(${s.id}) 학생을 삭제할까요?\n이 학생의 성적도 함께 삭제됩니다.`,
+        () => api('DELETE', '/api/students/' + encodeURIComponent(s.id)));
+};
+
+// 학생 한 명의 성적표 창: 요약(학번·GPA·수강 건수) + 학기별 성적 + CSV 내려받기 (보기 전용)
+async function showStudentReport(s) {
+    const [grades, gpaAll] = await Promise.all([
+        api('GET', '/api/grades?studentId=' + encodeURIComponent(s.id)),
+        api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null),
+    ]);
+    grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
+    const rows = grades.length ? grades.map((g) => `
+        <tr><td>${esc(g.semester)}</td><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
+        <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('')
+        : emptyRow(4, '성적이 없습니다');
+    const stat = (label, v, small) => `<div><span>${label}</span><b${small ? ' class="small"' : ''}>${v}</b></div>`;
+    openDialog({
+        title: `${s.name} 성적표`,
+        okText: '',
+        bodyHtml: `
+            <div class="stat-boxes cols-3">
+                ${stat('학번', esc(s.id), true)}
+                ${stat('전체 GPA', fmt(gpaAll))}
+                ${stat('수강 건수', grades.length)}
+            </div>
+            <div class="table-wrap">
+                <table><thead><tr><th>학기</th><th>과목</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
+            </div>
+            <div class="detail-actions"><a class="btn-link" href="/api/export/student/${encodeURIComponent(s.id)}">CSV 내려받기</a></div>`,
+    });
+}
+
+// ───────── 성적 ─────────
+
+// 성적 폼·필터의 학생/과목 선택 항목
+const studentOptions = () => state.students.map((s) => ({ value: s.id, label: `${s.name} (${s.id})` }));
+const courseOptions = () => state.courses.map((c) => ({ value: c.code, label: `${c.name} (${c.code})` }));
+
+// 성적 표 그리기. 필터 선택 상자를 최신 목록으로 채우고, 고른 조건을 쿼리로 붙여 성적을 받아옴
+// 수정/삭제 버튼에는 성적을 구분하는 키 [학번, 과목코드, 학기] 를 JSON 으로 담아 둠
+async function renderGrades() {
+    const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
+    const semesters = await semesterList();
+    fillSelect(fs, studentOptions(), '전체 학생', fs.value);
+    fillSelect(fc, courseOptions(), '전체 과목', fc.value);
+    fillSelect(fm, semesters.map((s) => ({ value: s, label: s })), '전체 학기', fm.value);
+
+    const params = new URLSearchParams();
+    if (fs.value) params.set('studentId', fs.value);
+    if (fc.value) params.set('courseCode', fc.value);
+    if (fm.value) params.set('semester', fm.value);
+    const qs = params.toString();
+    const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
+    grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
+
+    $('grade-body').innerHTML = grades.length ? grades.map((g) => {
+        const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
+        return `
+        <tr>
+            <td>${esc(g.semester)}</td>
+            <td>${esc(g.studentId)}</td>
+            <td>${esc(studentName(g.studentId))}</td>
+            <td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
+            <td class="num">${esc(g.score)}</td>
+            <td>${letterBadge(g.letter)}</td>
+            <td class="actions">
+                <button class="link" data-act="edit" data-k='${key}'>수정</button>
+                <button class="link danger" data-act="del" data-k='${key}'>삭제</button>
+            </td>
+        </tr>`;
+    }).join('') : emptyRow(7, '조건에 맞는 성적이 없습니다');
+}
+
+// 필터를 바꾸면 표를 다시 그림
+['grade-f-student', 'grade-f-course', 'grade-f-semester'].forEach((id) =>
+    ($(id).onchange = () => renderGrades().catch((e) => toast(e.message, true))));
+
+// 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수만 고침
+// (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문). 등급은 서버가 점수로 정함
+const gradeFields = (editing) => [
+    { name: 'studentId', label: '학생', options: studentOptions(), readonly: editing },
+    { name: 'courseCode', label: '과목', options: courseOptions(), readonly: editing },
+    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1' },
+    { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any' },
+];
+
+// 성적 등록. 학생과 과목이 하나도 없으면 등록할 수 없으므로 안내만 띄움
+$('grade-add').onclick = () => {
+    if (!state.students.length || !state.courses.length) { toast('학생과 과목을 먼저 등록하세요', true); return; }
+    openForm({
+        title: '성적 등록',
+        fields: gradeFields(false),
+        values: { semester: '2026-1' },
+        onSubmit: async (d) => {
+            const g = await api('POST', '/api/grades', { ...d, score: Number(d.score) });
+            toast(`성적을 등록했습니다: ${g.score}점 → ${g.letter}`);
+            await refreshAll();
+        },
+    });
+};
+// 성적 표 안 버튼 처리. 수정은 서버에서 그 성적을 다시 받아 폼에 채움
+$('grade-body').onclick = async (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const [studentId, courseCode, semester] = JSON.parse(b.dataset.k);
+    const q = new URLSearchParams({ studentId, courseCode, semester });
+    if (b.dataset.act === 'edit') {
+        let g;
+        try { [g] = await api('GET', '/api/grades?' + q); }
+        catch (err) { toast(err.message, true); return; }
+        if (!g) { toast('성적을 찾을 수 없습니다', true); return; }
+        openForm({
+            title: '성적 수정',
+            fields: gradeFields(true),
+            values: g,
+            onSubmit: async (d) => {
+                const updated = await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
+                toast(`수정했습니다: ${updated.score}점 → ${updated.letter}`);
+                await refreshAll();
+            },
+        });
+    }
+    if (b.dataset.act === 'del') confirmDelete(
+        `${studentName(studentId)} · ${courseName(courseCode)} · ${semester} 성적을 삭제할까요?`,
+        () => api('DELETE', '/api/grades?' + q));
+};
+
+// ───────── 석차 ─────────
+
+// 석차 표 그리기. 고른 학기(없으면 전체)의 석차를 받아 1~3등은 메달, GPA 는 4.5 만점 기준 막대로 표시
+async function renderRanking() {
+    const sel = $('rank-semester');
+    fillSelect(sel, (await semesterList()).map((s) => ({ value: s, label: s })), '전체 학기', sel.value);
+    const rows = await api('GET', '/api/stats/ranking' + (sel.value ? '?semester=' + encodeURIComponent(sel.value) : ''));
+    const medal = ['🥇', '🥈', '🥉'];
+    $('rank-body').innerHTML = rows.length ? rows.map((r) => `
+        <tr>
+            <td>${medal[r.rank - 1] ?? ''} <b>${esc(r.rank)}</b></td>
+            <td>${esc(r.studentId)}</td>
+            <td><b>${esc(r.name)}</b></td>
+            <td class="num">${fmt(r.gpa)}</td>
+            <td class="bar-cell"><div class="bar"><i style="width:${Math.min(100, (r.gpa / 4.5) * 100)}%"></i></div></td>
+        </tr>`).join('') : emptyRow(5, '표시할 학생이 없습니다');
+}
+// 학기를 바꾸면 석차를 다시 그림
+$('rank-semester').onchange = () => renderRanking().catch((e) => toast(e.message, true));
+
 // ───────── 시작 ─────────
 
-// 처음 열면 과목을 받아 목록을 그림
+// 처음 열면 학생·과목을 받아 수강과목 탭을 그림
 refreshAll().catch((e) => toast(e.message, true));

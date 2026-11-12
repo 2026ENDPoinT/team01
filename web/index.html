@@ -12,15 +12,78 @@
             <span class="logo" aria-hidden="true">G</span>
             <h1>성적 관리</h1>
         </div>
-        <div class="topbar-actions">
-            <button class="primary" id="course-add">+ 과목 등록</button>
-        </div>
+        <nav id="tabs">
+            <button data-tab="courses" class="active">수강과목</button>
+            <button data-tab="students">학생</button>
+            <button data-tab="grades">성적</button>
+            <button data-tab="ranking">석차</button>
+        </nav>
     </header>
 
     <main>
-        <h2 class="page-title">수강과목</h2>
-        <h3 class="sub-title">정규과목</h3>
-        <ul id="course-list"></ul>
+        <!-- 수강과목 -->
+        <section id="tab-courses" class="tab active">
+            <div class="page-head">
+                <h2 class="page-title">수강과목</h2>
+                <button class="primary" id="course-add">+ 과목 등록</button>
+            </div>
+            <h3 class="sub-title">정규과목</h3>
+            <ul id="course-list"></ul>
+        </section>
+
+        <!-- 학생 -->
+        <section id="tab-students" class="tab">
+            <div class="page-head">
+                <h2 class="page-title">학생</h2>
+                <button class="primary" id="student-add">+ 학생 등록</button>
+            </div>
+            <div class="toolbar">
+                <input id="student-search" type="search" placeholder="학번 또는 이름 검색">
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>학번</th><th>이름</th><th>학과</th><th>학년</th><th class="num">GPA</th><th></th></tr></thead>
+                    <tbody id="student-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 성적 -->
+        <section id="tab-grades" class="tab">
+            <div class="page-head">
+                <h2 class="page-title">성적</h2>
+                <button class="primary" id="grade-add">+ 성적 등록</button>
+            </div>
+            <div class="toolbar">
+                <select id="grade-f-student"></select>
+                <select id="grade-f-course"></select>
+                <select id="grade-f-semester"></select>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>학기</th><th>학번</th><th>이름</th><th>과목</th><th class="num">점수</th><th>등급</th><th></th></tr></thead>
+                    <tbody id="grade-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 석차 -->
+        <section id="tab-ranking" class="tab">
+            <div class="page-head">
+                <h2 class="page-title">석차</h2>
+            </div>
+            <div class="toolbar">
+                <label>학기 <select id="rank-semester"></select></label>
+                <span class="spacer"></span>
+                <span class="hint">GPA 4.5 만점 · 동점이면 같은 등수</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>등수</th><th>학번</th><th>이름</th><th class="num">GPA</th><th>GPA 막대</th></tr></thead>
+                    <tbody id="rank-body"></tbody>
+                </table>
+            </div>
+        </section>
     </main>
 
     <!-- 공용 입력 / 상세 대화상자 -->
