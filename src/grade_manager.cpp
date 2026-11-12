@@ -1,18 +1,30 @@
 ﻿#include "grade_manager.h"
 
 #include <algorithm>
+#include <iostream>
 
 // 생성자: CSV 파일이 있는 폴더 경로를 FileIO 에 넘겨 준다.
 GradeManager::GradeManager(const std::string& dataDir) : fileIO(dataDir) {}
 
-// CSV 3개(학생/과목/성적)를 모두 읽어 멤버 벡터에 채운다. 하나라도 실패하면 false.
+// CSV 5개(학생/과목/성적/수강신청/설정)를 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
 bool GradeManager::load() {
-    return fileIO.loadStudents(students) && fileIO.loadCourses(courses) && fileIO.loadGrades(grades);
+    if (!(fileIO.loadStudents(students) && fileIO.loadCourses(courses) && fileIO.loadGrades(grades) &&
+          fileIO.loadEnrollments(enrollments) && fileIO.loadSettings(enrollmentSemester))) {
+        return false;
+    }
+    // 신청 학기 값이 깨져 있으면 "신청 기간 아님" 으로 시작
+    if (!enrollmentSemester.empty() && !isValidSemester(enrollmentSemester)) {
+        std::cerr << "경고: settings.csv 의 수강신청 학기 \"" << enrollmentSemester
+                  << "\" 가 올바르지 않아 비웁니다." << std::endl;
+        enrollmentSemester.clear();
+    }
+    return true;
 }
 
-// 메모리의 학생/과목/성적을 CSV 3개에 모두 저장한다. 하나라도 실패하면 false.
+// 메모리의 학생/과목/성적/수강신청/설정을 CSV 5개에 모두 저장한다. 하나라도 실패하면 false.
 bool GradeManager::save() {
-    return fileIO.saveStudents(students) && fileIO.saveCourses(courses) && fileIO.saveGrades(grades);
+    return fileIO.saveStudents(students) && fileIO.saveCourses(courses) && fileIO.saveGrades(grades) &&
+           fileIO.saveEnrollments(enrollments) && fileIO.saveSettings(enrollmentSemester);
 }
 
 // ----- 학생 -----
@@ -42,11 +54,16 @@ bool GradeManager::updateStudent(const std::string& id, const Student& student) 
         return false;
     }
 
-    // 학번이 바뀌면 그 학생의 성적에 적힌 학번도 같이 바꿔서 연결이 끊기지 않게 한다.
+    // 학번이 바뀌면 그 학생의 성적·수강신청에 적힌 학번도 같이 바꿔서 연결이 끊기지 않게 한다.
     if (student.id != id) {
         for (Grade& grade : grades) {
             if (grade.studentId == id) {
                 grade.studentId = student.id;
+            }
+        }
+        for (Enrollment& enrollment : enrollments) {
+            if (enrollment.studentId == id) {
+                enrollment.studentId = student.id;
             }
         }
     }
@@ -55,7 +72,7 @@ bool GradeManager::updateStudent(const std::string& id, const Student& student) 
     return true;
 }
 
-// 학생 삭제: 학생과 그 학생의 성적을 함께 지운다. 대상이 없으면 false.
+// 학생 삭제: 학생과 그 학생의 성적·수강신청을 함께 지운다. 대상이 없으면 false.
 bool GradeManager::removeStudent(const std::string& id) {
     auto it = std::find_if(students.begin(), students.end(), [&](const Student& student) {
         return student.id == id;
@@ -69,6 +86,9 @@ bool GradeManager::removeStudent(const std::string& id) {
     grades.erase(std::remove_if(grades.begin(), grades.end(), [&](const Grade& grade) {
         return grade.studentId == id;
     }), grades.end());
+    enrollments.erase(std::remove_if(enrollments.begin(), enrollments.end(), [&](const Enrollment& enrollment) {
+        return enrollment.studentId == id;
+    }), enrollments.end());
     return true;
 }
 
@@ -106,7 +126,7 @@ bool GradeManager::addCourse(const Course& course) {
     return true;
 }
 
-// 과목 수정: updateStudent 와 같은 규칙. 과목코드가 바뀌면 성적의 과목코드도 같이 바꾼다.
+// 과목 수정: updateStudent 와 같은 규칙. 과목코드가 바뀌면 성적·수강신청의 과목코드도 같이 바꾼다.
 bool GradeManager::updateCourse(const std::string& code, const Course& course) {
     auto it = std::find_if(courses.begin(), courses.end(), [&](const Course& current) {
         return current.code == code;
@@ -122,11 +142,16 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
         return false;
     }
 
-    // 과목코드가 바뀌면 그 과목의 성적에 적힌 코드도 같이 바꾼다.
+    // 과목코드가 바뀌면 그 과목의 성적·수강신청에 적힌 코드도 같이 바꾼다.
     if (course.code != code) {
         for (Grade& grade : grades) {
             if (grade.courseCode == code) {
                 grade.courseCode = course.code;
+            }
+        }
+        for (Enrollment& enrollment : enrollments) {
+            if (enrollment.courseCode == code) {
+                enrollment.courseCode = course.code;
             }
         }
     }
@@ -135,7 +160,7 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
     return true;
 }
 
-// 과목 삭제: 과목과 그 과목의 성적을 함께 지운다. 대상이 없으면 false.
+// 과목 삭제: 과목과 그 과목의 성적·수강신청을 함께 지운다. 대상이 없으면 false.
 bool GradeManager::removeCourse(const std::string& code) {
     auto it = std::find_if(courses.begin(), courses.end(), [&](const Course& course) {
         return course.code == code;
@@ -149,6 +174,9 @@ bool GradeManager::removeCourse(const std::string& code) {
     grades.erase(std::remove_if(grades.begin(), grades.end(), [&](const Grade& grade) {
         return grade.courseCode == code;
     }), grades.end());
+    enrollments.erase(std::remove_if(enrollments.begin(), enrollments.end(), [&](const Enrollment& enrollment) {
+        return enrollment.courseCode == code;
+    }), enrollments.end());
     return true;
 }
 
@@ -258,3 +286,58 @@ std::vector<Grade> GradeManager::getGradesBySemester(const std::string& semester
 
 // 전체 성적 목록 (읽기 전용 참조).
 const std::vector<Grade>& GradeManager::getGrades() const { return grades; }
+
+// ----- 수강신청 -----
+// 수강신청 등록: 학기 형식이 틀렸거나, 없는 학생/과목이거나, 같은 조합이 이미 있으면 false.
+// 정원·강의시간 겹침·신청 기간은 서버가 검사한다.
+bool GradeManager::addEnrollment(const Enrollment& enrollment) {
+    if (!isValidSemester(enrollment.semester) || findStudent(enrollment.studentId) == nullptr ||
+        findCourse(enrollment.courseCode) == nullptr) {
+        return false;
+    }
+    if (findEnrollment(enrollment.studentId, enrollment.courseCode, enrollment.semester) != nullptr) {
+        return false;
+    }
+    enrollments.push_back(enrollment);
+    return true;
+}
+
+// 수강신청 삭제: (학번, 과목코드, 학기) 조합으로 찾아 지운다. 없으면 false.
+bool GradeManager::removeEnrollment(const std::string& studentId, const std::string& courseCode,
+                                    const std::string& semester) {
+    auto it = std::find_if(enrollments.begin(), enrollments.end(), [&](const Enrollment& enrollment) {
+        return enrollment.studentId == studentId && enrollment.courseCode == courseCode &&
+               enrollment.semester == semester;
+    });
+    if (it == enrollments.end()) {
+        return false;
+    }
+
+    enrollments.erase(it);
+    return true;
+}
+
+// 수강신청 찾기: 있으면 벡터 원소의 주소, 없으면 nullptr.
+const Enrollment* GradeManager::findEnrollment(const std::string& studentId, const std::string& courseCode,
+                                               const std::string& semester) const {
+    auto it = std::find_if(enrollments.begin(), enrollments.end(), [&](const Enrollment& enrollment) {
+        return enrollment.studentId == studentId && enrollment.courseCode == courseCode &&
+               enrollment.semester == semester;
+    });
+    return it == enrollments.end() ? nullptr : &*it;
+}
+
+// 전체 수강신청 목록 (읽기 전용 참조).
+const std::vector<Enrollment>& GradeManager::getEnrollments() const { return enrollments; }
+
+// 수강신청 학기 ("" 이면 수강신청 기간이 아님).
+const std::string& GradeManager::getEnrollmentSemester() const { return enrollmentSemester; }
+
+// 수강신청 학기 설정: "" 또는 올바른 학기 형식만 허용.
+bool GradeManager::setEnrollmentSemester(const std::string& semester) {
+    if (!semester.empty() && !isValidSemester(semester)) {
+        return false;
+    }
+    enrollmentSemester = semester;
+    return true;
+}

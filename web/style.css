@@ -11,6 +11,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
     margin: 0;
@@ -62,6 +63,22 @@ body {
 #tabs button:hover { background: none; color: var(--text); }
 #tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
+/* 상단 바 오른쪽: 로그인한 사용자 · 비밀번호 변경 · 로그아웃 */
+#user-box { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+#user-label { color: var(--muted); margin-right: 6px; }
+
+/* 로그인 화면 */
+#login-view { display: flex; justify-content: center; padding: 80px 16px; }
+.login-card {
+    width: min(360px, 100%);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 28px;
+}
+.login-card h2 { margin: 0 0 20px; font-size: 20px; }
+.login-card button { width: 100%; padding: 9px 14px; }
+
 main { max-width: 960px; margin: 28px auto 48px; padding: 0 16px; }
 .tab { display: none; }
 .tab.active { display: block; }
@@ -106,6 +123,7 @@ button.danger:hover { background: rgba(239, 68, 68, .15); }
 button.link { border: 0; background: none; color: var(--accent); padding: 4px 8px; }
 button.link:hover { background: var(--accent-weak); }
 button.link.danger { color: var(--danger); }
+button:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
 button.link.danger:hover { background: rgba(239, 68, 68, .15); }
 .btn-link {
     display: inline-block;
@@ -133,6 +151,7 @@ tbody tr:hover > td:not(.empty) { background: var(--hover); }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; white-space: nowrap; }
 td.empty { text-align: center; color: var(--muted); padding: 32px; }
+tfoot td { border-top: 1px solid var(--line); border-bottom: 0; color: var(--muted); }
 
 /* 등급 배지 */
 .badge {
@@ -236,11 +255,20 @@ dialog h2 { margin: 0 0 16px; font-size: 18px; }
 .stat-boxes > div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
 .stat-boxes span { color: var(--muted); font-size: 12px; }
 .stat-boxes b { display: block; font-size: 20px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat-boxes small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 .stat-boxes.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .stat-boxes b.small { font-size: 16px; line-height: 28px; }
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 dialog .table-wrap { margin-bottom: 16px; background: transparent; }
 dialog table { min-width: 420px; font-size: 13px; }
+
+/* 수강신청: 신청 학기 표시, 설정 줄, 목록 사이 간격 */
+.period { color: var(--accent); font-weight: 600; }
+.period.closed { color: var(--danger); }
+.setting-row { padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+#enroll-sem-input { width: 120px; }
+#enroll-content .table-wrap, .report .table-wrap { margin-bottom: 20px; }
+#enroll-content > .hint { margin: 0 0 12px; }
 
 /* 토스트 */
 #toast {
@@ -265,6 +293,7 @@ dialog table { min-width: 420px; font-size: 13px; }
     .topbar { padding: 0 12px; gap: 8px; }
     .topbar h1 { display: none; }
     #tabs button { padding: 0 10px; }
+    #user-label { display: none; }
     .course-row { flex-wrap: wrap; padding: 14px 16px; }
     .course-meta { min-width: 0; width: 100%; text-align: left; }
     .course-meta .stat-line { display: inline; margin-right: 12px; }

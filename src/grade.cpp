@@ -17,8 +17,9 @@ bool isEightDigits(const std::string& s) {
     return true;
 }
 
-// 학기: "YYYY-N" (예: "2026-1", "2026-2"), N 은 1~4
-//   1·2 는 정규학기, 3·4 는 계절학기 등으로 쓸 수 있게 여유를 둠
+}  // namespace
+
+// 학기: "YYYY-N" (예: "2026-1", "2026-2"), N: 1·2 정규학기, 3 여름 계절학기, 4 겨울 계절학기
 bool isValidSemester(const std::string& s) {
     if (s.size() != 6) return false;
     for (int i = 0; i < 4; i++) {
@@ -28,7 +29,22 @@ bool isValidSemester(const std::string& s) {
     return s[5] >= '1' && s[5] <= '4';
 }
 
-}  // namespace
+bool isRegularSemester(const std::string& semester) {
+    return isValidSemester(semester) && (semester[5] == '1' || semester[5] == '2');
+}
+
+int admissionYear(const std::string& studentId) {
+    if (!isEightDigits(studentId)) return 0;
+    return 2000 + (studentId[0] - '0') * 10 + (studentId[1] - '0');  // "23..." → 2023
+}
+
+bool isSemesterInRange(const std::string& studentId, const std::string& semester, int currentYear) {
+    if (!isValidSemester(semester)) return false;
+    const int admitted = admissionYear(studentId);
+    if (admitted == 0) return false;
+    const int year = std::stoi(semester.substr(0, 4));  // 형식 검사를 통과했으므로 숫자 4자리
+    return year >= admitted && year <= currentYear + 1;
+}
 
 bool Grade::isValid() const {
     if (!isEightDigits(studentId)) return false;

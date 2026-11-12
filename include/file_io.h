@@ -9,8 +9,11 @@
 #include <vector>
 
 #include "course.h"
+#include "enrollment.h"
 #include "grade.h"
 #include "student.h"
+
+struct Account;  // account.h 가 이 파일을 include 하므로 미리 선언만 함
 
 // 값 여러 개를 쉼표로 이어서 CSV 한 줄로 만듦 (끝에 줄바꿈 포함)
 //   쉼표나 큰따옴표가 있는 값은 "..." 로 감싸고, 안의 " 는 "" 로 바꿈
@@ -29,6 +32,18 @@ public:
 
     bool saveGrades(const std::vector<Grade>& grades);
     bool loadGrades(std::vector<Grade>& grades);
+
+    // enrollments.csv : studentId,courseCode,semester
+    bool saveEnrollments(const std::vector<Enrollment>& enrollments);
+    bool loadEnrollments(std::vector<Enrollment>& enrollments);
+
+    // settings.csv : key,value (키는 enrollmentSemester 하나, 다른 키는 무시, 파일이 없으면 "")
+    bool saveSettings(const std::string& enrollmentSemester);
+    bool loadSettings(std::string& enrollmentSemester);
+
+    // accounts.csv : username,role,name,studentId,salt,passwordHash
+    bool saveAccounts(const std::vector<Account>& accounts);
+    bool loadAccounts(std::vector<Account>& accounts);
 
 private:
     std::string dataDir;
