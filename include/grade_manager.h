@@ -12,6 +12,13 @@
 #include "grade.h"
 #include "student.h"
 
+// 성적 등록/수정 실패 이유 (서버는 kind 로 HTTP 상태 결정: Invalid 400, NotFound 404, Duplicate 409)
+struct GradeError {
+    enum Kind { None, Invalid, NotFound, Duplicate };
+    Kind kind = None;
+    std::string message;  // 화면에 보여줄 이유
+};
+
 class GradeManager {
 public:
     explicit GradeManager(const std::string& dataDir);
@@ -37,8 +44,10 @@ public:
 
     // ----- 성적 -----
     // 성적은 (학번, 과목코드, 학기) 세 개로 하나를 구분
-    bool addGrade(const Grade& grade);                          // 없는 학생/과목이거나 중복이면 false
-    bool updateGrade(const Grade& grade);                       // 같은 (학번, 과목, 학기) 의 점수 수정
+    // 학기 규칙: 입학년도(학번 앞 2자리 → 20XX) 이전 학기, 현재보다 미래 학기는 거부
+    //   실패하면 false, error 를 넘기면 이유를 채움
+    bool addGrade(const Grade& grade, GradeError* error = nullptr);     // 없는 학생/과목이거나 중복이면 false
+    bool updateGrade(const Grade& grade, GradeError* error = nullptr);  // 같은 (학번, 과목, 학기) 의 점수 수정
     bool removeGrade(const std::string& studentId, const std::string& courseCode,
                      const std::string& semester);
     std::vector<Grade> getGradesByStudent(const std::string& studentId) const;

@@ -94,6 +94,7 @@ JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
 - 학생 `{"id", "name", "major", "year"}`
 - 과목 `{"code", "name", "credit", "professor"}`
 - 성적 `{"studentId", "courseCode", "semester", "score", "letter"}` — `letter` 는 `Retake::officialLetter` (재수강 규칙 적용)
+- 학기 `semester` 는 `YYYY-N`: `-1` 1학기, `-2` 2학기, `-3` 여름 계절학기, `-4` 겨울 계절학기 (순서 1 → 3 → 2 → 4). 입학년도(학번 앞 2자리 → 20XX) 이전 학기와 현재보다 미래 학기의 성적은 등록·수정할 수 없음 (400 + 이유)
 
 ## 재수강 규칙
 
