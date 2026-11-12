@@ -20,6 +20,15 @@ cmake --build build
 
 `data/`, `web/` 경로는 빌드 시 프로젝트 경로로 고정되므로 어디서 실행해도 됩니다.
 
+**테스트**
+```bash
+cmake -B build && cmake --build build && ctest --test-dir build --output-on-failure
+# Windows(Visual Studio): ctest --test-dir build -C Debug --output-on-failure
+# CMake 3.20 미만 (--test-dir 없음): cd build && ctest --output-on-failure
+```
+
+`tests/` 는 외부 라이브러리 없이 `GradeTests` 하나로 등급 경계, 재수강 규칙, 석차 동점, 과목코드 변경·삭제 연쇄, CSV 저장/불러오기를 검사합니다 (임시 폴더만 사용, `data/` 는 건드리지 않음).
+
 ## 데이터
 
 `data/` 의 CSV 3개(학생 9명, 과목 6개, 성적 29건)를 git 으로 같이 관리합니다. 실행하면 바로 화면에서 확인할 수 있습니다.
@@ -60,6 +69,7 @@ src/          구현 + main.cpp
 web/          index.html, style.css, app.js
 data/         students.csv, courses.csv, grades.csv (위 "데이터" 참고)
 third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
+tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 ```
 
 의존 방향: `student/course/grade` ← `file_io` ← `grade_manager` ← `statistics`, `report_exporter` ← `server` ← `main`
