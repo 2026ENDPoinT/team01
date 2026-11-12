@@ -7,3 +7,5 @@ out/
 *.tmp
 .claude/
 CLAUDE.local.md
+/.omp/
+/AGENTS.md
