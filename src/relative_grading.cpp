@@ -15,8 +15,9 @@ namespace {
 const char* const kGradeLadder[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
 constexpr size_t kGradeCount = sizeof(kGradeLadder) / sizeof(kGradeLadder[0]);
 
-// 비율 설정의 일곱 구간. D+/D0는 별도 비율 구간이 아니므로 F 구간으로 내려간다.
-const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 5, 8};
+// 비율 설정의 여섯 구간. C0·D+·D0는 별도 비율 구간이 아니므로
+// 절대평가 등급 상한 또는 F 구간에 의해 결정된다.
+const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 8};
 
 size_t gradeIndex(const std::string& letter) {
     for (size_t i = 0; i < kGradeCount; ++i) {
@@ -37,11 +38,11 @@ double averagePoint(const std::vector<std::string>& letters) {
 std::vector<int> defaultRatios() {
     // 기본 상대평가: 상위 30% A+, 다음 40% B+, 나머지 30% C+.
     // A0 이상 30%, B0 이상 70% 상한을 만족하며 평균 평점은 최대 3.50이다.
-    return {30, 0, 40, 0, 30, 0, 0};
+    return {30, 0, 40, 0, 30, 0};
 }
 
 bool validRatios(const std::vector<int>& ratios) {
-    if (ratios.size() != 7) return false;
+    if (ratios.size() != 6) return false;
     int total = 0;
     for (int ratio : ratios) {
         if (ratio < 0 || ratio > 100) return false;
@@ -70,7 +71,7 @@ std::vector<std::string> assignLetters(const std::vector<double>& scores,
         while (end < n && scores[order[end]] == scores[order[begin]]) ++end;
 
         size_t cumulativeRatio = 0;
-        size_t relativeGrade = kRatioGradeIndex[6];  // 기본값 F
+        size_t relativeGrade = kRatioGradeIndex[5];  // 기본값 F
         for (size_t category = 0; category < ratios.size(); ++category) {
             cumulativeRatio += static_cast<size_t>(ratios[category]);
             const size_t boundary = (n * cumulativeRatio) / 100;
