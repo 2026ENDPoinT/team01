@@ -951,6 +951,72 @@ void Server::run() {
         });
     });
 
+        // 재수강 시뮬레이션: 그 학생의 성적 복사본에 가상 성적을 넣어 전/후 평점을 계산. 저장하지 않음 (gm.save() 호출 금지)
+    //   본문 {studentId?, items:[{courseCode, letter}]}: 학생은 본인만 (studentId 생략 가능), 관리자는 studentId 필수
+    svr.Post("/api/stats/simulate/retake", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "student"});
+        if (!account) return;
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        std::string studentId;
+        if (!readOptString(body, "studentId", account->role == "student" ? account->studentId : "",
+                           studentId, res)) return;
+        if (account->role == "student" && studentId != account->studentId) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        if (studentId.empty()) {
+            setError(res, 400, "studentId 를 지정해야 합니다");
+            return;
+        }
+        if (!gm.findStudent(studentId)) {
+            setError(res, 404, "없는 학생입니다: " + studentId);
+            return;
+        }
+
+        const auto itemsIt = body.find("items");
+        if (itemsIt == body.end() || !itemsIt->is_array() || itemsIt->empty()) {
+            setError(res, 400, "items 에 과목코드와 등급을 하나 이상 넣으세요 (예: [{\"courseCode\":\"100101\",\"letter\":\"A+\"}])");
+            return;
+        }
+        std::vector<Statistics::RetakeItem> items;
+        for (const json& entry : *itemsIt) {
+            Statistics::RetakeItem item;
+            if (!entry.is_object()) {
+                setError(res, 400, "items 항목이 올바르지 않습니다");
+                return;
+            }
+            if (!readString(entry, "courseCode", item.courseCode, res) ||
+                !readString(entry, "letter", item.letter, res)) return;
+            items.push_back(item);
+        }
+
+        const Statistics::RetakeSimulation sim =
+            Statistics::simulateRetake(gm, studentId, currentSemester(gm), items);
+        if (sim.error != Statistics::RetakeError::None) {
+            setError(res, sim.error == Statistics::RetakeError::NoCourse ? 404 : 400, sim.message);
+            return;
+        }
+
+        const auto summaryJson = [](const Statistics::GpaSummary& s) {
+            return json{
+                {"gpa", s.credits > 0 ? json(s.gpa) : json(nullptr)},
+                {"credits", s.credits},
+                {"majorGpa", s.majorCredits > 0 ? json(s.majorGpa) : json(nullptr)},
+                {"majorCredits", s.majorCredits}
+            };
+        };
+        json itemsJson = json::array();
+        for (const Statistics::RetakeItemResult& r : sim.items) {
+            itemsJson.push_back({{"courseCode", r.courseCode}, {"previousLetter", r.previousLetter},
+                                 {"appliedLetter", r.appliedLetter}});
+        }
+        setJson(res, 200, json{{"before", summaryJson(sim.before)}, {"after", summaryJson(sim.after)},
+                               {"items", itemsJson}});
+    });
+
     // 과목 통계
     svr.Get("/api/stats/course/:code", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);

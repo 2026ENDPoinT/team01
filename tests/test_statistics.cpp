@@ -324,3 +324,89 @@ TEST_CASE(gpaSummary_major_excludes_replaced_grade_and_limits_retake) {
     CHECK_NEAR(summary.majorGpa, (3.5 * 3 + 4.0 * 3) / 6, 1e-9);  // 3.75
     CHECK_EQ(summary.credits, 8);
 }
+
+// ----- 재수강 시뮬레이션 -----
+
+// 전공필수 F 를 현재 학기(2026-1)에 A+ 로 재수강: 반영 등급 A0 (평점 4.0), 저장 안 됨
+TEST_CASE(simulateRetake_a_plus_applied_as_a0) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(addCourseOf(gm, "100001", "미적분학", 3, "전공필수"));
+    CHECK(addCourseOf(gm, "100002", "알고리즘", 3, "전공선택"));
+    CHECK(addCourseOf(gm, "100003", "음악감상", 2, "교양선택"));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 40)));  // F
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 87)));  // B+ 3.5
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2025-1", 82)));  // B0 3.0, 2학점
+
+    const Statistics::GpaSummary beforeCall = Statistics::gpaSummary(gm, "25103008");
+    const size_t gradeCount = gm.getGrades().size();
+
+    const Statistics::RetakeSimulation sim =
+        Statistics::simulateRetake(gm, "25103008", "2026-1", {{"100001", "A+"}});
+    CHECK(sim.error == Statistics::RetakeError::None);
+    CHECK_EQ(sim.items.size(), static_cast<size_t>(1));
+    if (sim.items.size() == 1) {
+        CHECK_EQ(sim.items[0].courseCode, std::string("100001"));
+        CHECK_EQ(sim.items[0].previousLetter, std::string("F"));
+        CHECK_EQ(sim.items[0].appliedLetter, std::string("A0"));
+    }
+    CHECK_EQ(sim.before.credits, 8);
+    CHECK_NEAR(sim.before.gpa, (0.0 * 3 + 3.5 * 3 + 3.0 * 2) / 8, 1e-9);  // 2.0625
+    CHECK_NEAR(sim.before.majorGpa, (0.0 * 3 + 3.5 * 3) / 6, 1e-9);      // 1.75
+    CHECK_EQ(sim.after.credits, 8);
+    CHECK_NEAR(sim.after.gpa, (4.0 * 3 + 3.5 * 3 + 3.0 * 2) / 8, 1e-9);  // 3.5625 (A+ 가 아니라 A0 4.0)
+    CHECK_EQ(sim.after.majorCredits, 6);
+    CHECK_NEAR(sim.after.majorGpa, (4.0 * 3 + 3.5 * 3) / 6, 1e-9);       // 3.75
+
+    // 저장·변경 없음: 성적 수와 gpaSummary 가 그대로
+    CHECK_EQ(gm.getGrades().size(), gradeCount);
+    const Statistics::GpaSummary afterCall = Statistics::gpaSummary(gm, "25103008");
+    CHECK_NEAR(afterCall.gpa, beforeCall.gpa, 1e-12);
+    CHECK_EQ(afterCall.credits, beforeCall.credits);
+    CHECK_NEAR(afterCall.majorGpa, beforeCall.majorGpa, 1e-12);
+}
+
+// 이미 현재 학기 성적이 있으면 대체 (이전 F 는 그대로 삭제된 성적)
+TEST_CASE(simulateRetake_replaces_current_semester_grade) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(gm.addCourse(makeCourse("100001", "미적분학", 3)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 40)));  // F
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2026-1", 72)));  // 재수강 C0 2.0
+
+    const Statistics::RetakeSimulation sim =
+        Statistics::simulateRetake(gm, "25103008", "2026-1", {{"100001", "B+"}});
+    CHECK(sim.error == Statistics::RetakeError::None);
+    CHECK_NEAR(sim.before.gpa, 2.0, 1e-9);
+    CHECK_NEAR(sim.after.gpa, 3.5, 1e-9);
+    CHECK_EQ(sim.items.size(), static_cast<size_t>(1));
+    if (sim.items.size() == 1) {
+        CHECK_EQ(sim.items[0].previousLetter, std::string("C0"));
+        CHECK_EQ(sim.items[0].appliedLetter, std::string("B+"));
+    }
+}
+
+TEST_CASE(simulateRetake_rejects_bad_input) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(gm.addCourse(makeCourse("100001", "과목1", 3)));
+    CHECK(gm.addCourse(makeCourse("100002", "과목2", 3)));
+    CHECK(gm.addCourse(makeCourse("100003", "과목3", 3)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 77)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2026-2", 77)));  // 현재 학기(2026-1)보다 늦음
+
+    using Statistics::RetakeError;
+    const auto run = [&](const std::vector<Statistics::RetakeItem>& items) {
+        return Statistics::simulateRetake(gm, "25103008", "2026-1", items).error;
+    };
+    CHECK(run({{"100002", "A0"}}) == RetakeError::NoGrade);     // 성적 없는 과목
+    CHECK(run({{"999999", "A0"}}) == RetakeError::NoCourse);    // 없는 과목
+    CHECK(run({{"100001", "S"}}) == RetakeError::BadLetter);    // 9개 등급이 아님
+    CHECK(run({{"100001", "R"}}) == RetakeError::BadLetter);
+    CHECK(run({{"100001", "A0"}, {"100001", "B0"}}) == RetakeError::Duplicate);
+    CHECK(run({{"100003", "A0"}}) == RetakeError::FutureGrade);
+    CHECK(run({{"100001", "A0"}}) == RetakeError::None);
+}
