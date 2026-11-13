@@ -579,19 +579,19 @@ $('logout').onclick = async () => {
 const COURSE_CATEGORIES = ['전공필수', '전공선택', '교양필수', '교양선택', '일반선택'];
 const COURSE_LANGUAGES = ['한국어전용', '영어전용', '모듈강좌(M)'];
 const asOptions = (list) => list.map((v) => ({ value: v, label: v }));
-// registering: 과목 등록 폼이면 담당 교수·강의시간 필수 (수정 폼은 강의시간이 빈 기존 과목도 고칠 수 있게 선택)
-const courseFields = (registering = false) => [
+// 과목 등록 폼 항목 (담당 교수·강의시간 필수. 과목 수정 폼은 없음 → showCourseDetail 주석)
+const courseFields = () => [
     { name: 'code', label: '과목 코드 (숫자 6자리)', placeholder: '예: 109004', pattern: '\\d{6}', hint: '과목 코드는 숫자 6자리여야 합니다' },
     { name: 'name', label: '과목명' },
     { name: 'category', label: '이수구분', options: asOptions(COURSE_CATEGORIES) },
     { name: 'credit', label: '학점 (1~4)', type: 'number', min: 1, max: 4, step: 1 },
-    { name: 'professor', label: '담당 교수', optional: !registering },
-    { name: 'schedule', label: '강의시간', optional: !registering, placeholder: '예: 월(1~4) 또는 화(2~3) 목(2~3)' },
+    { name: 'professor', label: '담당 교수' },
+    { name: 'schedule', label: '강의시간', placeholder: '예: 월(1~4) 또는 화(2~3) 목(2~3)' },
     { name: 'language', label: '강의언어', options: asOptions(COURSE_LANGUAGES) },
     { name: 'area', label: '교양영역 (교양 과목만)', optional: true, placeholder: '예: 인문, 자연과학' },
     { name: 'capacity', label: '학기당 정원 (0 = 제한 없음)', type: 'number' },
     { name: 'remote', label: '원격강좌', options: [{ value: 'N', label: '아니오' }, { value: 'Y', label: '예' }] },
-    // 성적이나 평가 기준이 있는 과목은 서버가 바꾸지 못하게 막음 (409)
+    // 등록할 때만 고름 (화면에 과목 수정 기능이 없음)
     { name: 'gradeType', label: '성적 방식', options: [
         { value: 'letter', label: '등급 (A+~F, 평점 반영)' },
         { value: 'pf', label: 'P/F (합격·불합격, 평점 제외)' },
@@ -617,8 +617,6 @@ const validateNewCourse = (d) => {
 };
 // 폼 값 → API 본문 (숫자·참거짓 변환)
 const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.capacity), remote: d.remote === 'Y' });
-// API 값 → 폼 처음 값 (remote 는 선택 상자 값 Y/N 으로)
-const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N', gradeType: c.gradeType || 'letter' });
 
 // 과목 목록 그리기 (myCourses: 교수는 담당 과목, 학생은 수강신청한 과목만)
 // 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
@@ -683,8 +681,10 @@ async function courseLatest(code, st, cache = new Map()) {
     return { sem, enrolled: counts.find((x) => x.courseCode === code)?.count ?? 0 };
 }
 
-// 과목 상세 창 (보기 전용): 전체 항목 + 통계 상자 + CSV / 수정 / 삭제 버튼
-//   CSV 는 관리자·담당 교수만, 수정·삭제는 관리자만
+// 과목 상세 창 (보기 전용): 전체 항목 + 통계 상자 + CSV / 삭제 버튼
+//   CSV 는 관리자·담당 교수만, 삭제는 관리자만
+//   과목 정보 수정 버튼은 없음: 강의시간을 옮기면 이미 수강신청한 학생의 시간표·수강신청에서
+//   다른 과목과 겹쳐도 막을 수 없어서 화면에서 수정 기능을 뺌 (바꿀 일이 있으면 삭제 후 다시 등록)
 function showCourseDetail(c, st, latest) {
     const has = st && st.count > 0;
     const { sem, enrolled } = latest;
@@ -702,7 +702,7 @@ function showCourseDetail(c, st, latest) {
     const stat = (label, v, sub) => `<div><span>${label}</span><b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
     const actions = [
         isAdmin() || teaches(c) ? `<a class="btn-link" href="/api/export/course/${encodeURIComponent(c.code)}">CSV 내려받기</a>` : '',
-        isAdmin() ? '<button type="button" data-act="edit">수정</button><button type="button" class="danger" data-act="del">삭제</button>' : '',
+        isAdmin() ? '<button type="button" class="danger" data-act="del">삭제</button>' : '',
     ].join('');
     openDialog({
         title: `${c.name} (${c.code})`,
@@ -715,27 +715,8 @@ function showCourseDetail(c, st, latest) {
             </div>
             ${actions ? `<div class="detail-actions">${actions}</div>` : ''}`,
     });
-    const edit = $('dlg-body').querySelector('[data-act=edit]');
     const del = $('dlg-body').querySelector('[data-act=del]');
-    if (edit) edit.onclick = () => { dlg.close(); editCourse(c); };
     if (del) del.onclick = () => { dlg.close(); deleteCourse(c); };
-}
-
-// 과목 수정 폼
-function editCourse(c) {
-    openForm({
-        title: '과목 수정',
-        fields: courseFields(),
-        values: courseFormValues(c),
-        validate: validateCourse,
-        onSubmit: async (d) => {
-            await api('PUT', '/api/courses/' + encodeURIComponent(c.code), courseBody(d));
-            // 과목 페이지에서 과목코드를 바꿨으면 새 코드의 과목 페이지에 그대로 머묾
-            if (state.courseCode === c.code) state.courseCode = d.code;
-            toast('수정했습니다');
-            await refreshAll();
-        },
-    });
 }
 
 // 과목 삭제 (확인 후)
@@ -753,7 +734,7 @@ $('course-list').onclick = (e) => {
 
 $('course-add').onclick = () => openForm({
     title: '과목 등록',
-    fields: courseFields(true),
+    fields: courseFields(),
     values: { category: '전공선택', credit: 3, language: '한국어전용', capacity: 0, remote: 'N' },
     validate: validateNewCourse,
     onSubmit: async (d) => {
