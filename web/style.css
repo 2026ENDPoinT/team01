@@ -84,6 +84,20 @@ body {
 .login-note { margin: 12px 0 0; text-align: center; }
 .login-card h2 { margin: 0 0 20px; font-size: 20px; }
 .login-card button { width: 100%; padding: 9px 14px; }
+/* 시연 계정 버튼 3개: 역할 + 아이디, 누르면 로그인 폼을 채움 */
+.demo-accounts { margin-top: 16px; padding-top: 4px; border-top: 1px solid var(--line); }
+.demo-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+.login-card .demo-account {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 4px;
+    min-width: 0;
+}
+.demo-role { font-weight: 600; }
+.demo-id { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.demo-account.selected { border-color: var(--accent); background: var(--accent-weak); }
 
 main { max-width: 960px; margin: 28px auto 48px; padding: 0 16px; }
 .tab { display: none; }

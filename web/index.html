@@ -45,7 +45,21 @@
             </div>
             <div class="form-error" id="login-error"></div>
             <button type="submit" class="primary">로그인</button>
-            <p class="hint login-note">시연용 계정: 관리자 admin / admin1234</p>
+            <!-- 시연 계정: 누르면 아이디·비밀번호를 채움 (app.js). 계정은 README 의 샘플 계정 표 -->
+            <div class="demo-accounts">
+                <p class="hint login-note">시연 계정 (누르면 입력됨)</p>
+                <div class="demo-list">
+                    <button type="button" class="demo-account" data-username="admin" data-password="admin1234">
+                        <span class="demo-role">관리자</span><span class="demo-id">admin</span>
+                    </button>
+                    <button type="button" class="demo-account" data-username="kimcs" data-password="prof1234">
+                        <span class="demo-role">교수</span><span class="demo-id">kimcs</span>
+                    </button>
+                    <button type="button" class="demo-account" data-username="23101001" data-password="student1234">
+                        <span class="demo-role">학생</span><span class="demo-id">23101001</span>
+                    </button>
+                </div>
+            </div>
         </form>
     </section>
 
