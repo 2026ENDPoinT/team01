@@ -514,22 +514,184 @@ input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
 /* 수강신청 겹침 */
 .badge.overlap { background: rgba(239, 68, 68, .18); color: #f87171; margin-left: 6px; white-space: nowrap; cursor: help; }
 
-/* 내 성적 시뮬레이션·접기: 기본 스타일만 (화살표·높이·간격 다듬기는 디자인 담당) */
-.fold-bar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
-details.fold { margin-bottom: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-details.fold > summary, #sim-box > summary { padding: 10px 14px; cursor: pointer; }
-details.fold > summary:hover, #sim-box > summary:hover { background: var(--hover); }
-details.fold > .table-wrap, details.fold > .attend-line { margin: 0 14px 14px; }
-.report details.fold > .table-wrap { margin-bottom: 14px; }
-#sim-box { margin-bottom: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-#sim-box > summary { font-weight: 600; }
-.sim-section { padding: 0 14px 14px; }
-.sim-row { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-bottom: 10px; }
-.sim-row label { display: flex; align-items: center; gap: 8px; }
-input.sim-field { width: 100px; text-align: right; }
-input.sim-field.invalid { border-color: var(--danger); outline-color: rgba(239, 68, 68, .3); }
-.sim-result { margin: 0; }
+/* 내 성적 시뮬레이션·접기 */
+.fold-bar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+}
+.fold-bar button {
+    min-height: 34px;
+    padding: 6px 12px;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--card);
+    font-size: 13px;
+    font-weight: 600;
+}
+.fold-bar button:hover {
+    background: var(--accent-weak);
+}
+.fold-bar button:focus-visible,
+details.fold > summary:focus-visible,
+#sim-box > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+details.fold {
+    margin: 0 0 10px;
+    overflow: hidden;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+}
+details.fold > summary,
+#sim-box > summary {
+    position: relative;
+    min-height: 48px;
+    padding: 13px 16px 13px 42px;
+    cursor: pointer;
+    line-height: 1.55;
+    list-style: none;
+    transition: background .15s ease;
+}
+details.fold > summary::-webkit-details-marker,
+#sim-box > summary::-webkit-details-marker {
+    display: none;
+}
+details.fold > summary::before,
+#sim-box > summary::before {
+    content: "";
+    position: absolute;
+    left: 17px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: translateY(-65%) rotate(-45deg);
+    transition: transform .15s ease, border-color .15s ease;
+}
+details.fold[open] > summary::before,
+#sim-box[open] > summary::before {
+    transform: translateY(-75%) rotate(45deg);
+    border-color: var(--accent);
+}
+details.fold > summary:hover,
+#sim-box > summary:hover {
+    background: var(--hover);
+}
+details.fold[open] > summary {
+    border-bottom: 1px solid var(--line);
+    color: var(--accent);
+}
+details.fold > summary .hint {
+    margin-left: 3px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.fold-line {
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+.fold-line b {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+}
+.fold-line .badge {
+    margin-left: 3px;
+    vertical-align: baseline;
+}
+details.fold > .table-wrap,
+details.fold > .attend-line {
+    margin: 14px 16px 16px;
+}
+details.fold > .table-wrap {
+    border-radius: 7px;
+}
+details.fold table {
+    min-width: 420px;
+}
+details.fold th,
+details.fold td {
+    padding-top: 9px;
+    padding-bottom: 9px;
+}
+.report details.fold > .table-wrap {
+    margin-bottom: 16px;
+}
+.report > .sub-title:not(:first-child) {
+    margin-top: 24px;
+}
+
+#sim-box {
+    margin: 0 0 20px;
+    overflow: hidden;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+}
+#sim-box > summary {
+    min-height: 48px;
+    font-weight: 700;
+}
+#sim-box[open] > summary {
+    border-bottom: 1px solid var(--line);
+    color: var(--accent);
+}
+.sim-section {
+    padding: 4px 16px 16px;
+}
+.sim-section + .sim-section {
+    border-top: 1px solid var(--line);
+}
+.sim-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    margin-bottom: 10px;
+}
+.sim-row label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+input.sim-field {
+    width: 100px;
+    text-align: right;
+}
+input.sim-field.invalid {
+    border-color: var(--danger);
+    outline-color: var(--accent-weak);
+}
+.sim-result {
+    margin: 0;
+    line-height: 1.6;
+}
 .sim-bad { color: var(--danger); }
+
+@media (max-width: 640px) {
+    .fold-bar { margin-bottom: 10px; }
+    .fold-bar button { flex: 1; }
+    details.fold > summary,
+    #sim-box > summary {
+        min-height: 46px;
+        padding: 11px 12px 11px 36px;
+    }
+    details.fold > summary::before,
+    #sim-box > summary::before { left: 13px; }
+    details.fold > summary .hint {
+        white-space: normal;
+    }
+    details.fold > .table-wrap,
+    details.fold > .attend-line {
+        margin: 10px 10px 12px;
+    }
+    .sim-section { padding: 2px 12px 12px; }
+}
 
 
 /* 학생 시간표 */
