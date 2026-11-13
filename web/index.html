@@ -16,6 +16,7 @@
         <nav id="tabs" hidden>
             <button data-tab="courses" data-roles="admin professor student" class="active">수강과목</button>
             <button data-tab="enroll" data-roles="admin professor student">수강신청</button>
+            <button data-tab="timetable" data-roles="student">시간표</button>
             <button data-tab="students" data-roles="admin">학생</button>
             <button data-tab="grades" data-roles="admin professor">성적</button>
             <button data-tab="myreport" data-roles="student">내 성적</button>
@@ -90,6 +91,14 @@
                 <label>학기 <select id="enroll-sem-select"></select><input id="enroll-sem-input" placeholder="예: 2026-2" hidden></label>
             </div>
             <div id="enroll-content"></div>
+        </section>
+
+        <!-- 시간표 (학생 전용) -->
+        <section id="tab-timetable" class="tab">
+            <div class="page-head">
+                <h2 class="page-title">시간표</h2>
+            </div>
+            <div id="timetable-content"><p class="hint">불러오는 중…</p></div>
         </section>
 
         <!-- 학생 -->

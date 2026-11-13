@@ -200,6 +200,9 @@ RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& stude
         if (gm.findCourse(item.courseCode) == nullptr) {
             return simFail(RetakeError::NoCourse, "없는 과목입니다: " + item.courseCode);
         }
+        if (gm.findCourse(item.courseCode)->isPassFail()) {
+            return simFail(RetakeError::PassFail, "P/F 과목은 재수강 시뮬레이션 대상이 아닙니다: " + item.courseCode);
+        }
         if (!seen.insert(item.courseCode).second) {
             return simFail(RetakeError::Duplicate, "같은 과목이 두 번 들어 있습니다: " + item.courseCode);
         }
