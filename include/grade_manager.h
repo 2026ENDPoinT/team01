@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "assessment.h"
+#include "attendance.h"
 #include "course.h"
 #include "course_post.h"
 #include "enrollment.h"
@@ -19,22 +20,22 @@ class GradeManager {
 public:
     explicit GradeManager(const std::string& dataDir);
 
-    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물·평가 항목·항목 점수)
+    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물·평가 항목·항목 점수·출결)
     bool load();
     bool save();
 
     // ----- 학생 -----
     bool addStudent(const Student& student);                    // 학번 중복이면 false
-    bool updateStudent(const std::string& id, const Student& student);  // 학번이 바뀌면 성적·수강신청·항목 점수 학번도 바꿈
-    bool removeStudent(const std::string& id);                  // 그 학생의 성적·수강신청·항목 점수도 같이 삭제
+    bool updateStudent(const std::string& id, const Student& student);  // 학번이 바뀌면 성적·수강신청·항목 점수·출결 학번도 바꿈
+    bool removeStudent(const std::string& id);                  // 그 학생의 성적·수강신청·항목 점수·출결도 같이 삭제
     const Student* findStudent(const std::string& id) const;
     std::vector<Student> searchStudents(const std::string& keyword) const;  // 학번 또는 이름에 keyword 포함
     const std::vector<Student>& getStudents() const;
 
     // ----- 과목 -----
     bool addCourse(const Course& course);                       // 과목코드 중복이면 false
-    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물·평가 항목·항목 점수 코드도 바꿈
-    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물·평가 항목·항목 점수도 같이 삭제
+    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물·평가 항목·항목 점수·출결 코드도 바꿈
+    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물·평가 항목·항목 점수·출결도 같이 삭제
     const Course* findCourse(const std::string& code) const;
     const std::vector<Course>& getCourses() const;
 
@@ -114,8 +115,18 @@ public:
     // 평가 기준 삭제: 항목·항목 점수·등급 방식·그 과목·학기 성적을 모두 지움 (직접 입력 과목으로 돌아감). 없으면 false
     //   구현: #66
     bool removeGradingScheme(const std::string& courseCode, const std::string& semester);
-    // 출석 분류 점수: 그 학생·과목·학기 출결 기록의 summarizeAttendance(...).score, 기록이 하나도 없으면 100
-    //   구현: #66 (출결 기록 조회는 #59)
+
+    // ----- 출결 (#59) -----
+    // 출결은 항목 점수로 저장하지 않음. 바뀌면 그 학생의 성적만 다시 계산(syncGrade)
+    // 형식 오류, 없는 학생·과목, 수강신청 없음이면 false. 있으면 수정, 없으면 추가.
+    bool setAttendance(const Attendance& record);
+    // 없으면 false. 지운 뒤 그 학생의 성적을 다시 계산
+    bool removeAttendance(const std::string& studentId, const std::string& courseCode,
+                          const std::string& semester, int week);
+    std::vector<Attendance> getAttendanceByCourse(const std::string& courseCode, const std::string& semester) const;
+    std::vector<Attendance> getAttendanceByStudent(const std::string& studentId) const;
+    // 성적 계산에 쓰는 출석 분류 점수 (0~100)
+    //   그 학생·과목·학기의 출결 기록이 있으면 summarizeAttendance(기록).score, 하나도 없으면 100 (모두 출석)
     double attendanceCategoryScore(const std::string& studentId, const std::string& courseCode,
                                    const std::string& semester) const;
 
@@ -129,6 +140,7 @@ private:
     std::vector<CoursePost> posts;
     std::vector<Assessment> assessments;
     std::vector<AssessmentScore> assessmentScores;
+    std::vector<Attendance> attendance;
 
     // 항목 계산 과목이면 그 학생의 최종 점수를 다시 계산해 grades 에 반영 (항목이 없으면 아무것도 안 함)
     void syncGrade(const std::string& studentId, const std::string& courseCode, const std::string& semester);

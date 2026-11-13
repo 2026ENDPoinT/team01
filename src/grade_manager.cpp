@@ -6,12 +6,12 @@
 // 생성자: CSV 파일이 있는 폴더 경로를 FileIO 에 넘겨 준다.
 GradeManager::GradeManager(const std::string& dataDir) : fileIO(dataDir) {}
 
-// CSV 8개(학생/과목/성적/수강신청/설정/게시물/평가 항목/항목 점수)를 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
+// CSV 9개(학생/과목/성적/수강신청/설정/게시물/평가 항목/항목 점수/출결)를 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
 bool GradeManager::load() {
     if (!(fileIO.loadStudents(students) && fileIO.loadCourses(courses) && fileIO.loadGrades(grades) &&
           fileIO.loadEnrollments(enrollments) && fileIO.loadSettings(enrollmentSemester) &&
           fileIO.loadPosts(posts) && fileIO.loadAssessments(assessments) &&
-          fileIO.loadAssessmentScores(assessmentScores))) {
+          fileIO.loadAssessmentScores(assessmentScores) && fileIO.loadAttendance(attendance))) {
         return false;
     }
     // 신청 학기 값이 깨져 있으면 "신청 기간 아님" 으로 시작
@@ -23,12 +23,12 @@ bool GradeManager::load() {
     return true;
 }
 
-// 메모리의 학생/과목/성적/수강신청/설정/게시물/평가 항목/항목 점수를 CSV 8개에 모두 저장한다. 하나라도 실패하면 false.
+// 메모리의 학생/과목/성적/수강신청/설정/게시물/평가 항목/항목 점수/출결을 CSV 9개에 모두 저장한다. 하나라도 실패하면 false.
 bool GradeManager::save() {
     return fileIO.saveStudents(students) && fileIO.saveCourses(courses) && fileIO.saveGrades(grades) &&
            fileIO.saveEnrollments(enrollments) && fileIO.saveSettings(enrollmentSemester) &&
            fileIO.savePosts(posts) && fileIO.saveAssessments(assessments) &&
-           fileIO.saveAssessmentScores(assessmentScores);
+           fileIO.saveAssessmentScores(assessmentScores) && fileIO.saveAttendance(attendance);
 }
 
 // ----- 학생 -----
@@ -75,6 +75,11 @@ bool GradeManager::updateStudent(const std::string& id, const Student& student) 
                 score.studentId = student.id;
             }
         }
+        for (Attendance& record : attendance) {
+            if (record.studentId == id) {
+                record.studentId = student.id;
+            }
+        }
     }
     // 모든 검사를 통과한 뒤에 마지막으로 덮어쓴다.
     *it = student;
@@ -101,6 +106,9 @@ bool GradeManager::removeStudent(const std::string& id) {
     assessmentScores.erase(std::remove_if(assessmentScores.begin(), assessmentScores.end(),
                                           [&](const AssessmentScore& score) { return score.studentId == id; }),
                            assessmentScores.end());
+    attendance.erase(std::remove_if(attendance.begin(), attendance.end(),
+                                    [&](const Attendance& record) { return record.studentId == id; }),
+                     attendance.end());
     return true;
 }
 
@@ -181,6 +189,11 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
                 score.courseCode = course.code;
             }
         }
+        for (Attendance& record : attendance) {
+            if (record.courseCode == code) {
+                record.courseCode = course.code;
+            }
+        }
     }
     // 모든 검사를 통과한 뒤에 마지막으로 덮어쓴다.
     *it = course;
@@ -213,6 +226,9 @@ bool GradeManager::removeCourse(const std::string& code) {
     assessmentScores.erase(std::remove_if(assessmentScores.begin(), assessmentScores.end(),
                                           [&](const AssessmentScore& score) { return score.courseCode == code; }),
                            assessmentScores.end());
+    attendance.erase(std::remove_if(attendance.begin(), attendance.end(),
+                                    [&](const Attendance& record) { return record.courseCode == code; }),
+                     attendance.end());
     return true;
 }
 
@@ -646,6 +662,90 @@ bool GradeManager::removeAssessmentScore(const std::string& studentId, const std
     return true;
 }
 
+// ----- 출결 (#59) -----
+// 출결 기록: 같은 (학번, 과목, 학기, 주차) 가 있으면 상태 수정, 없으면 추가.
+// 형식 오류, 없는 학생·과목, 같은 (학번, 과목, 학기) 수강신청 없음이면 false.
+// 출석 점수는 항목 점수로 저장하지 않으므로, 성공하면 그 학생의 성적만 다시 계산한다.
+bool GradeManager::setAttendance(const Attendance& record) {
+    if (!record.isValid() || findStudent(record.studentId) == nullptr ||
+        findCourse(record.courseCode) == nullptr ||
+        findEnrollment(record.studentId, record.courseCode, record.semester) == nullptr) {
+        return false;
+    }
+
+    auto it = std::find_if(attendance.begin(), attendance.end(), [&](const Attendance& current) {
+        return current.studentId == record.studentId && current.courseCode == record.courseCode &&
+               current.semester == record.semester && current.week == record.week;
+    });
+    if (it != attendance.end()) {
+        it->status = record.status;
+    } else {
+        attendance.push_back(record);
+    }
+    syncGrade(record.studentId, record.courseCode, record.semester);
+    return true;
+}
+
+// 출결 기록 삭제: 지우고 그 학생의 성적을 다시 계산한다. 없으면 false.
+bool GradeManager::removeAttendance(const std::string& studentId, const std::string& courseCode,
+                                    const std::string& semester, int week) {
+    // 인자가 attendance 원소를 가리킬 수도 있으므로 지우기 전에 복사해 둔다.
+    const std::string id = studentId;
+    const std::string code = courseCode;
+    const std::string sem = semester;
+
+    auto it = std::find_if(attendance.begin(), attendance.end(), [&](const Attendance& record) {
+        return record.studentId == id && record.courseCode == code && record.semester == sem &&
+               record.week == week;
+    });
+    if (it == attendance.end()) {
+        return false;
+    }
+
+    attendance.erase(it);
+    syncGrade(id, code, sem);
+    return true;
+}
+
+// 그 과목·학기의 출결 기록 전부 (복사본 반환).
+std::vector<Attendance> GradeManager::getAttendanceByCourse(const std::string& courseCode,
+                                                            const std::string& semester) const {
+    std::vector<Attendance> result;
+    for (const Attendance& record : attendance) {
+        if (record.courseCode == courseCode && record.semester == semester) {
+            result.push_back(record);
+        }
+    }
+    return result;
+}
+
+// 특정 학생의 출결 기록 전부 (복사본 반환).
+std::vector<Attendance> GradeManager::getAttendanceByStudent(const std::string& studentId) const {
+    std::vector<Attendance> result;
+    for (const Attendance& record : attendance) {
+        if (record.studentId == studentId) {
+            result.push_back(record);
+        }
+    }
+    return result;
+}
+
+// 성적 계산용 출석 점수: 그 학생·과목·학기 기록이 있으면 환산 점수, 하나도 없으면 100 (모두 출석).
+// (summarizeAttendance 의 "기록 없음 = -1" 은 화면·API 요약용이라 여기서만 100 으로 바꾼다.)
+double GradeManager::attendanceCategoryScore(const std::string& studentId, const std::string& courseCode,
+                                             const std::string& semester) const {
+    std::vector<Attendance> records;
+    for (const Attendance& record : attendance) {
+        if (record.studentId == studentId && record.courseCode == courseCode && record.semester == semester) {
+            records.push_back(record);
+        }
+    }
+    if (records.empty()) {
+        return 100.0;
+    }
+    return summarizeAttendance(records).score;
+}
+
 // ----- 최종 성적 동기화 -----
 // 항목이 없는 과목·학기(직접 입력 과목)는 건드리지 않는다.
 // finalScore 가 0 이상이면 grades 의 (학번, 과목, 학기) 성적을 추가하거나 점수를 바꾸고,
@@ -715,7 +815,3 @@ bool GradeManager::removeGradingScheme(const std::string&, const std::string&) {
     return false;
 }
 
-// 구현: #66 (출결 기록 조회는 #59)
-double GradeManager::attendanceCategoryScore(const std::string&, const std::string&, const std::string&) const {
-    return 100.0;
-}

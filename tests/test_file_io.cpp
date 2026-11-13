@@ -248,3 +248,67 @@ TEST_CASE(fileIO_assessments_skip_broken_lines) {
     CHECK(items.empty());
     CHECK(scores.empty());
 }
+
+// ----- 출결 (#59) -----
+
+TEST_CASE(fileIO_attendance_roundtrip) {
+    TempDir dir;
+    Attendance first;
+    first.studentId = "25103008";
+    first.courseCode = "109201";
+    first.semester = "2026-2";
+    first.week = 1;
+    first.status = "결석";
+    Attendance second = first;
+    second.week = 16;
+    second.status = "공결";
+    Attendance third = first;
+    third.studentId = "25103006";
+    third.status = "지각";
+    const std::vector<Attendance> records = {first, second, third};
+    {
+        FileIO io(dir.str());
+        CHECK(io.saveAttendance(records));
+    }
+    CHECK(readFile(dir.path() / "attendance.csv").rfind("studentId,courseCode,semester,week,status\n", 0) == 0);
+
+    FileIO io(dir.str());
+    std::vector<Attendance> loaded;
+    CHECK(io.loadAttendance(loaded));
+    CHECK_EQ(loaded.size(), records.size());
+    for (size_t i = 0; i < records.size() && i < loaded.size(); i++) {
+        CHECK(loaded[i].studentId == records[i].studentId && loaded[i].courseCode == records[i].courseCode &&
+              loaded[i].semester == records[i].semester && loaded[i].week == records[i].week &&
+              loaded[i].status == records[i].status);
+    }
+
+    // 다시 저장하면 이전 파일이 .bak 으로 남음
+    CHECK(io.saveAttendance({first}));
+    CHECK(std::filesystem::exists(dir.path() / "attendance.csv.bak"));
+}
+
+TEST_CASE(fileIO_attendance_skip_broken_lines) {
+    TempDir dir;
+    {
+        std::ofstream out(dir.path() / "attendance.csv", std::ios::binary);
+        out << "studentId,courseCode,semester,week,status\n"
+            << "25103008,109201,2026-2,1,결석\n"
+            << "25103008,109201,2026-2,abc,출석\n"  // 숫자 아님
+            << "25103008,109201,2026-2,17,출석\n"   // 주차 범위 밖
+            << "25103008,109201,2026-2,2,조퇴\n"    // 알 수 없는 상태
+            << "25103008,109201,2026-2,1,출석\n"    // 같은 주차 중복
+            << "2510300,109201,2026-2,3,출석\n"     // 학번 7자리
+            << "25103008,109201,2026-2\n";          // 칸 부족
+    }
+
+    FileIO io(dir.str());
+    std::vector<Attendance> records;
+    CHECK(io.loadAttendance(records));
+    CHECK_EQ(records.size(), static_cast<size_t>(1));
+    CHECK(!records.empty() && records[0].week == 1 && records[0].status == "결석");
+
+    // 파일이 없으면 빈 목록
+    FileIO missing((dir.path() / "missing").string());
+    CHECK(missing.loadAttendance(records));
+    CHECK(records.empty());
+}
