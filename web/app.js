@@ -2064,7 +2064,10 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
     ]);
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
     const creditOf = (code) => Number(state.courses.find((c) => c.code === code)?.credit) || 0;
-    const hasGpa = typeof summary.gpa === 'number';
+    const hasGpa = typeof summary.gpa === 'number' && summary.credits > 0;
+    const hasSemesters = summary.semesters.length > 0;  // P/F 만 있어도 학기 표는 보임
+    const hasPf = grades.some((g) => PF_LETTERS.includes(g.letter));
+    const earnedText = (x) => (typeof x?.earnedCredits === 'number' ? esc(x.earnedCredits) : '-');
     // 학기 → {gpa, credits}. 계산 학점이 0 인 학기(지워진 성적만 있음 등)는 평점 '-'
     const semInfo = Object.fromEntries(summary.semesters.map((x) => [x.semester, x]));
     const semGpa = (x) => (x && x.credits > 0 ? fmt(x.gpa) : '-');
@@ -2072,30 +2075,36 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
     const majorGpaText = (x) => (x && x.majorCredits > 0 ? fmt(x.majorGpa) : '-');
     const majorCreditText = (x) => (x && x.majorCredits > 0 ? esc(x.majorCredits) : '-');
 
-    const summaryHtml = hasGpa ? `
+        const summaryHtml = hasSemesters ? `
         <h3 class="sub-title">학기별 평점</h3>
         <div class="table-wrap">
-                        <table><thead><tr><th>학기</th><th class="num">평점평균</th><th class="num">등록 학점</th>
+            <table><thead><tr><th>학기</th><th class="num">평점평균</th><th class="num">계산 학점</th><th class="num">취득 학점</th>
                 <th class="num">전공 평점</th><th class="num">전공 학점</th></tr></thead>
             <tbody>${summary.semesters.map((x) => `
                 <tr><td>${esc(x.semester)}</td><td class="num">${semGpa(x)}</td><td class="num">${esc(x.credits)}</td>
+                <td class="num">${earnedText(x)}</td>
                 <td class="num">${majorGpaText(x)}</td><td class="num">${majorCreditText(x)}</td></tr>`).join('')}
             </tbody>
-            <tfoot><tr><td>전체 누적</td><td class="num"><b>${fmt(summary.gpa)}</b></td><td class="num"><b>${esc(summary.credits)}</b></td>
+            <tfoot><tr><td>전체 누적</td><td class="num"><b>${semGpa(summary)}</b></td><td class="num"><b>${esc(summary.credits)}</b></td>
+                <td class="num"><b>${earnedText(summary)}</b></td>
                 <td class="num"><b>${majorGpaText(summary)}</b></td><td class="num"><b>${majorCreditText(summary)}</b></td></tr></tfoot></table>
         </div>
+        ${hasPf ? '<p class="hint">P/F 과목은 평점·계산 학점에 들어가지 않고, 취득 학점에는 P 만 더해집니다</p>' : ''}
         ${gpaChartSvg(summary.semesters.filter((x) => x.credits > 0))}`
         : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
 
     const semItems = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
         const info = semInfo[sem];
-        const rows = grades.filter((g) => g.semester === sem).map((g) => `
-            <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
+                const rows = grades.filter((g) => g.semester === sem).map((g) => {
+            const pf = PF_LETTERS.includes(g.letter);
+            return `
+            <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}${pf ? ' <span class="tag">P/F</span>' : ''}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
-            <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
+            <td class="num">${pf ? '-' : esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`;
+        }).join('');
         return `
             <details class="fold" data-key="sem:${esc(sem)}">
-                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 등록 학점 ${esc(info?.credits ?? '-')}</summary>
+                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 계산 학점 ${esc(info?.credits ?? '-')} · 취득 학점 ${earnedText(info)}</summary>
                 <div class="table-wrap">
                     <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
                 </div>
@@ -2118,7 +2127,7 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
                     <div class="gpa-col">
                         <span>전체 누적 GPA</span>
                         ${hasGpa ? `<b>${fmt(summary.gpa)}</b>` : '<b class="small">성적 없음</b>'}
-                        <small>등록 학점 ${esc(summary.credits)}</small>
+                        <small>계산 학점 ${esc(summary.credits)}</small>
                     </div>
                     <div class="gpa-col">
                         <span>전공 GPA</span>
@@ -2126,6 +2135,7 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
                         <small>전공 학점 ${majorCreditText(summary)}</small>
                     </div>
                 </div>
+                ${stat('취득 학점', earnedText(summary), true)}
                 ${stat('학번', esc(s.id), true)}
                 ${stat('수강 건수', grades.length)}
             </div>

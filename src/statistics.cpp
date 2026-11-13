@@ -18,12 +18,14 @@ struct GpaSum {
     double credits = 0.0;
     double majorPoints = 0.0;
     double majorCredits = 0.0;
+    double earned = 0.0;
 
     void add(const GpaSum& other) {
         points += other.points;
         credits += other.credits;
         majorPoints += other.majorPoints;
         majorCredits += other.majorCredits;
+        earned += other.earned;
     }
 };
 
@@ -38,13 +40,20 @@ std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm,
                                             const std::vector<Grade>& allGrades) {
     const std::vector<Grade> grades = Retake::activeGrades(studentGrades);
     std::map<std::string, GpaSum> sums;
-    for (const Grade& g : grades) {
+        for (const Grade& g : grades) {
         const Course* course = gm.findCourse(g.courseCode);
         if (course == nullptr) continue;
-        const double weighted = letterToPoint(Retake::officialLetter(g, allGrades)) * course->credit;
-        GpaSum& sum = sums[g.semester];
+        const std::string letter = Retake::officialLetter(g, allGrades);
+        GpaSum& sum = sums[g.semester];  // P/F 만 있는 학기도 목록에 나오게 먼저 만듦
+        if (course->isPassFail()) {
+            // 평점·계산 학점·전공 GPA 에서 제외, 취득 학점에는 P 만 (NP 는 0)
+            if (letter == kLetterPass) sum.earned += course->credit;
+            continue;
+        }
+        const double weighted = letterToPoint(letter) * course->credit;
         sum.points += weighted;
         sum.credits += course->credit;
+        if (letter != "F" && letter != "R") sum.earned += course->credit;
         if (isMajorCourse(*course)) {
             sum.majorPoints += weighted;
             sum.majorCredits += course->credit;
@@ -76,12 +85,14 @@ GpaSummary toSummary(const std::map<std::string, GpaSum>& sums) {
         s.majorGpa = toMajorGpa(sum);
         s.majorCredits = static_cast<int>(sum.majorCredits);
         summary.semesters.push_back(s);
+        s.earnedCredits = static_cast<int>(sum.earned);
         total.add(sum);
     }
     summary.gpa = toGpa(total);
     summary.credits = static_cast<int>(total.credits);
     summary.majorGpa = toMajorGpa(total);
     summary.majorCredits = static_cast<int>(total.majorCredits);
+    summary.earnedCredits = static_cast<int>(total.earned);
     return summary;
 }
 
@@ -107,7 +118,10 @@ CourseStats courseStats(const GradeManager& gm, const std::string& courseCode) {
     CourseStats stats;
     stats.courseCode = courseCode;
 
-    auto grades = Retake::activeGrades(gm.getGradesByCourse(courseCode));
+        // P/F 과목은 점수(P = 100, NP = 0)가 의미 없으므로 점수 통계에서 제외 → 성적 없는 과목처럼 count = 0
+    const Course* course = gm.findCourse(courseCode);
+    const bool passFail = course != nullptr && course->isPassFail();
+    auto grades = passFail ? std::vector<Grade>{} : Retake::activeGrades(gm.getGradesByCourse(courseCode));
     if(grades.empty()){
         stats.count=0;
         stats.average=0;
@@ -298,7 +312,7 @@ std::vector<WarningEntry> academicWarnings(const GradeManager& gm, const std::st
         for (const Grade& g : gm.getGrades()) {
             if (g.studentId != studentId || g.semester != semester) continue;
             const Course* course = gm.findCourse(g.courseCode);
-            if (course == nullptr) continue;
+            if (course == nullptr || course->isPassFail()) continue;  // P/F 는 학사경고 평점에서 제외
             pointSum += letterToPoint(g.letter()) * course->credit;
             creditSum += course->credit;
         }
