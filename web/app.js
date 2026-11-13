@@ -29,7 +29,7 @@ const GRADE_PAGE_SIZE = 10;
 
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
-    myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
+    myEnrollments: [], timetableSem: '', timetableCandidates: [], timetableMessage: '', courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
     assessSem: null, assess: null, attendSem: null, attend: null, currentSem: '', baseLoadedAt: 0,
 };
 
@@ -219,14 +219,17 @@ $('dlg-form').addEventListener('submit', async (e) => {
 //     options 가 있으면 선택 상자, type 이 'textarea' 면 여러 줄 입력칸, 그 외는 입력칸
 //     readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
 //     optional 이면 빈칸으로 저장할 수 있음 (그 외 입력칸은 필수)
+//     autocomplete 를 주지 않으면 "off": 브라우저 자동완성이 저장된 이름·주소 등으로 칸을 덮어쓰지 않게 함
+//       (예: 학생 수정의 name="name" 칸을 브라우저가 다른 이름으로 채우는 경우). 비밀번호 칸은 'new-password' 처럼 직접 지정
 //   values: 처음 채워둘 값, onSubmit: 저장할 때 실행할 함수 (폼 값 객체를 받음)
 //   validate: 저장 전에 폼 값을 검사하는 함수 (잘못되면 이유 문자열을 돌려줌, 서버 호출 전에 막음)
 function openForm({ title, fields, values = {}, onSubmit, validate }) {
     const html = fields.map((f) => {
         const v = esc(values[f.name] ?? '');
+        const ac = `autocomplete="${esc(f.autocomplete || 'off')}"`;
         let input;
         if (f.options) {
-            input = `<select name="${f.name}" ${f.readonly ? 'disabled' : ''}>` +
+            input = `<select name="${f.name}" ${ac} ${f.readonly ? 'disabled' : ''}>` +
                 f.options.map((o) =>
                     `<option value="${esc(o.value)}" ${String(o.value) === String(values[f.name]) ? 'selected' : ''}>${esc(o.label)}</option>`
                 ).join('') + '</select>';
@@ -234,14 +237,14 @@ function openForm({ title, fields, values = {}, onSubmit, validate }) {
             if (f.readonly) input += `<input type="hidden" name="${f.name}" value="${v}">`;
         } else if (f.type === 'textarea') {
             // 시작 태그 바로 뒤 줄바꿈 하나는 HTML 이 버리므로, 값이 줄바꿈으로 시작해도 남도록 하나를 먼저 넣음
-            input = `<textarea name="${f.name}" rows="6" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
+            input = `<textarea name="${f.name}" rows="6" ${ac} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
                 ${f.optional ? '' : 'required'}>\n${v}</textarea>`;
         } else {
             input = `<input name="${f.name}" type="${f.type || 'text'}" value="${v}" ${f.step ? `step="${f.step}"` : ''}
                 ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}
                 ${f.pattern ? `pattern="${esc(f.pattern)}"` : ''} ${f.hint ? `title="${esc(f.hint)}"` : ''}
                 ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
-                ${f.autocomplete ? `autocomplete="${f.autocomplete}"` : ''} ${f.optional ? '' : 'required'}>`;
+                ${ac} ${f.optional ? '' : 'required'}>`;
         }
         return `<div class="field"><label>${f.label}</label>${input}</div>`;
     }).join('') + '<div class="form-error"></div>';
@@ -266,10 +269,10 @@ async function confirmDelete(msg, fn) {
 const renderers = {
     courses: renderCourses,
     enroll: renderEnroll,
+    timetable: renderTimetable,
     students: renderStudents,
     grades: renderGrades,
     myreport: renderMyReport,
-    timetable: renderTimetable,
     accounts: renderAccounts,
     course: renderCoursePage,
 };
@@ -280,10 +283,10 @@ const currentTab = () => document.querySelector('main .tab.active').id.slice('ta
 const loadingSlots = {
     courses: ['course-list', '<li class="empty">불러오는 중…</li>'],
     enroll: ['enroll-content', '<p class="hint">불러오는 중…</p>'],
+    timetable: ['timetable-content', '<p class="hint">불러오는 중…</p>'],
     students: ['student-body', emptyRow(7, '불러오는 중…')],
     grades: ['grade-body', emptyRow(7, '불러오는 중…')],
     myreport: ['myreport-body', '<p class="hint">불러오는 중…</p>'],
-    timetable: ['timetable-content', '<p class="hint">불러오는 중…</p>'],
     accounts: ['account-body', emptyRow(5, '불러오는 중…')],
     course: ['course-posts', '<p class="hint">불러오는 중…</p>'],
 };
@@ -293,6 +296,7 @@ function clearCoursePage() {
     state.coursePosts = [];
     state.assess = null;
     state.attend = null;
+    closeAttendPicker();
     ['course-hero', 'course-filter', 'course-posts', 'course-sem',
         'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
     delete $('attend-body').dataset.key;
@@ -304,6 +308,7 @@ function clearCoursePage() {
 //   등록·수정·삭제(refreshAll) 뒤에는 지금 탭만 다시 그리므로, 나머지 탭은 dirtyTabs 에 넣어 다음에 열 때 옛 값을 비우고 새로 받음
 //   code: 과목 페이지면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌리고 화면도 비움
 function showTab(name, code, assessSemester = null) {
+    closeAttendPicker();
     if (code && code !== state.courseCode) {
         state.courseCode = code;
         state.courseSem = null;
@@ -420,6 +425,9 @@ function resetView() {
     state.accounts = [];
     state.enrollCtx = null;
     state.myEnrollments = [];
+    state.timetableSem = '';
+    state.timetableCandidates = [];
+    state.timetableMessage = '';
     state.currentSem = '';
     state.courseCode = null;
     state.courseSem = null;
@@ -429,12 +437,12 @@ function resetView() {
     state.assess = null;
     state.attendSem = null;
     state.attend = null;
-    ['course-list', 'student-body', 'grade-body', 'enroll-content', 'myreport-body', 'account-body',
+    closeAttendPicker();
+    ['course-list', 'student-body', 'grade-body', 'enroll-content', 'timetable-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-hero', 'course-filter', 'course-posts', 'course-sem',
-        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'grade-pagination', 'timetable-content'].forEach((id) => { const el = $(id); if (el) el.innerHTML = ''; });
-    if ($('timetable-content')) delete $('timetable-content').dataset.semester;
+        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'grade-pagination'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
     delete $('attend-body').dataset.key;
@@ -767,7 +775,7 @@ async function renderCoursePage() {
     state.coursePosts = posts;
     drawPosts();
 
-    if (!manage) { state.assess = null; state.attend = null; return; }
+    if (!manage) { closeAttendPicker(); state.assess = null; state.attend = null; return; }
     if (state.assessSem && !sems.includes(state.assessSem) && !isLockedSemester(state.assessSem)) {
         sems.push(state.assessSem);
         sems.sort().reverse();
@@ -1103,9 +1111,7 @@ $('assess-body').addEventListener('change', async (e) => {
 
 // ───────── 출결 (과목 페이지, 관리자·담당 교수) ─────────
 
-// 출결 상태 (서버 Attendance 와 같은 값). 칸을 누를 때마다 없음('') → 출석 → 지각 → 결석 → 공결 → 없음 순으로 바뀜
-const ATTEND_STATUSES = ['출석', '지각', '결석', '공결'];
-const nextAttendStatus = (s) => ATTEND_STATUSES[ATTEND_STATUSES.indexOf(s) + 1] ?? '';
+// 출결 상태 값은 서버 Attendance 와 같은 출석·지각·결석·공결 ('' = 기록 없음). 칸을 누르면 칸 옆 선택 상자(openAttendPicker)에서 고름
 // 상태 → 칸 색 클래스 (style.css 의 button.att.*)
 const ATTEND_CLASS = { 출석: 'present', 지각: 'late', 결석: 'absent', 공결: 'excused' };
 // 수업 주차 수 (서버 출결 주차 1~16, 게시물 주차와 같음)
@@ -1130,6 +1136,7 @@ async function renderAttend() {
     const sem = state.attendSem ?? '';
     const box = $('attend-body');
     const stale = () => seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code || state.attendSem !== sem;
+    closeAttendPicker();
     state.attend = null;
     if (!sem) {
         box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
@@ -1153,7 +1160,7 @@ async function renderAttend() {
         const rows = ids.map((sid) => `
             <tr data-sid="${esc(sid)}" data-name="${esc(studentName(sid))}">
                 <td class="att-name"><b>${esc(studentName(sid))}</b> <span class="hint">${esc(sid)}</span></td>
-                ${weeks.map((w) => `<td class="att-td"><button type="button" class="att" data-w="${w}"></button></td>`).join('')}
+                ${weeks.map((w) => `<td class="att-td"><button type="button" class="att" data-w="${w}" aria-haspopup="menu" aria-expanded="false"></button></td>`).join('')}
                 <td class="num att-eq"></td>
                 <td class="num att-score"></td>
             </tr>`).join('');
@@ -1202,9 +1209,72 @@ function lockAttendColumn() {
     });
 }
 
-// 칸을 누르면 다음 상태로 바꾸고 바로 저장 (상태는 PUT, 없음은 DELETE). 저장 중인 칸은 다시 눌러도 무시
-//   실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 기준 점수표를 다시 그림
-async function toggleAttend(btn) {
+// 선택 상자 버튼: status 는 서버 상태값 ('' = 기록 지우기), text = 상자에 보이는 글자, title = 전체 뜻
+const ATTEND_CHOICES = [
+    { status: '출석', text: '출', title: '출석' },
+    { status: '지각', text: '지', title: '지각' },
+    { status: '결석', text: '결', title: '결석' },
+    { status: '공결', text: '공', title: '공결' },
+    { status: '', text: 'X', title: '기록 지우기' },
+];
+// 지금 열려 있는 선택 상자 {box, btn, ctx} (없으면 null). 상자는 document.body 에 position: fixed 로 두고
+//   스크롤·창 크기 변경 때 닫으므로 칸을 따라가지 않고, 한 번에 하나만 열림
+let attendPicker = null;
+
+// 선택 상자 닫기. focusCell 이면 원래 칸으로 포커스를 돌려줌 (Esc·선택·Tab). 열려 있지 않으면 아무것도 하지 않음
+function closeAttendPicker(focusCell = false) {
+    if (!attendPicker) return;
+    const { box, btn } = attendPicker;
+    attendPicker = null;
+    box.remove();
+    btn.setAttribute('aria-expanded', 'false');
+    if (focusCell && btn.isConnected) btn.focus({ preventScroll: true });
+}
+
+// 칸 btn 바로 아래 (화면 아래에 자리가 없으면 위)에 출/지/결/공/X 선택 상자를 열고 첫 버튼에 포커스를 줌
+//   지금 상태 버튼은 강조, 기록이 없는 칸(빈칸)은 X 를 비활성으로 둠. 버튼을 누르면 닫고 저장 (setAttend)
+function openAttendPicker(btn, ctx) {
+    const tr = btn.closest('tr');
+    const cur = ctx.records.get(attendKey(tr.dataset.sid, btn.dataset.w)) ?? '';
+    const box = document.createElement('div');
+    box.className = 'att-picker';
+    box.setAttribute('role', 'menu');
+    box.setAttribute('aria-orientation', 'horizontal');
+    box.setAttribute('aria-label', `${tr.dataset.name} ${btn.dataset.w}주 출결 선택`);
+    box.innerHTML = ATTEND_CHOICES.map((c) => {
+        const radio = c.status !== '';
+        const on = radio && c.status === cur;
+        return `<button type="button" role="${radio ? 'menuitemradio' : 'menuitem'}" ${radio ? `aria-checked="${on}"` : ''}
+            class="att ${ATTEND_CLASS[c.status] ?? 'clear'}${on ? ' current' : ''}" data-status="${c.status}"
+            title="${c.title}" aria-label="${c.title}" ${!radio && cur === '' ? 'disabled' : ''}>${c.text}</button>`;
+    }).join('');
+    box.onclick = (e) => {
+        const pick = e.target.closest('button[data-status]');
+        if (!pick || attendPicker?.box !== box) return;
+        closeAttendPicker(true);
+        setAttend(btn, pick.dataset.status);
+    };
+    document.body.appendChild(box);
+    // 칸 가운데 아래에 붙이고 화면 밖으로 나가지 않게 보정 (아래에 자리가 없고 위에는 있으면 칸 위)
+    const r = btn.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const w = box.offsetWidth;
+    const h = box.offsetHeight;
+    const gap = 4;
+    const edge = 8;
+    let top = r.bottom + gap;
+    if (top + h > vh - edge && r.top - gap - h >= edge) top = r.top - gap - h;
+    box.style.top = Math.max(edge, Math.min(top, vh - h - edge)) + 'px';
+    box.style.left = Math.max(edge, Math.min(r.left + (r.width - w) / 2, vw - w - edge)) + 'px';
+    attendPicker = { box, btn, ctx };
+    btn.setAttribute('aria-expanded', 'true');
+    box.querySelector('button:not(:disabled)').focus({ preventScroll: true });
+}
+
+// 칸 btn 의 출결을 next ('출석'|'지각'|'결석'|'공결', '' = 기록 지우기) 로 바꾸고 바로 저장 (상태는 PUT, 지우기는 DELETE)
+//   저장 중인 칸과 이미 같은 값은 무시. 실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 기준 점수표를 다시 그림
+async function setAttend(btn, next) {
     const ctx = state.attend;
     if (!ctx || btn.dataset.busy) return;
     const tr = btn.closest('tr');
@@ -1212,7 +1282,7 @@ async function toggleAttend(btn) {
     const week = Number(btn.dataset.w);
     const key = attendKey(sid, week);
     const prev = ctx.records.get(key) ?? '';
-    const next = nextAttendStatus(prev);
+    if (next === prev) return;
     const show = (s) => {
         if (s) ctx.records.set(key, s); else ctx.records.delete(key);
         paintAttendCell(btn, s);
@@ -1273,10 +1343,272 @@ async function refreshAssessAttend(ctx, sid, latest) {
 }
 
 $('attend-sem').onchange = () => { state.attendSem = $('attend-sem').value; renderAttend(); };
+// 칸을 누르면 그 칸 옆에 선택 상자를 열고, 같은 칸을 다시 누르면 닫음 (다른 칸을 누르면 이전 상자는 닫힘)
 $('attend-body').onclick = (e) => {
     const b = e.target.closest('button.att');
-    if (b) toggleAttend(b);
+    if (!b) return;
+    const same = attendPicker?.btn === b;
+    closeAttendPicker();
+    if (same || !state.attend || b.dataset.busy) return;
+    openAttendPicker(b, state.attend);
 };
+// 상자 밖을 누르거나 (칸 자신은 위 onclick 이 열고 닫음), Esc·스크롤·창 크기 변경이면 닫음
+document.addEventListener('pointerdown', (e) => {
+    if (attendPicker && !attendPicker.box.contains(e.target) && !attendPicker.btn.contains(e.target)) closeAttendPicker();
+});
+window.addEventListener('scroll', (e) => {
+    if (attendPicker && !attendPicker.box.contains(e.target)) closeAttendPicker();
+}, true);
+window.addEventListener('resize', () => closeAttendPicker());
+// 키보드: 좌우 방향키로 버튼 이동, Esc 는 닫고 원래 칸으로 포커스, Tab 은 원래 칸에서 이어서 이동
+document.addEventListener('keydown', (e) => {
+    if (!attendPicker) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeAttendPicker(true); return; }
+    if (e.key === 'Tab') { closeAttendPicker(true); return; }
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    const items = [...attendPicker.box.querySelectorAll('button:not(:disabled)')];
+    const i = items.indexOf(document.activeElement);
+    items[i < 0 ? 0 : (i + step + items.length) % items.length].focus({ preventScroll: true });
+});
+
+// ───── 강의시간 ─────
+
+// 강의시간 문자열 → [{day, start, end}] (day: '월'~'일' 한 글자, 교시 start~end).
+// 서버 src/course.cpp 의 parseSlot·splitSlots 와 같은 규칙: 칸은 공백·쉼표 구분,
+// 한 칸 = 요일 + (n) 또는 (n~m), 교시 1~30 (최대 두 자리), 잘못된 칸·빈 문자열은 무시
+function parseSchedule(str) {
+    const slots = [];
+    for (const text of String(str ?? '').split(/[ ,]/)) {
+        const m = /^([월화수목금토일])\((\d{1,2})(?:~(\d{1,2}))?\)$/.exec(text);
+        if (!m) continue;
+        const start = Number(m[2]);
+        const end = m[3] === undefined ? start : Number(m[3]);
+        if (start < 1 || end > 30 || start > end) continue;
+        slots.push({ day: m[1], start, end });
+    }
+    return slots;
+}
+
+// 두 강의시간(문자열)의 겹침 → [{day, start, end}] (겹치는 요일·교시 구간, 없으면 빈 배열).
+// 같은 요일에 교시 구간이 하나라도 겹치면 겹침 (서버 schedulesOverlap 와 같음). 빈 강의시간은 겹치지 않음
+function scheduleConflict(a, b) {
+    const slotsB = parseSchedule(b);
+    const spans = [];
+    for (const x of parseSchedule(a)) {
+        for (const y of slotsB) {
+            if (x.day !== y.day || x.start > y.end || y.start > x.end) continue;
+            spans.push({ day: x.day, start: Math.max(x.start, y.start), end: Math.min(x.end, y.end) });
+        }
+    }
+    return spans;
+}
+
+// 겹침 구간 표시 글자: 월(3~4교시) / 월(3교시)
+const formatSpan = (s) => `${s.day}(${s.start === s.end ? s.start : `${s.start}~${s.end}`}교시)`;
+
+
+// ───────── 학생 시간표 ─────────
+
+// 학번·학기별 후보 과목 저장 키. 후보는 서버 데이터에 쓰지 않는다.
+function timetableStorageKey(semester) {
+    return `team01:timetable:${state.me?.studentId ?? ''}:${semester}`;
+}
+function loadTimetableCandidates(semester) {
+    if (!state.me?.studentId || !semester) return [];
+    try {
+        const raw = localStorage.getItem(timetableStorageKey(semester));
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? [...new Set(parsed.filter((code) =>
+            typeof code === 'string' && state.courses.some((c) => c.code === code))) ] : [];
+    } catch {
+        state.timetableMessage = '브라우저 저장 공간을 읽을 수 없습니다';
+        return [];
+    }
+}
+function saveTimetableCandidates() {
+    try {
+        localStorage.setItem(timetableStorageKey(state.timetableSem), JSON.stringify(state.timetableCandidates));
+        return true;
+    } catch {
+        state.timetableMessage = '후보 과목을 브라우저에 저장하지 못했습니다';
+        return false;
+    }
+}
+const timetableCourse = (code) => state.courses.find((c) => c.code === code);
+const timetableApplied = (semester) => state.myEnrollments
+    .filter((e) => e.semester === semester)
+    .map((e) => timetableCourse(e.courseCode)).filter(Boolean);
+
+function timetableConflictReason(course, others) {
+    const hits = others.map((other) => ({
+        course: other,
+        spans: scheduleConflict(course.schedule, other.schedule),
+    })).filter((x) => x.spans.length);
+    if (!hits.length) return '';
+    return hits.map((x) => `${x.course.name}: ${x.spans.map(formatSpan).join(', ')}`).join(' / ');
+}
+function timetableColorIndex(code) {
+    let hash = 0;
+    for (const ch of String(code ?? '')) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return hash % 4;
+}
+function timetableBlock(course, slot, dayIndex, rowCount, candidate = false) {
+    const rowStart = slot.start + 1;
+    const span = slot.end - slot.start + 1;
+    const title = `${course.name} · ${course.professor || '교수 미정'} · ${slot.day} ${slot.start}~${slot.end}교시`;
+    return `<div class="tt-block${candidate ? ' candidate' : ''}" data-color="${timetableColorIndex(course.code)}"
+        style="grid-column:${dayIndex + 2};grid-row:${rowStart} / span ${span}"
+        title="${esc(title)}">
+        <b>${esc(course.name)}</b><span>${esc(course.professor || '교수 미정')}</span>
+    </div>`;
+}
+
+function renderTimetableGrid(semester, applied, candidates) {
+    const allForTerm = [...applied, ...candidates];
+    const dayOrder = ['월', '화', '수', '목', '금', '토', '일'];
+    const allSlots = state.courses.flatMap((c) => parseSchedule(c.schedule));
+    const weekend = allSlots.some((s) => s.day === '토' || s.day === '일');
+    const days = weekend ? dayOrder : dayOrder.slice(0, 5);
+    const maxPeriod = Math.max(9, ...allSlots.map((s) => s.end));
+    const cells = ['<div class="tt-corner"></div>',
+        ...days.map((d) => `<div class="tt-day">${d}</div>`)];
+    for (let period = 1; period <= maxPeriod; period++) {
+        cells.push(`<div class="tt-period">${period}교시</div>`);
+        days.forEach((day) => cells.push(`<div class="tt-cell" data-day="${day}" data-period="${period}"></div>`));
+    }
+    const blocks = [];
+    allForTerm.forEach((course) => {
+        const isCandidate = candidates.some((c) => c.code === course.code);
+        for (const slot of parseSchedule(course.schedule)) {
+            const dayIndex = days.indexOf(slot.day);
+            if (dayIndex >= 0) blocks.push(timetableBlock(course, slot, dayIndex, maxPeriod, isCandidate));
+        }
+    });
+    return `<div class="tt-grid-scroll"><div class="tt-grid" style="--tt-days:${days.length};--tt-periods:${maxPeriod};grid-template-columns:56px repeat(${days.length},minmax(0,1fr));grid-template-rows:36px repeat(${maxPeriod},48px)">
+        ${cells.join('')}${blocks.join('')}
+    </div></div>`;
+}
+
+async function renderTimetable() {
+    if (state.me?.role !== 'student') return;
+    const content = $('timetable-content');
+    const semesters = visibleSemesters([
+        state.currentSem,
+        ...state.myEnrollments.map((e) => e.semester),
+    ]);
+    const preferred = state.timetableSem && semesters.includes(state.timetableSem)
+        ? state.timetableSem : (semesters.includes(state.currentSem) ? state.currentSem : semesters[0] || '');
+    state.timetableSem = preferred;
+
+    if (!semesters.length) {
+        content.innerHTML = '<p class="hint">표시할 학기가 없습니다</p>';
+        return;
+    }
+    const appliedEnrollments = state.myEnrollments.filter((e) => e.semester === preferred);
+    const appliedCodes = new Set(appliedEnrollments.map((e) => e.courseCode));
+    state.timetableCandidates = loadTimetableCandidates(preferred)
+        .filter((code) => !appliedCodes.has(code));
+    const applied = appliedEnrollments.map((e) => timetableCourse(e.courseCode)).filter(Boolean);
+    const candidates = state.timetableCandidates.map(timetableCourse).filter(Boolean);
+    const credits = applied.reduce((sum, c) => sum + (Number(c.credit) || 0), 0);
+    const unscheduledApplied = applied.filter((c) => !parseSchedule(c.schedule).length);
+    const unscheduledCandidates = candidates.filter((c) => !parseSchedule(c.schedule).length);
+
+    content.innerHTML = `
+        <div class="toolbar tt-toolbar">
+            <label for="timetable-semester">학기</label>
+            <select id="timetable-semester">${semesters.map((s) => `<option value="${esc(s)}" ${s === preferred ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+            <span class="spacer"></span>
+            <strong>신청 학점 ${credits}학점</strong>
+        </div>
+        <div class="tt-legend"><span class="tt-legend-applied">신청 과목</span><span class="tt-legend-candidate">후보 과목</span></div>
+        ${renderTimetableGrid(preferred, applied, candidates)}
+        <section class="tt-unscheduled">
+            <h3 class="sub-title">시간 미정</h3>
+            ${unscheduledApplied.length || unscheduledCandidates.length ? `
+                <div class="tt-unscheduled-list">
+                    ${unscheduledApplied.map((c) => `<span class="tt-unscheduled-item">${esc(c.name)} <small>신청</small></span>`).join('')}
+                    ${unscheduledCandidates.map((c) => `<span class="tt-unscheduled-item candidate">${esc(c.name)} <small>후보</small></span>`).join('')}
+                </div>` : '<p class="hint">시간이 정해지지 않은 과목이 없습니다</p>'}
+        </section>
+        <section class="tt-candidate-section">
+            <h3 class="sub-title">후보 과목 추가</h3>
+            <div class="toolbar">
+                <select id="timetable-course-pick">
+                    <option value="">과목을 선택하세요</option>
+                    ${state.courses.filter((c) => !appliedCodes.has(c.code) && !state.timetableCandidates.includes(c.code))
+                        .map((c) => `<option value="${esc(c.code)}">${esc(c.name)} (${esc(c.code)}) · ${esc(c.schedule || '시간 미정')}</option>`).join('')}
+                </select>
+                <button class="primary" id="timetable-add-candidate">후보 추가</button>
+            </div>
+            <p class="hint" id="timetable-message">${esc(state.timetableMessage)}</p>
+            <div class="tt-candidate-list">
+                ${candidates.length ? candidates.map((c) => `
+                    <div class="tt-candidate-row">
+                        <div><b>${esc(c.name)}</b><span>${esc(c.code)} · ${esc(c.professor || '교수 미정')} · ${esc(c.credit)}학점 · ${esc(c.schedule || '시간 미정')}</span></div>
+                        <div class="tt-candidate-actions">
+                            <button class="primary" data-tt-act="apply" data-code="${esc(c.code)}">신청</button>
+                            <button class="link danger" data-tt-act="remove" data-code="${esc(c.code)}">제거</button>
+                        </div>
+                    </div>`).join('') : '<p class="hint">추가한 후보 과목이 없습니다</p>'}
+            </div>
+        </section>`;
+
+    $('timetable-semester').onchange = () => {
+        state.timetableSem = $('timetable-semester').value;
+        state.timetableMessage = '';
+        state.timetableCandidates = loadTimetableCandidates(state.timetableSem);
+        renderTimetable().catch((e) => toast(e.message, true));
+    };
+    $('timetable-add-candidate').onclick = () => {
+        const code = $('timetable-course-pick').value;
+        const course = timetableCourse(code);
+        if (!course) return;
+        if (appliedCodes.has(code)) {
+            state.timetableMessage = '이미 신청한 과목입니다';
+        } else if (state.timetableCandidates.includes(code)) {
+            state.timetableMessage = '이미 후보에 추가한 과목입니다';
+        } else {
+            const conflict = timetableConflictReason(course, [...applied, ...candidates]);
+            if (conflict) state.timetableMessage = `시간이 겹쳐 후보에 추가할 수 없습니다: ${conflict}`;
+            else {
+                state.timetableCandidates.push(code);
+                state.timetableMessage = `${course.name} 과목을 후보에 추가했습니다`;
+                saveTimetableCandidates();
+            }
+        }
+        renderTimetable().catch((e) => toast(e.message, true));
+    };
+    content.querySelector('.tt-candidate-list').onclick = async (event) => {
+        const button = event.target.closest('button[data-tt-act]');
+        if (!button) return;
+        const code = button.dataset.code;
+        if (button.dataset.ttAct === 'remove') {
+            state.timetableCandidates = state.timetableCandidates.filter((x) => x !== code);
+            state.timetableMessage = '후보 과목을 제거했습니다';
+            saveTimetableCandidates();
+            renderTimetable().catch((e) => toast(e.message, true));
+            return;
+        }
+        if (button.dataset.ttAct === 'apply') {
+            button.disabled = true;
+            try {
+                await api('POST', '/api/enrollments', {
+                    studentId: state.me.studentId, courseCode: code, semester: state.timetableSem,
+                });
+                state.timetableCandidates = state.timetableCandidates.filter((x) => x !== code);
+                saveTimetableCandidates();
+                toast('수강신청했습니다');
+                await refreshAll();
+            } catch (error) {
+                button.disabled = false;
+                toast(error.message, true);
+            }
+        }
+    };
+}
 
 // ───────── 수강신청 ─────────
 
@@ -1381,6 +1713,19 @@ async function renderEnrollStudent(open, admin, mine, latestGradeSemester) {
     const locked = isLockedSemester(sem);
     const editable = admin || (open !== '' && sem === open && !locked);
 
+    const course = (code) => state.courses.find((c) => c.code === code);
+    // 선택 학기에 이미 신청한 과목들의 강의시간 (겹침 검사용). 서버 schedulesOverlap 가 최종 방어선
+    const appliedCourses = inSem.map((e) => course(e.courseCode)).filter(Boolean);
+    const applyCell = (c) => {
+        const btn = (off) => `<button class="link" data-act="apply" data-code="${esc(c.code)}" ${off ? 'disabled' : ''}>신청</button>`;
+        if (applied.has(c.code) || !editable) return btn(true);
+        const hits = appliedCourses.map((o) => ({ o, spans: scheduleConflict(c.schedule, o.schedule) })).filter((h) => h.spans.length);
+        if (!hits.length) return btn(false);
+        const label = hits[0].o.name + (hits.length > 1 ? ` 외 ${hits.length - 1}` : '');
+        const tip = hits.map((h) => `${h.o.name}: ${h.spans.map(formatSpan).join(', ')} 겹침`).join('\n');
+        return `${btn(true)} <span class="badge overlap" title="${esc(tip)}">${esc(label)} 과목과 겹침</span>`;
+    };
+
     const courseRows = state.courses.length ? state.courses.map((c) => `
         <tr>
             <td><b>${esc(c.name)}</b> <span class="hint">${esc(c.code)}</span></td>
@@ -1388,11 +1733,9 @@ async function renderEnrollStudent(open, admin, mine, latestGradeSemester) {
             <td>${esc(c.schedule) || '-'}</td>
             <td class="num">${esc(c.credit)}</td>
             <td class="num">신청 ${esc(countOf[c.code] ?? 0)} / ${capacityText(c)}</td>
-            <td class="actions"><button class="link" data-act="apply" data-code="${esc(c.code)}"
-                ${applied.has(c.code) || !editable ? 'disabled' : ''}>신청</button></td>
+            <td class="actions">${applyCell(c)}</td>
         </tr>`).join('') : emptyRow(6, '등록된 과목이 없습니다');
 
-    const course = (code) => state.courses.find((c) => c.code === code);
     const totalCredits = inSem.reduce((t, e) => t + (Number(course(e.courseCode)?.credit) || 0), 0);
     const mineRows = inSem.length ? inSem.map((e) => {
         const c = course(e.courseCode);
@@ -1617,12 +1960,14 @@ function gpaChartSvg(points) {
 //   + 학기별 성적 목록 + 학사경고 + CSV 내려받기
 // 성적표 창(관리자)과 내 성적 페이지(학생)가 같이 씀. s = {id, name}
 // 평점·학점은 서버 /api/stats/summary/:id (gpaSummary) 값을 그대로 씀
+//   summaryReq: 이미 보낸 summary 요청 (내 성적 화면이 같은 값을 시뮬레이션에도 써서 한 번만 받으려고 넘김, 없으면 여기서 받음)
+//   학기별 과목 성적은 학기마다 접었다 펼치는 <details class="fold"> (기본 접힘, summary = 학기 · 학기 GPA · 등록 학점)
 //   (재수강으로 지워진 성적·없는 과목은 서버가 이미 뺌, 계산 학점이 0 이면 gpa null = 등록된 성적 없음)
-async function studentReportHtml(s) {
+async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(s.id))) {
     const id = encodeURIComponent(s.id);
     const [grades, summary, warnings] = await Promise.all([
         api('GET', '/api/grades?studentId=' + id),
-        api('GET', '/api/stats/summary/' + id),
+        summaryReq,
         api('GET', '/api/stats/warnings/' + id),
     ]);
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
@@ -1650,23 +1995,21 @@ async function studentReportHtml(s) {
         ${gpaChartSvg(summary.semesters.filter((x) => x.credits > 0))}`
         : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
 
-    const semHtml = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
+    const semItems = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
         const info = semInfo[sem];
         const rows = grades.filter((g) => g.semester === sem).map((g) => `
             <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
             <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
-        const semesterCredits = info?.credits ?? '-';
         return `
-            <h3 class="sub-title">${esc(sem)}</h3>
-            <div class="semester-summary-line">
-                <span class="semester-gpa">GPA ${semGpa(info)}</span>
-                <span class="semester-credit">등록 학점 ${esc(semesterCredits)}학점</span>
-            </div>
-            <div class="table-wrap">
-                <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
-            </div>`;
+            <details class="fold" data-key="sem:${esc(sem)}">
+                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 등록 학점 ${esc(info?.credits ?? '-')}</summary>
+                <div class="table-wrap">
+                    <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
+                </div>
+            </details>`;
     }).join('');
+    const semHtml = semItems ? `<h3 class="sub-title">학기별 과목 성적</h3>${semItems}` : '';
     const warnHtml = warnings.length ? `
         <div class="table-wrap">
             <table><thead><tr><th>학기</th><th>사유</th><th class="num">평점</th><th class="num">신청 학점</th></tr></thead>
@@ -1704,151 +2047,151 @@ async function studentReportHtml(s) {
 
 // 학생 성적표 창 (보기 전용)
 async function showStudentReport(s) {
-    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: await studentReportHtml(s) });
+    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: foldBarHtml() + await studentReportHtml(s) });
+    syncFoldButton($('dlg-body'));
 }
 
 // ───────── 내 성적 (학생) ─────────
 
-// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
-// ───────── 학생 시간표 ─────────
-// Course.schedule 형식(예: "월(1~4) 화(6)")을 파싱한다. course.h의 요일/교시 규칙과 동일하게 처리.
-function parseTimetableSchedule(schedule) {
-    const result = [];
-    const text = String(schedule || '').trim();
-    const re = /(월|화|수|목|금|토|일)\s*\(\s*(\d{1,2})(?:\s*~\s*(\d{1,2}))?\s*\)/g;
-    let m;
-    while ((m = re.exec(text))) {
-        const day = ['월','화','수','목','금','토','일'].indexOf(m[1]);
-        const start = Number(m[2]);
-        const end = Number(m[3] || m[2]);
-        if (start < 1 || end > 30 || start > end) continue;
-        result.push({ day, start, end });
-    }
-    return result;
+// 접었다 펼치는 영역(details.fold)을 한꺼번에 여닫는 버튼 줄. 접을 영역이 없으면 syncFoldButton 이 줄을 숨김
+const foldBarHtml = () => '<div class="fold-bar" hidden><button type="button" data-fold-toggle>모두 펼치기</button></div>';
+const foldRoot = (el) => el.closest('#myreport-body, #dlg-body');
+// 버튼 글자를 지금 상태에 맞춤: 하나라도 닫혀 있으면 '모두 펼치기', 모두 열려 있으면 '모두 접기'
+function syncFoldButton(root) {
+    const bar = root?.querySelector('.fold-bar');
+    if (!bar) return;
+    const all = [...root.querySelectorAll('details.fold')];
+    bar.hidden = !all.length;
+    bar.querySelector('button').textContent = all.some((d) => !d.open) ? '모두 펼치기' : '모두 접기';
 }
-function timetableConflict(a, b) {
-    const aa = parseTimetableSchedule(a), bb = parseTimetableSchedule(b);
-    return aa.some(x => bb.some(y => x.day === y.day && x.start <= y.end && y.start <= x.end));
-}
-function timetableColor(code) {
-    let hash = 0;
-    for (const ch of String(code ?? '')) hash = ((hash * 31) + ch.charCodeAt(0)) >>> 0;
-    return `hsl(${hash % 360} 48% 34%)`;
-}
-function timetableKey(semester) {
-    return `grade-manager:timetable-candidates:${state.me?.studentId || state.me?.username}:${semester}`;
-}
-function getTimetableCandidates(semester) {
-    // 일부 브라우저/시크릿 환경에서는 localStorage 접근 자체가 예외를 던질 수 있다.
-    try {
-        const value = JSON.parse(window.localStorage.getItem(timetableKey(semester)) || '[]');
-        return Array.isArray(value) ? value.filter(x => typeof x === 'string') : [];
-    } catch { return []; }
-}
-function setTimetableCandidates(semester, codes) {
-    try {
-        window.localStorage.setItem(timetableKey(semester), JSON.stringify([...new Set(codes)]));
-        return true;
-    } catch (e) {
-        toast('후보 과목을 브라우저에 저장하지 못했습니다. 브라우저 저장 공간 설정을 확인하세요.', true);
-        return false;
-    }
-}
-function timetableCourse(code) { return state.courses.find(c => c.code === code); }
-function timetableDays(courses) {
-    return courses.some(c => parseTimetableSchedule(c.schedule).some(x => x.day >= 5)) ? 7 : 5;
-}
-function timetableBlock(course, slot, candidate = false) {
-    const dayNames = ['월','화','수','목','금','토','일'];
-    return `<div class="timetable-block${candidate ? ' candidate' : ''}" style="grid-column:${slot.day + 2};grid-row:${slot.start + 1} / ${slot.end + 2};--course-color:${timetableColor(course.code)}" title="${esc(course.name)} · ${esc(course.professor || '교수 미정')} · ${dayNames[slot.day]} ${slot.start}~${slot.end}교시">
-        <strong>${esc(course.name)}</strong><span>${esc(course.professor || '교수 미정')}</span></div>`;
-}
-async function renderTimetable() {
-    if (state.me?.role !== 'student') return;
-    const root = $('timetable-content');
-    // HTML 탭이 아직 로드되지 않았거나 제거된 경우 렌더링 중단
+document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-fold-toggle]');
+    const root = btn && foldRoot(btn);
     if (!root) return;
-    const enrolled = Array.isArray(state.myEnrollments) ? state.myEnrollments : [];
-    const semesters = sortSemesters([...enrolled.map(e => e.semester), state.currentSem]);
-    const previous = root.dataset.semester || state.currentSem;
-    const semester = semesters.includes(previous) ? previous : (semesters[0] || state.currentSem);
-    if (!semester) { root.innerHTML = '<p class="hint">표시할 학기가 없습니다</p>'; return; }
-    const enrolledCodes = [...new Set(enrolled.filter(e => e.semester === semester).map(e => e.courseCode))];
-    const enrolledCourses = enrolledCodes.map(timetableCourse).filter(Boolean);
-    const candidates = getTimetableCandidates(semester).filter(code => timetableCourse(code) && !enrolledCodes.includes(code));
-    const candidateCourses = candidates.map(timetableCourse).filter(Boolean);
-    const all = [...enrolledCourses, ...candidateCourses];
-    const days = timetableDays(all);
-    const maxPeriod = Math.max(9, ...all.flatMap(c => parseTimetableSchedule(c.schedule).map(x => x.end)));
-    const dayNames = ['월','화','수','목','금','토','일'].slice(0, days);
-    const scheduled = enrolledCourses.filter(c => parseTimetableSchedule(c.schedule).length);
-    const unscheduled = enrolledCourses.filter(c => !parseTimetableSchedule(c.schedule).length);
-    const credit = enrolledCourses.reduce((sum,c) => sum + (Number(c.credit) || 0), 0);
-    let grid = `<div class="timetable-grid" style="--day-count:${days};--period-count:${maxPeriod}"><div class="timetable-corner"></div>${dayNames.map(d => `<div class="timetable-day">${d}</div>`).join('')}`;
-    for (let p=1; p<=maxPeriod; p++) {
-        grid += `<div class="timetable-period">${p}</div>`;
-        for (let d=0; d<days; d++) grid += `<div class="timetable-cell" style="grid-column:${d+2};grid-row:${p+1}"></div>`;
-    }
-    for (const course of scheduled) for (const slot of parseTimetableSchedule(course.schedule)) grid += timetableBlock(course, slot);
-    for (const course of candidateCourses) for (const slot of parseTimetableSchedule(course.schedule)) grid += timetableBlock(course, slot, true);
-    grid += '</div>';
-    const options = state.courses.map(c => `<option value="${esc(c.code)}">${esc(c.name)} (${esc(c.code)}) · ${esc(c.schedule || '시간 미정')}</option>`).join('');
-    const candidateRows = candidateCourses.length ? candidateCourses.map(course => {
-        const conflict = enrolledCourses.find(x => timetableConflict(x.schedule, course.schedule));
-        const other = candidateCourses.find(x => x.code !== course.code && timetableConflict(x.schedule, course.schedule));
-        const reason = conflict ? `${conflict.name} 과목과 시간이 겹칩니다` : other ? `${other.name} 후보와 시간이 겹칩니다` : '';
-        return `<div class="timetable-candidate-row"><div><strong>${esc(course.name)}</strong><span>${esc(course.code)} · ${esc(course.schedule || '시간 미정')} · ${Number(course.credit)||0}학점</span>${reason ? `<small class="timetable-conflict">${esc(reason)}</small>` : ''}</div><div class="timetable-candidate-actions"><button data-timetable-remove="${esc(course.code)}">제거</button><button class="primary" data-timetable-enroll="${esc(course.code)}" ${reason ? 'disabled title="시간이 겹치는 후보는 신청할 수 없습니다"' : ''}>신청</button></div></div>`;
-    }).join('') : '<p class="hint">추가한 후보 과목이 없습니다</p>';
-    root.innerHTML = `<div class="page-head"><h2 class="page-title">시간표</h2><label>학기 <select id="timetable-semester">${semesters.map(s=>`<option value="${esc(s)}" ${s===semester?'selected':''}>${esc(s)}</option>`).join('')}</select></label></div>
-        <div class="timetable-summary"><strong>${esc(semester)} 신청 학점</strong><b>${credit}학점</b><span>${enrolledCourses.length}과목</span></div>
-        ${grid}
-        <div class="timetable-unscheduled"><strong>시간 미정</strong>${unscheduled.length ? unscheduled.map(c=>`<span>${esc(c.name)} · ${esc(c.professor || '교수 미정')}</span>`).join('') : '<span class="hint">없음</span>'}</div>
-        <section class="timetable-planner"><div class="page-head"><h3 class="sub-title">후보 과목 추가</h3><div class="timetable-add"><select id="timetable-course-pick"><option value="">과목 선택</option>${options}</select><button class="primary" id="timetable-add">후보 추가</button></div></div>
-        <p class="hint">후보는 이 브라우저에만 저장되며, 실제 수강신청 전까지 서버 데이터는 변경되지 않습니다.</p>${candidateRows}</section>`;
-    // 렌더 후 다시 만든 학기 선택 상자에 이벤트를 연결한다.
-    $('timetable-semester').onchange = () => { root.dataset.semester = $('timetable-semester').value; renderTimetable(); };
-    $('timetable-add').onclick = () => {
-        const code = $('timetable-course-pick').value;
-        const course = timetableCourse(code);
-        if (!course) { toast('추가할 과목을 선택하세요', true); return; }
-        if (enrolledCodes.includes(code)) { toast('이미 신청한 과목입니다', true); return; }
-        const existing = candidates.map(timetableCourse).filter(Boolean);
-        const conflict = [...enrolledCourses, ...existing].find(x => timetableConflict(x.schedule, course.schedule));
-        if (conflict) { toast(`${conflict.name} 과목과 강의시간이 겹칩니다`, true); return; }
-        if (!setTimetableCandidates(semester, [...candidates, code])) return;
-        renderTimetable();
-    };
-    root.querySelectorAll('[data-timetable-remove]').forEach(btn => btn.onclick = () => {
-        if (!setTimetableCandidates(semester, candidates.filter(code => code !== btn.dataset.timetableRemove))) return;
-        renderTimetable();
-    });
-    root.querySelectorAll('[data-timetable-enroll]').forEach(btn => btn.onclick = async () => {
-        const courseCode = btn.dataset.timetableEnroll;
-        try {
-            await api('POST', '/api/enrollments', { studentId: state.me.studentId, courseCode, semester });
-            toast('수강신청했습니다');
-            setTimetableCandidates(semester, candidates.filter(code => code !== courseCode));
-            state.baseLoadedAt = 0;
-            await loadBase();
-            await renderTimetable();
-        } catch (e) { toast(e.message, true); }
-    });
+    const all = [...root.querySelectorAll('details.fold')];
+    const open = all.some((d) => !d.open);
+    all.forEach((d) => { d.open = open; });
+    syncFoldButton(root);
+});
+// details 는 toggle 이벤트가 위로 올라가지 않아 capture 로 받음: 시뮬레이션 상자 펼침 상태 기억, 접는 영역이면 버튼 글자 갱신
+document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (!(d instanceof HTMLDetailsElement)) return;
+    if (d.id === 'sim-box') mySim.open = d.open;
+    else if (d.classList.contains('fold')) syncFoldButton(foldRoot(d));
+}, true);
+
+// ── 목표 GPA 시뮬레이션 (서버에 저장하지 않고 화면에서만 계산) ──
+
+const GPA_MAX = 4.5;
+const GPA_EPS = 1e-9;
+// 등급 점수표 (낮은 점수부터, F = 0)
+const GRADE_POINTS = [...Object.entries(LETTER_POINT), ['F', 0]].sort((a, b) => a[1] - b[1]);
+const gradePointText = ([letter, p]) => `${letter}(${p.toFixed(1)})`;
+
+// 목표 누적 GPA 를 위해 앞으로 필요한 평균 평점 (순수 함수)
+//   gpa·credits: 지금 누적 평점·계산 학점 (gpa 가 null 이거나 credits 가 0 이면 성적 없음 = 학점 0)
+//   target: 목표 누적 GPA, credit: 앞으로 들을 학점 (1 이상)
+//   R = (target × (C + credit) − G × C) / credit
+//   kind: 'impossible' (R > 4.5, maxGpa = 전부 A+ 를 받았을 때 누적), 'done' (R ≤ 0), 'need'
+//   band: kind 가 'need' 일 때 R 이 놓인 등급 구간 ('B+(3.5) ~ A0(4.0) 사이', 정확히 등급 점수면 'A0(4.0) 이상')
+function targetGpaNeed(gpa, credits, target, credit) {
+    const C = typeof gpa === 'number' && credits > 0 ? credits : 0;
+    const G = C > 0 ? gpa : 0;
+    const R = (target * (C + credit) - G * C) / credit;
+    const maxGpa = (G * C + GPA_MAX * credit) / (C + credit);
+    if (R > GPA_MAX + GPA_EPS) return { kind: 'impossible', R, maxGpa, band: '' };
+    if (R <= GPA_EPS) return { kind: 'done', R, maxGpa, band: '' };
+    const exact = GRADE_POINTS.find(([, p]) => Math.abs(p - R) < GPA_EPS);
+    const lower = [...GRADE_POINTS].reverse().find(([, p]) => p < R);
+    const upper = GRADE_POINTS.find(([, p]) => p > R);
+    const band = exact ? `${gradePointText(exact)} 이상` : `${gradePointText(lower)} ~ ${gradePointText(upper)} 사이`;
+    return { kind: 'need', R, maxGpa, band };
+}
+// targetGpaNeed 결과 문구 (HTML). gpa = 지금 누적 평점 (null 이면 '-'), credit = 앞으로 들을 학점
+function targetGpaHtml(res, gpa, credit) {
+    if (res.kind === 'impossible') return `<span class="sim-bad">불가능 — 전부 A+ (${GPA_MAX}) 를 받아도 누적 ${fmt(res.maxGpa)}</span>`;
+    if (res.kind === 'done') return `<span class="sim-good">이미 달성했습니다 (현재 ${fmt(gpa)})</span>`;
+    return `앞으로 ${esc(credit)}학점 평균 평점 <b>${fmt(res.R)}</b> 이상 필요 <span class="hint">· ${esc(res.band)}</span>`;
 }
 
+// 시뮬레이션 상자 입력값·펼침 상태 (화면을 다시 그려도 유지, 다른 학생으로 로그인하면 초기화)
+//   credits: null = 사용자가 건드리지 않음 (기본값 = 현재 학기 신청 학점 합)
+const mySim = { owner: '', target: '', credits: null, open: false };
+
+// 내 성적 화면 맨 위 '시뮬레이션' 상자 (접힘 기본). 안에 sim-section 을 하나씩 추가
+//   summary: 서버 /api/stats/summary/:id 응답 (gpa, credits)
+function simBoxHtml(summary) {
+    if (mySim.owner !== state.me.studentId) Object.assign(mySim, { owner: state.me.studentId, target: '', credits: null, open: false });
+    const hasGpa = typeof summary.gpa === 'number' && summary.credits > 0;
+    const planned = state.myEnrollments.filter((e) => e.semester === state.currentSem)
+        .reduce((t, e) => t + (Number(state.courses.find((c) => c.code === e.courseCode)?.credit) || 0), 0);
+    const credits = mySim.credits ?? (planned > 0 ? String(planned) : '');
+    return `
+        <details id="sim-box"${mySim.open ? ' open' : ''}>
+            <summary>시뮬레이션</summary>
+            <section class="sim-section" id="sim-target" data-gpa="${hasGpa ? esc(summary.gpa) : ''}" data-credits="${hasGpa ? esc(summary.credits) : 0}">
+                <h4 class="assess-head">목표 GPA</h4>
+                <p class="hint">현재 누적 GPA ${hasGpa ? fmt(summary.gpa) : '-'} · 계산 학점 ${hasGpa ? esc(summary.credits) : 0} · 입력값은 서버에 저장하지 않고 화면에서만 계산합니다</p>
+                <div class="sim-row">
+                    <label>목표 누적 GPA <input type="number" class="sim-field" id="sim-target-gpa" min="0" max="4.5" step="any" placeholder="0~4.5" value="${esc(mySim.target)}"></label>
+                    <label>앞으로 들을 학점 <input type="number" class="sim-field" id="sim-target-credits" min="1" step="1" placeholder="학점" value="${esc(credits)}"></label>
+                </div>
+                <p class="sim-result"></p>
+            </section>
+        </details>`;
+}
+// 목표 GPA 칸 두 개를 읽어 결과 줄을 다시 계산. 범위 밖·숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스
+function updateSimTarget(sec) {
+    const parse = (input, valid) => {
+        const raw = input.value.trim();
+        const n = Number(raw);
+        const ok = raw !== '' && Number.isFinite(n) && valid(n);
+        input.classList.toggle('invalid', !ok && (raw !== '' || input.validity.badInput));
+        return ok ? n : null;
+    };
+    const target = parse(sec.querySelector('#sim-target-gpa'), (n) => n >= 0 && n <= GPA_MAX);
+    const credit = parse(sec.querySelector('#sim-target-credits'), (n) => Number.isInteger(n) && n >= 1);
+    const out = sec.querySelector('.sim-result');
+    if (target === null || credit === null) {
+        out.innerHTML = '<span class="hint">목표 GPA (0~4.5) 와 앞으로 들을 학점 (1 이상 정수) 을 입력하면 필요한 평균 평점을 계산합니다</span>';
+        return;
+    }
+    const gpa = sec.dataset.gpa === '' ? null : Number(sec.dataset.gpa);
+    out.innerHTML = targetGpaHtml(targetGpaNeed(gpa, Number(sec.dataset.credits), target, credit), gpa, credit);
+}
+$('tab-myreport').addEventListener('input', (e) => {
+    const input = e.target.closest('#sim-target input');
+    if (!input) return;
+    if (input.id === 'sim-target-gpa') mySim.target = input.value;
+    else mySim.credits = input.value;
+    updateSimTarget(document.querySelector('#sim-target'));
+});
+
+// 내 성적 화면: 접기 버튼 줄 + 시뮬레이션 상자 + '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
+//   요약(GPA·학기별 평점·그래프·학사경고)은 그대로 보이고, 과목 단위(진행 중 과목 카드·학기별 과목 성적)는 접힌 줄 (눌러서 펼침)
+//   다시 그릴 때 펼쳐 둔 영역(data-key)은 그대로 펼침
 async function renderMyReport() {
     const seq = renderSeq;
-    const [progress, report] = await Promise.all([
+    const summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(state.me.studentId));
+    const [progress, report, summary] = await Promise.all([
         myAssessmentsHtml(),
-        studentReportHtml({ id: state.me.studentId, name: state.me.name }),
+        studentReportHtml({ id: state.me.studentId, name: state.me.name }, summaryReq),
+        summaryReq,
     ]);
     if (seq !== renderSeq) return;
-    $('myreport-body').innerHTML = progress + report;
+    const body = $('myreport-body');
+    const opened = new Set([...body.querySelectorAll('details.fold[open]')].map((d) => d.dataset.key));
+    body.innerHTML = foldBarHtml() + simBoxHtml(summary) + progress + report;
+    body.querySelectorAll('details.fold').forEach((d) => { d.open = opened.has(d.dataset.key); });
+    updateSimTarget(document.querySelector('#sim-target'));
+    syncFoldButton(body);
 }
 
 // '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 현재 학기 이후이고 평가 기준이 있는 것마다
 //   분류별 비율·내 점수 표(비율 0인 분류는 뺌)와 한 줄 요약
 //     최종 성적이 있으면 그 점수·등급
-//     없으면 estimateLine (점수가 없는 분류 중 출석이 아닌 칸에 예상 점수 입력칸, 입력하면 simLine 으로 다시 계산, 서버로 보내지 않음)
+//     없으면 estimateLine (점수가 없는 분류는 '-', 절대평가 과목만 예상 등급)
 //   평가 기준이 있는 과목이 없으면 빈 문자열
 //   출결 기록이 있는 과목은 내 출결 요약 줄도 보임 (평가 기준이 없어도 그 과목을 보임, 기록이 없는 과목은 줄 없음)
 //   출결을 못 받으면 이 영역 안에 한 줄 오류만 보이고 나머지는 그대로
@@ -1873,42 +2216,46 @@ async function myAssessmentsHtml() {
     if (!shown.length) return attendError ? `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}</div>` : '';
 
     const cards = shown.map(({ code, sem, mode, items }) => {
-        const head = `<h4 class="assess-head">${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span></h4>`;
         const att = attend.summaries.get(JSON.stringify([code, sem]));
-        if (!items.length) return head + `<p class="attend-line">${attendSummaryLine(att)}</p>`;
+        // 한 과목 = 접었다 펼치는 카드. summary = 과목명 + 한 줄 요약(fold-line)
+        const card = (line, bodyHtml) => `
+            <details class="fold" data-key="c:${esc(code)}|${esc(sem)}">
+                <summary>${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span> · <span class="fold-line">${line}</span></summary>
+                ${bodyHtml}
+            </details>`;
+        if (!items.length) return card(`출석 점수 <b>${fmt(att.score)}</b>`, `<p class="attend-line">${attendSummaryLine(att)}</p>`);
         const cols = items.filter((a) => a.weight > 0);
         const mine = (name) => scores.find((s) => s.courseCode === code && s.semester === sem && s.name === name);
         const final = grades.find((g) => g.courseCode === code && g.semester === sem);
-        const simulate = (a) => !final && !mine(a.name) && a.name !== ATTEND_ITEM;
-        const line = final
-            ? `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}`
-            : estimateLine(cols.map((a) => ({ weight: a.weight, score: mine(a.name)?.score ?? null })), mode, cols.some(simulate));
+        const parts = cols.map((a) => ({ weight: a.weight, score: mine(a.name)?.score ?? null }));
+        const finalLine = final ? `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}` : '';
+        const line = finalLine || estimateLine(parts, mode);
+        const shortLine = finalLine || estimateLine(parts, mode, true);
         const rows = cols.map((a) => {
             const s = mine(a.name);
-            const cell = s ? esc(s.score)
-                : simulate(a) ? '<input type="number" class="sim-input" min="0" max="100" step="any" placeholder="예상">' : '-';
             return `
-            <tr data-w="${esc(a.weight)}"${s ? ` data-score="${esc(s.score)}"` : ''}>
-                <td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${cell}</td></tr>`;
+            <tr><td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${s ? esc(s.score) : '-'}</td></tr>`;
         }).join('');
-        return `
-            ${head}
+        return card(shortLine, `
             <div class="table-wrap">
-                <table data-mode="${esc(mode)}"><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
+                <table><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr><td colspan="3" class="estimate sim-line">${line}</td></tr>
+                <tfoot><tr><td colspan="3" class="estimate">${line}</td></tr>
                 ${att ? `<tr><td colspan="3" class="estimate">${attendSummaryLine(att)}</td></tr>` : ''}</tfoot></table>
-            </div>`;
+            </div>`);
     }).join('');
     return `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}${cards}</div>`;
 }
 
 // 최종 성적이 없는 과목의 요약 줄 (미확정)
-//   parts: 비율이 0보다 큰 분류마다 {weight, score} (score = 받은 점수 또는 유효한 예상 점수, 없으면 null)
-//   모두 차면 예상 최종 = Σ(점수×비율) / 100 (소수 둘째 자리 반올림), 점수 기준 등급 (scoreToLetter 경계)
-//   빈칸이 남으면 현재까지 환산 = Σ(점수×비율) / Σ(점수가 있는 분류의 비율), canSimulate(예상 점수 칸이 있음)면 빈칸 안내를 붙임
+//   parts: 비율이 0보다 큰 분류마다 {weight, score} (score = 받은 점수, 없으면 null)
+//   모두 차면 예상 최종 = Σ(점수×비율) / 100 (소수 둘째 자리 반올림)
+//   빈칸이 남으면 현재까지 환산 = Σ(점수×비율) / Σ(점수가 있는 분류의 비율)
+//   절대평가(absolute) 과목만 점수 기준 예상 등급(scoreToLetter 경계)을 보임. 상대평가 등은 점수만 보이고,
 //   상대평가 과목이면 실제 등급은 순위로 정해진다는 안내를 덧붙임
-function estimateLine(parts, mode, canSimulate) {
+//   short: 접힌 카드 머리글(summary)용 짧은 줄 (안내 문구·비율 힌트 없이 환산·예상 최종만)
+function estimateLine(parts, mode, short = false) {
+    const absolute = mode === 'absolute';
     const done = parts.filter((p) => p.score !== null);
     const total = parts.reduce((t, p) => t + p.weight, 0);
     const doneWeight = done.reduce((t, p) => t + p.weight, 0);
@@ -1916,43 +2263,19 @@ function estimateLine(parts, mode, canSimulate) {
     let line;
     if (parts.length && done.length === parts.length) {
         const est = round2(sum / 100);
-        line = `예상 최종 <b>${est.toFixed(2)}점</b> (점수 기준 등급 ${letterBadge(scoreToLetter(est))}, 미확정)`;
+        line = short ? `예상 최종 <b>${est.toFixed(2)}점</b>${absolute ? ` (${letterBadge(scoreToLetter(est))})` : ''}`
+            : `예상 최종 <b>${est.toFixed(2)}점</b> (${absolute ? `점수 기준 등급 ${letterBadge(scoreToLetter(est))}, ` : ''}미확정)`;
+    } else if (doneWeight > 0) {
+        const est = round2(sum / doneWeight);
+        line = short ? `현재까지 환산 <b>${est}점</b>${absolute ? ` (${letterBadge(scoreToLetter(est))})` : ''}`
+            : `현재까지 환산 <b>${est}점</b> (${absolute ? `예상 등급 ${letterBadge(scoreToLetter(est))}, ` : ''}미확정)
+            <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
     } else {
-        if (doneWeight > 0) {
-            const est = round2(sum / doneWeight);
-            line = `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
-                <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
-        } else {
-            line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
-        }
-        if (canSimulate) line += ' <span class="hint">· 빈칸에 예상 점수를 넣으면 최종 점수를 계산합니다</span>';
+        line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
     }
-    if (mode === 'relative') line += ` <span class="hint">· 상대평가 과목이라 실제 등급은 수강생 순위로 정해집니다 (${RELATIVE_RULES})</span>`;
+    if (mode === 'relative' && !short) line += ` <span class="hint">· 상대평가 과목이라 실제 등급은 수강생 순위로 정해집니다 (${RELATIVE_RULES})</span>`;
     return line;
 }
-
-// 예상 점수 칸이 있는 과목 표 하나의 요약 줄을 화면 값으로 다시 계산 (받은 점수 = 행의 data-score, 예상 점수 = 입력칸)
-//   0~100 밖이거나 숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스
-function simLine(table) {
-    const parts = [...table.querySelectorAll('tbody tr[data-w]')].map((tr) => {
-        const weight = Number(tr.dataset.w);
-        const input = tr.querySelector('input.sim-input');
-        if (!input) return { weight, score: tr.dataset.score === undefined ? null : Number(tr.dataset.score) };
-        const raw = input.value.trim();
-        const n = Number(raw);
-        const ok = raw !== '' && Number.isFinite(n) && n >= 0 && n <= 100;
-        input.classList.toggle('invalid', !ok && (raw !== '' || input.validity.badInput));
-        return { weight, score: ok ? n : null };
-    });
-    return estimateLine(parts, table.dataset.mode, true);
-}
-// 예상 점수를 입력할 때마다 그 과목 요약 줄만 다시 그림 (서버로 보내지 않고, 화면을 다시 그리면 사라짐)
-$('tab-myreport').addEventListener('input', (e) => {
-    const input = e.target.closest('input.sim-input');
-    if (!input) return;
-    const table = input.closest('table');
-    table.querySelector('td.sim-line').innerHTML = simLine(table);
-});
 
 // 내 출결 요약 (학생, 서버가 쿼리 없이 본인 기록 전체를 줌): {summaries: (과목, 학기) → 서버 요약, error}
 //   score 가 null(기록 없음)인 요약은 뺌. 실패하면 빈 목록과 오류 문구 (던지지 않음)

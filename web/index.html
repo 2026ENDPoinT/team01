@@ -16,10 +16,10 @@
         <nav id="tabs" hidden>
             <button data-tab="courses" data-roles="admin professor student" class="active">수강과목</button>
             <button data-tab="enroll" data-roles="admin professor student">수강신청</button>
+            <button data-tab="timetable" data-roles="student">시간표</button>
             <button data-tab="students" data-roles="admin">학생</button>
             <button data-tab="grades" data-roles="admin professor">성적</button>
             <button data-tab="myreport" data-roles="student">내 성적</button>
-            <button data-tab="timetable" data-roles="student">시간표</button>
             <button data-tab="accounts" data-roles="admin">계정</button>
         </nav>
         <div id="user-box" hidden>
@@ -93,6 +93,14 @@
             <div id="enroll-content"></div>
         </section>
 
+        <!-- 시간표 (학생 전용) -->
+        <section id="tab-timetable" class="tab">
+            <div class="page-head">
+                <h2 class="page-title">시간표</h2>
+            </div>
+            <div id="timetable-content"><p class="hint">불러오는 중…</p></div>
+        </section>
+
         <!-- 학생 -->
         <section id="tab-students" class="tab">
             <div class="page-head">
@@ -140,11 +148,6 @@
             <div id="myreport-body"></div>
         </section>
 
-        <!-- 시간표 (학생 전용) -->
-        <section id="tab-timetable" class="tab">
-            <div id="timetable-content"><p class="hint">불러오는 중…</p></div>
-        </section>
-
         <!-- 계정 (관리자) -->
         <section id="tab-accounts" class="tab">
             <div class="page-head">
@@ -186,7 +189,7 @@
                     <h3 class="sub-title">출결</h3>
                     <label for="attend-sem">학기</label><select id="attend-sem"></select>
                     <span class="spacer"></span>
-                    <span class="hint">칸을 누르면 없음 → 출석 → 지각 → 결석 → 공결 순으로 바뀌고 바로 저장 · 지각 3회 = 결석 1회 · 기록 없는 주차는 출석</span>
+                    <span class="hint">칸을 누르고 출/지/결/공 중 하나를 고르면 바로 저장됩니다 (X = 기록 지우기) · 지각 3회 = 결석 1회 · 기록 없는 주차는 출석</span>
                 </div>
                 <div id="attend-body"></div>
             </div>

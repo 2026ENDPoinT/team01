@@ -395,10 +395,8 @@ td.weight-sum .mode-label { margin-left: 12px; color: var(--muted); }
 input.score-cell { width: 76px; padding: 5px 8px; text-align: right; }
 #assess-body td.final { white-space: nowrap; }
 .relative-line { margin: 0 0 16px; line-height: 1.6; }
-/* 내 성적: 평가 기준 과목의 요약 줄 (현재까지 환산·예상 최종) + 예상 점수 입력칸 (0~100 밖이면 invalid 빨간 테두리) */
+/* 내 성적: 평가 기준 과목의 요약 줄 (현재까지 환산·예상 최종) */
 td.estimate { color: var(--text); }
-input.sim-input { width: 76px; padding: 4px 8px; text-align: right; }
-input.sim-input.invalid { border-color: var(--danger); outline-color: rgba(239, 68, 68, .3); }
 /* 과목 페이지 출결: 수강생 × 16주 표 (넘치면 .table-wrap 안에서 가로 스크롤, 이름 칸은 왼쪽에 고정), 칸 = 상태 버튼
    상태 색은 등급 배지와 같은 색: 출석 = A(초록), 지각 = C(노랑), 결석 = F(빨강), 공결 = B(파랑) */
 #attend-body .table-wrap { margin-bottom: 16px; }
@@ -414,37 +412,19 @@ button.att.late { background: rgba(234, 179, 8, .18); color: #facc15; }
 button.att.absent { background: rgba(239, 68, 68, .18); color: #f87171; }
 button.att.excused { background: rgba(59, 130, 246, .18); color: #60a5fa; }
 button.att[data-busy] { opacity: .6; cursor: progress; }
+button.att[aria-expanded="true"] { border-color: var(--accent); }
+/* 출결 칸 선택 상자 (출/지/결/공/X): document.body 에 position: fixed 로 두고 app.js 가 칸 아래 (자리가 없으면 위)에 맞춤.
+   버튼은 칸과 같은 button.att 색을 재사용하고 지금 상태는 .current 로 강조, X (기록 지우기)는 중립색 */
+.att-picker { position: fixed; z-index: 10; display: flex; gap: 4px; width: max-content; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+.att-picker button.att { width: 34px; height: 34px; font-size: 13px; }
+.att-picker button.att.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.att-picker button.att.clear { color: var(--text); }
+.att-picker button.att.clear:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+.att-picker button.att:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .attend-error { color: var(--danger); margin: 0 0 12px; }
 .attend-line { margin: 0 0 20px; }
 /* 평가 기준 점수표의 '출석' 칸: 출석부에서 자동 계산이라 늘 읽기 전용 */
 input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
-
-/* 성적표 학기별 요약: GPA는 초록색, 등록 학점은 주황색으로 강조 */
-.semester-summary-line {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin: -4px 0 10px;
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-}
-.semester-gpa,
-.semester-credit {
-    display: inline-flex;
-    align-items: center;
-    padding: 7px 11px;
-    border-radius: 6px;
-    font-weight: 700;
-}
-.semester-gpa {
-    color: #4ade80;
-    background: rgba(34, 197, 94, .13);
-}
-.semester-credit {
-    color: #fdba74;
-    background: rgba(249, 115, 22, .14);
-}
 
 /* 성적표: 학기별 GPA 꺾은선 그래프 (인라인 SVG) */
 .gpa-chart {
@@ -521,37 +501,87 @@ input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
     .gpa-box b { font-size: 18px; }
     .gpa-box b.small { font-size: 15px; }
 }
+/* 수강신청 겹침 */
+.badge.overlap { background: rgba(239, 68, 68, .18); color: #f87171; margin-left: 6px; white-space: nowrap; cursor: help; }
+
+/* 내 성적 시뮬레이션·접기: 기본 스타일만 (화살표·높이·간격 다듬기는 디자인 담당) */
+.fold-bar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+details.fold { margin-bottom: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+details.fold > summary, #sim-box > summary { padding: 10px 14px; cursor: pointer; }
+details.fold > summary:hover, #sim-box > summary:hover { background: var(--hover); }
+details.fold > .table-wrap, details.fold > .attend-line { margin: 0 14px 14px; }
+.report details.fold > .table-wrap { margin-bottom: 14px; }
+#sim-box { margin-bottom: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+#sim-box > summary { font-weight: 600; }
+.sim-section { padding: 0 14px 14px; }
+.sim-row { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-bottom: 10px; }
+.sim-row label { display: flex; align-items: center; gap: 8px; }
+input.sim-field { width: 100px; text-align: right; }
+input.sim-field.invalid { border-color: var(--danger); outline-color: rgba(239, 68, 68, .3); }
+.sim-result { margin: 0; }
+.sim-bad { color: var(--danger); }
+
 
 /* 학생 시간표 */
 main:has(#tab-timetable.active) { max-width: 1280px; }
-#tab-timetable { min-width: 0; }
-#tab-timetable .page-head { align-items: center; }
-#tab-timetable .page-head label { display:flex; align-items:center; gap:8px; color:var(--muted); }
-.timetable-summary { display:flex; align-items:center; gap:14px; margin: 0 0 14px; padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
-.timetable-summary b { color:var(--accent); font-size:18px; }
-.timetable-summary span { color:var(--muted); }
-.timetable-grid { display:grid; grid-template-columns:48px repeat(var(--day-count), minmax(0,1fr)); grid-template-rows:34px repeat(var(--period-count), minmax(54px,1fr)); position:relative; border-top:1px solid var(--line); border-left:1px solid var(--line); background:var(--card); }
-.timetable-corner,.timetable-day,.timetable-period,.timetable-cell { border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
-.timetable-day { display:flex; align-items:center; justify-content:center; font-weight:700; background:var(--hover); grid-row:1; }
-.timetable-period { grid-column:1; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; }
-.timetable-cell { min-width:0; }
-.timetable-block { z-index:1; min-width:0; margin:2px; padding:5px 7px; overflow:hidden; display:flex; flex-direction:column; gap:3px; border-radius:6px; background:var(--course-color); border:1px solid var(--course-color); color:#fff; font-size:12px; line-height:1.25; }
-.timetable-block strong,.timetable-block span { overflow:hidden; text-overflow:ellipsis; }
-.timetable-block span { opacity:.85; font-size:11px; }
-.timetable-block.candidate { background:var(--card); color:var(--text); border:2px dashed var(--course-color); }
-.timetable-unscheduled { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin:14px 0 24px; padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
-.timetable-unscheduled strong { margin-right:8px; }
-.timetable-unscheduled span:not(.hint) { color:var(--muted); }
-.timetable-planner { border-top:1px solid var(--line); padding-top:16px; }
-.timetable-add,.timetable-candidate-actions { display:flex; align-items:center; gap:8px; }
-.timetable-candidate-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
-.timetable-candidate-row > div:first-child { display:flex; flex-direction:column; gap:4px; min-width:0; }
-.timetable-candidate-row span,.timetable-candidate-row small { color:var(--muted); }
-.timetable-conflict { color:var(--danger) !important; }
-@media (max-width:700px) {
-    #tab-timetable { overflow-x:auto; }
-    .timetable-grid { min-width:720px; grid-template-rows:34px repeat(var(--period-count), 58px); }
-    .timetable-add { width:100%; }
-    .timetable-add select { min-width:0; flex:1; }
-    .timetable-candidate-row { align-items:flex-start; }
+.tt-toolbar { margin-bottom: 10px; }
+.tt-toolbar strong { color: var(--accent); }
+.tt-legend { display: flex; gap: 14px; margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.tt-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tt-legend span::before { content: ""; width: 12px; height: 12px; border-radius: 3px; background: var(--accent-weak); border: 1px solid var(--accent); }
+.tt-legend .tt-legend-candidate::before { background: transparent; border: 1px dashed var(--accent); }
+.tt-grid-scroll { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--card); }
+.tt-grid {
+    display: grid;
+    min-width: 620px;
+    position: relative;
+    isolation: isolate;
+}
+.tt-corner, .tt-day, .tt-period, .tt-cell {
+    min-width: 0;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+}
+.tt-corner, .tt-day { background: var(--hover); }
+.tt-day { display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); }
+.tt-period { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; background: var(--bg); }
+.tt-cell { background: transparent; }
+.tt-block {
+    z-index: 2;
+    min-width: 0;
+    margin: 2px;
+    padding: 4px 5px;
+    overflow: hidden;
+    border: 1px solid var(--tt-course-color, var(--accent));
+    border-radius: 5px;
+    background: var(--tt-course-bg, var(--accent-weak));
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+.tt-block b, .tt-block span { display: block; }
+.tt-block span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.tt-block.candidate { border-style: dashed; background: var(--card); }
+.tt-block[data-color="0"] { --tt-course-color: var(--accent); --tt-course-bg: var(--accent-weak); }
+.tt-block[data-color="1"] { --tt-course-color: var(--danger); --tt-course-bg: var(--card); }
+.tt-block[data-color="2"] { --tt-course-color: var(--muted); --tt-course-bg: var(--hover); }
+.tt-block[data-color="3"] { --tt-course-color: var(--text); --tt-course-bg: var(--line); }
+.tt-unscheduled, .tt-candidate-section { margin-top: 20px; }
+.tt-unscheduled-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.tt-unscheduled-item { padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.tt-unscheduled-item small { margin-left: 5px; color: var(--muted); }
+.tt-unscheduled-item.candidate { border-style: dashed; }
+#timetable-course-pick { min-width: min(520px, 100%); max-width: 100%; }
+#timetable-message { min-height: 18px; margin: 4px 0 10px; color: var(--danger); }
+.tt-candidate-list { display: grid; gap: 7px; }
+.tt-candidate-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px dashed var(--accent); border-radius: 8px; background: var(--card); }
+.tt-candidate-row > div:first-child { min-width: 0; }
+.tt-candidate-row span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.tt-candidate-actions { display: flex; flex-shrink: 0; gap: 5px; }
+@media (max-width: 700px) {
+    main:has(#tab-timetable.active) { padding-left: 10px; padding-right: 10px; }
+    .tt-grid-scroll { overflow-x: auto; }
+    .tt-grid { min-width: 700px; }
+    .tt-candidate-row { align-items: flex-start; flex-direction: column; }
 }
