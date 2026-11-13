@@ -1652,6 +1652,56 @@ $('grade-add').onclick = () => {
     });
     bindGradeMode();
 };
+
+
+// 빠른 성적 등록 버튼 추가 (기존 성적 등록 버튼 유지)
+const quickGradeButton = $('grade-add').cloneNode(true);
+quickGradeButton.id = 'grade-quick-add';
+quickGradeButton.textContent = '빠른 성적 등록';
+
+// 기존 성적 등록 버튼 바로 옆에 배치
+$('grade-add').after(quickGradeButton);
+
+// 빠른 성적 등록
+quickGradeButton.onclick = () => {
+    if (!state.students.length || !courseOptions().length) {
+        toast(isAdmin()
+            ? '학생과 과목을 먼저 등록하세요'
+            : '담당 과목 또는 수강생이 없습니다', true);
+        return;
+    }
+
+    openForm({
+        title: '빠른 성적 등록',
+        fields: gradeFields(false),
+        values: { mode: 'score' },
+        validate: validateGrade,
+
+        onSubmit: async (d) => {
+            // 빠른 등록 전용 API 호출
+            const g = await api(
+                'POST',
+                '/api/grades/quick',
+                gradeBody(d)
+            );
+
+            // 수강 정보 자동 생성 여부에 따라 결과 안내
+            if (g.enrollmentCreated) {
+                toast(`수강 정보 자동 생성 및 성적 등록 완료: ${gradeResultText(d, g)}`);
+            } else {
+                toast(`성적을 등록했습니다: ${gradeResultText(d, g)}`);
+            }
+
+            await refreshAll();
+        },
+    });
+
+    bindGradeMode();
+};
+
+
+
+
 // 성적 표 안 버튼 처리. 수정은 서버에서 그 성적을 다시 받아 폼에 채움
 $('grade-body').onclick = async (e) => {
     const b = e.target.closest('button[data-act]');
