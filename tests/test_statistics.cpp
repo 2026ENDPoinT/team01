@@ -412,7 +412,8 @@ TEST_CASE(simulateRetake_rejects_bad_input) {
 }
 
 // P/F 과목은 등급 시뮬레이션 대상이 아님 (평점에 들어가지 않으므로 등급을 고를 수 없음)
-TEST_CASE(simulateRetake_rejects_pass_fail_course) {
+// 이미 P 를 받은 P/F 과목은 재수강 불가
+TEST_CASE(simulateRetake_rejects_pass_fail_course_already_passed) {
     TempDir dir;
     GradeManager gm(dir.str());
     CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
@@ -424,6 +425,98 @@ TEST_CASE(simulateRetake_rejects_pass_fail_course) {
     CHECK(gm.addGrade(g));
 
     const Statistics::RetakeSimulation sim =
-        Statistics::simulateRetake(gm, "25103008", "2026-1", {{"100001", "A0"}});
+        Statistics::simulateRetake(gm, "25103008", "2026-1", {{"100001", "NP"}});
     CHECK(sim.error == Statistics::RetakeError::PassFail);
+}
+
+// B0 이상 일반 과목은 재수강 불가
+TEST_CASE(simulateRetake_rejects_b0_or_higher) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(gm.addCourse(makeCourse("100001", "과목1", 3)));
+    CHECK(gm.addCourse(makeCourse("100002", "과목2", 3)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 80)));  // B0
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 97)));  // A+
+
+    const auto run = [&](const std::string& code) {
+        return Statistics::simulateRetake(gm, "25103008", "2026-1", {{code, "A0"}}).error;
+    };
+    CHECK(run("100001") == Statistics::RetakeError::NotRetakable);
+    CHECK(run("100002") == Statistics::RetakeError::NotRetakable);
+}
+
+// NP 과목: P/NP 로만 재수강. NP → P 면 평점은 그대로, 취득 학점만 늘고 저장은 안 됨
+TEST_CASE(simulateRetake_np_course_retake_with_pass_fail_only) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    Course pf = makeCourse("100001", "P/F 과목", 1);
+    pf.gradeType = kGradeTypePassFail;
+    CHECK(gm.addCourse(pf));
+    CHECK(gm.addCourse(makeCourse("100002", "일반 과목", 3)));
+    Grade np = makeGrade("25103008", "100001", "2025-1", kNonPassScore);
+    np.assignedLetter = "NP";
+    CHECK(gm.addGrade(np));
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 87)));  // B+
+    const size_t gradeCount = gm.getGrades().size();
+
+    using Statistics::RetakeError;
+    const auto run = [&](const std::string& code, const std::string& letter) {
+        return Statistics::simulateRetake(gm, "25103008", "2026-1", {{code, letter}});
+    };
+    CHECK(run("100001", "A0").error == RetakeError::BadLetter);  // P/F 과목에 일반 등급
+    CHECK(run("100002", "P").error == RetakeError::BadLetter);   // 일반 과목에 P
+
+    const Statistics::RetakeSimulation sim = run("100001", "P");
+    CHECK(sim.error == RetakeError::None);
+    CHECK_EQ(sim.items.size(), static_cast<size_t>(1));
+    if (sim.items.size() == 1) {
+        CHECK_EQ(sim.items[0].previousLetter, std::string("NP"));
+        CHECK_EQ(sim.items[0].appliedLetter, std::string("P"));
+    }
+    CHECK_NEAR(sim.after.gpa, sim.before.gpa, 1e-12);  // 평점은 그대로
+    CHECK_EQ(sim.before.earnedCredits, 3);              // B+ 3학점만
+    CHECK_EQ(sim.after.earnedCredits, 4);               // + P 1학점
+    CHECK_EQ(gm.getGrades().size(), gradeCount);        // 저장·변경 없음
+}
+
+// 후보 목록: C+ 이하·F·NP 만, 등급 선택지에 A+ 없음
+TEST_CASE(retakeCandidates_filters_and_letters) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    for (const char* code : {"100001", "100002", "100003", "100004"}) {
+        CHECK(gm.addCourse(makeCourse(code, "과목", 3)));
+    }
+    Course pass = makeCourse("100005", "P과목", 1);
+    pass.gradeType = kGradeTypePassFail;
+    Course nonpass = makeCourse("100006", "NP과목", 1);
+    nonpass.gradeType = kGradeTypePassFail;
+    CHECK(gm.addCourse(pass));
+    CHECK(gm.addCourse(nonpass));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 97)));  // A+ 제외
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 80)));  // B0 제외
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2025-1", 77)));  // C+
+    CHECK(gm.addGrade(makeGrade("25103008", "100004", "2025-1", 40)));  // F
+    Grade p = makeGrade("25103008", "100005", "2025-1", kPassScore);
+    p.assignedLetter = kLetterPass;  // P 제외
+    Grade np = makeGrade("25103008", "100006", "2025-1", kNonPassScore);
+    np.assignedLetter = "NP";
+    CHECK(gm.addGrade(p));
+    CHECK(gm.addGrade(np));
+
+    const std::vector<Statistics::RetakeCandidate> list =
+        Statistics::retakeCandidates(gm, "25103008", "2026-1");
+    CHECK_EQ(list.size(), static_cast<size_t>(3));
+    if (list.size() == 3) {
+        CHECK_EQ(list[0].courseCode, std::string("100003"));
+        CHECK_EQ(list[1].courseCode, std::string("100004"));
+        CHECK_EQ(list[2].courseCode, std::string("100006"));
+        CHECK_EQ(list[1].previousLetter, std::string("F"));
+        CHECK_EQ(list[0].letters.size(), static_cast<size_t>(8));
+        CHECK_EQ(list[0].letters[0], std::string("A0"));  // A+ 없음
+        CHECK(list[2].passFail);
+        CHECK_EQ(list[2].letters.size(), static_cast<size_t>(2));  // P, NP
+    }
 }

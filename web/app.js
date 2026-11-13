@@ -2313,16 +2313,10 @@ const attendSummaryLine = (s) =>
 //   P/F 과목은 평점에 들어가지 않아 고를 대상에서 뺌 (서버도 400)
 async function renderRetakeSim() {
     const seq = renderSeq;
-    const grades = await api('GET', '/api/grades?studentId=' + encodeURIComponent(state.me.studentId));
+    const { courses } = await api('GET', '/api/stats/simulate/retake/candidates/' + encodeURIComponent(state.me.studentId));
     if (seq !== renderSeq) return;
     const box = document.querySelector('#sim-box');
     if (!box) return;
-    // 과목마다 가장 늦은 학기 성적 (= 지금 반영된 등급)
-    const latest = new Map();
-    grades.filter((g) => !isPassFailCourse(g.courseCode)).forEach((g) => {
-        const cur = latest.get(g.courseCode);
-        if (!cur || isPastSemester(cur.semester, g.semester)) latest.set(g.courseCode, g);
-    });
     let sec = document.querySelector('#sim-retake');
     if (!sec) {
         sec = document.createElement('section');
@@ -2330,51 +2324,56 @@ async function renderRetakeSim() {
         sec.id = 'sim-retake';
         box.appendChild(sec);
     }
-    const courses = [...latest.values()].sort((a, b) => a.courseCode.localeCompare(b.courseCode));
     if (!courses.length) {
-        sec.innerHTML = '<h4 class="assess-head">재수강 시뮬레이션</h4><p class="hint">성적이 있는 과목이 없습니다</p>';
+        sec.innerHTML = '<h4 class="assess-head">재수강 시뮬레이션</h4><p class="hint">재수강 가능한 과목(C+ 이하, F, NP)이 없습니다</p>';
         return;
     }
     sec.innerHTML = `
         <h4 class="assess-head">재수강 시뮬레이션</h4>
-        <p class="hint">이미 들은 과목을 다시 들어 받을 등급을 고르면 GPA 가 어떻게 바뀌는지 미리 봅니다 (저장되지 않습니다)</p>
+        <p class="hint">C+ 이하, F, NP 과목만 재수강할 수 있습니다. 받을 등급을 고르면 GPA 가 어떻게 바뀌는지 미리 봅니다 (저장되지 않습니다)</p>
         <div class="field"><label for="retake-course">과목</label>
-            <select id="retake-course">${courses.map((g) => `
-                <option value="${esc(g.courseCode)}">${esc(courseName(g.courseCode) || g.courseCode)} (${esc(g.courseCode)}) · ${esc(g.semester)} ${esc(g.letter)}</option>`).join('')}
+            <select id="retake-course">${courses.map((c) => `
+                <option value="${esc(c.courseCode)}">${esc(c.courseName || c.courseCode)} (${esc(c.courseCode)}) · ${esc(c.semester)} ${esc(c.previousLetter)}</option>`).join('')}
             </select></div>
         <div class="field"><label for="retake-letter">예상 등급</label>
-            <select id="retake-letter">${GRADE_LETTERS.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select></div>
+            <select id="retake-letter"></select></div>
         <button type="button" id="retake-run">계산</button>
         <div id="retake-result"></div>`;
-    if (latest.has(mySim.retakeCourse)) sec.querySelector('#retake-course').value = mySim.retakeCourse;
-    sec.querySelector('#retake-letter').value = mySim.retakeLetter;
-    sec.onchange = () => {  // 고르는 값을 바꾸면 옛 결과는 지움
-        mySim.retakeCourse = sec.querySelector('#retake-course').value;
-        mySim.retakeLetter = sec.querySelector('#retake-letter').value;
-        sec.querySelector('#retake-result').innerHTML = '';
+    const courseSel = sec.querySelector('#retake-course');
+    const letterSel = sec.querySelector('#retake-letter');
+    // 고른 과목의 등급 선택지(서버가 준 letters)로 채움. 이전에 고른 등급이 있으면 유지
+    const fillLetters = () => {
+        const c = courses.find((x) => x.courseCode === courseSel.value);
+        letterSel.innerHTML = c.letters.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+        letterSel.value = c.letters.includes(mySim.retakeLetter) ? mySim.retakeLetter : c.letters[0];
+    };
+    if (courses.some((c) => c.courseCode === mySim.retakeCourse)) courseSel.value = mySim.retakeCourse;
+    fillLetters();
+    sec.onchange = (e) => {
+        if (e.target === courseSel) fillLetters();
+        mySim.retakeCourse = courseSel.value;
+        mySim.retakeLetter = letterSel.value;
+        sec.querySelector('#retake-result').innerHTML = '';  // 값을 바꾸면 옛 결과는 지움
     };
     sec.onclick = (e) => { if (e.target.closest('#retake-run')) runRetakeSim(); };
 }
 
-// 전/후 값 한 줄: "3.20 → 3.31 (+0.11)", 숫자가 아니면 '-'
-function beforeAfter(a, b, d = 2) {
-    const delta = typeof a === 'number' && typeof b === 'number' ? Math.round((b - a) * 10 ** d) / 10 ** d : null;
-    const diff = delta === null ? '' : delta === 0 ? ' (변화 없음)' : ` (${delta > 0 ? '+' : '-'}${Math.abs(delta).toFixed(d)})`;
-    return `${fmt(a, d)} → <b>${fmt(b, d)}</b>${diff}`;
-}
-
 function retakeResultHtml(r) {
     const it = r.items[0];
+    const pf = PF_LETTERS.includes(it.appliedLetter);
     return `
         <p>${esc(courseName(it.courseCode))} · 이전 ${letterBadge(it.previousLetter)} → 반영 ${letterBadge(it.appliedLetter)}</p>
         <div class="table-wrap">
             <table><thead><tr><th></th><th class="num">전 → 후</th></tr></thead><tbody>
                 <tr><td>전체 GPA</td><td class="num">${beforeAfter(r.before.gpa, r.after.gpa)}</td></tr>
                 <tr><td>전공 GPA</td><td class="num">${beforeAfter(r.before.majorGpa, r.after.majorGpa)}</td></tr>
-                <tr><td>등록 학점</td><td class="num">${beforeAfter(r.before.credits, r.after.credits, 0)}</td></tr>
+                <tr><td>계산 학점</td><td class="num">${beforeAfter(r.before.credits, r.after.credits, 0)}</td></tr>
+                <tr><td>취득 학점</td><td class="num">${beforeAfter(r.before.earnedCredits, r.after.earnedCredits, 0)}</td></tr>
             </tbody></table>
         </div>
-        <p class="hint">A+ 는 A0 로 계산됩니다 (재수강 성적은 A0 까지만 반영, 이전 성적은 삭제된 성적으로 GPA 에서 빠집니다)</p>`;
+        <p class="hint">${pf
+            ? 'P/F 과목은 평점에 들어가지 않고 취득 학점만 바뀝니다 (이전 NP 는 삭제된 성적으로 빠집니다)'
+            : 'A+ 는 A0 로 계산됩니다 (재수강 성적은 A0 까지만 반영, 이전 성적은 삭제된 성적으로 GPA 에서 빠집니다)'}</p>`;
 }
 
 async function runRetakeSim() {

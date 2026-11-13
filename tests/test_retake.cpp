@@ -127,3 +127,8 @@ TEST_CASE(studentReport_R_row_by_admission_year) {
     CHECK(before2018.find("2025-1") == std::string::npos);
     CHECK(before2018.find("2025-2,97,A0\n") != std::string::npos);
 }
+
+TEST_CASE(isRetakable_c_plus_or_lower_and_np_only) {
+    for (const char* l : {"C+", "C0", "D+", "D0", "F", "NP"}) CHECK(Retake::isRetakable(l));
+    for (const char* l : {"A+", "A0", "B+", "B0", "P", "R"}) CHECK(!Retake::isRetakable(l));
+}

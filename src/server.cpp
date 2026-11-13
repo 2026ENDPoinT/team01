@@ -1021,12 +1021,13 @@ void Server::run() {
             return;
         }
 
-        const auto summaryJson = [](const Statistics::GpaSummary& s) {
+                const auto summaryJson = [](const Statistics::GpaSummary& s) {
             return json{
                 {"gpa", s.credits > 0 ? json(s.gpa) : json(nullptr)},
                 {"credits", s.credits},
                 {"majorGpa", s.majorCredits > 0 ? json(s.majorGpa) : json(nullptr)},
-                {"majorCredits", s.majorCredits}
+                {"majorCredits", s.majorCredits},
+                {"earnedCredits", s.earnedCredits}
             };
         };
         json itemsJson = json::array();
@@ -1036,6 +1037,31 @@ void Server::run() {
         }
         setJson(res, 200, json{{"before", summaryJson(sim.before)}, {"after", summaryJson(sim.after)},
                                {"items", itemsJson}});
+    });
+
+        // 재수강 후보 과목 (화면 드롭다운용). 규칙은 Statistics::retakeCandidates 한 곳. 저장하지 않음
+    svr.Get("/api/stats/simulate/retake/candidates/:id", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "student"});
+        if (!account) return;
+        const std::string id = req.path_params.at("id");
+        if (account->role == "student" && id != account->studentId) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        if (!gm.findStudent(id)) {
+            setError(res, 404, "없는 학생입니다: " + id);
+            return;
+        }
+        json courses = json::array();
+        for (const Statistics::RetakeCandidate& c : Statistics::retakeCandidates(gm, id, currentSemester(gm))) {
+            courses.push_back({
+                {"courseCode", c.courseCode}, {"courseName", c.courseName},
+                {"semester", c.semester}, {"previousLetter", c.previousLetter},
+                {"passFail", c.passFail}, {"letters", c.letters}
+            });
+        }
+        setJson(res, 200, json{{"courses", courses}});
     });
 
     // 전체 과목 통계 일괄 조회. 개별 과목 통계와 같은 필드·계산 규칙.

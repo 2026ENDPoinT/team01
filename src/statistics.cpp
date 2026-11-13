@@ -83,9 +83,9 @@ GpaSummary toSummary(const std::map<std::string, GpaSum>& sums) {
         s.gpa = toGpa(sum);
         s.credits = static_cast<int>(sum.credits);
         s.majorGpa = toMajorGpa(sum);
-        s.majorCredits = static_cast<int>(sum.majorCredits);
-        summary.semesters.push_back(s);
+        s.majorCredits = static_cast<int>(sum.majorCredits);        
         s.earnedCredits = static_cast<int>(sum.earned);
+        summary.semesters.push_back(s);
         total.add(sum);
     }
     summary.gpa = toGpa(total);
@@ -183,7 +183,9 @@ std::string makeSemester(int year, int term) {
 }  // namespace
 namespace {
 
-bool isSimLetter(const std::string& letter) {
+
+bool isSimLetter(const std::string& letter, bool passFail) {
+    if (passFail) return letter == kLetterPass || letter == "NP";
     static const char* const kLetters[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
     return std::any_of(std::begin(kLetters), std::end(kLetters),
                        [&](const char* l) { return letter == l; });
@@ -196,7 +198,50 @@ RetakeSimulation simFail(RetakeError error, const std::string& message) {
     return result;
 }
 
+// 이 학생이 이 과목에서 받은 가장 늦은 학기 성적 (없으면 nullptr)
+const Grade* latestGradeOf(const std::vector<Grade>& grades, const std::string& studentId,
+                           const std::string& courseCode) {
+    const Grade* latest = nullptr;
+    for (const Grade& g : grades) {
+        if (g.studentId != studentId || g.courseCode != courseCode) continue;
+        if (latest == nullptr || semester::isPast(latest->semester, g.semester)) latest = &g;
+    }
+    return latest;
+}
+
 }  // namespace
+
+std::vector<std::string> retakeLetters(bool passFail) {
+    if (passFail) return {"P", "NP"};
+    return {"A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
+}
+
+std::vector<RetakeCandidate> retakeCandidates(const GradeManager& gm, const std::string& studentId,
+                                              const std::string& currentSemester) {
+    const std::vector<Grade> all = gm.getGrades();
+    std::set<std::string> codes;  // 과목코드 오름차순
+    for (const Grade& g : all) {
+        if (g.studentId == studentId) codes.insert(g.courseCode);
+    }
+    std::vector<RetakeCandidate> result;
+    for (const std::string& code : codes) {
+        const Course* course = gm.findCourse(code);
+        const Grade* latest = latestGradeOf(all, studentId, code);
+        if (course == nullptr || latest == nullptr) continue;
+        if (semester::isPast(currentSemester, latest->semester)) continue;  // 현재 학기보다 늦은 성적
+        const std::string letter = Retake::officialLetter(*latest, all);
+        if (!Retake::isRetakable(letter)) continue;
+        RetakeCandidate c;
+        c.courseCode = code;
+        c.courseName = course->name;
+        c.semester = latest->semester;
+        c.previousLetter = letter;
+        c.passFail = course->isPassFail();
+        c.letters = retakeLetters(c.passFail);
+        result.push_back(c);
+    }
+    return result;
+}
 
 RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& studentId,
                                 const std::string& currentSemester,
@@ -207,26 +252,21 @@ RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& stude
     RetakeSimulation result;
 
     for (const RetakeItem& item : items) {
-        if (!isSimLetter(item.letter)) {
-            return simFail(RetakeError::BadLetter,
-                           "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)");
-        }
-        if (gm.findCourse(item.courseCode) == nullptr) {
+        const Course* course = gm.findCourse(item.courseCode);
+        if (course == nullptr) {
             return simFail(RetakeError::NoCourse, "없는 과목입니다: " + item.courseCode);
         }
-        if (gm.findCourse(item.courseCode)->isPassFail()) {
-            return simFail(RetakeError::PassFail, "P/F 과목은 재수강 시뮬레이션 대상이 아닙니다: " + item.courseCode);
+        const bool passFail = course->isPassFail();
+        if (!isSimLetter(item.letter, passFail)) {
+            return simFail(RetakeError::BadLetter, passFail
+                ? "P/F 과목은 P 또는 NP 만 고를 수 있습니다: " + item.courseCode
+                : "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)");
         }
         if (!seen.insert(item.courseCode).second) {
             return simFail(RetakeError::Duplicate, "같은 과목이 두 번 들어 있습니다: " + item.courseCode);
         }
 
-        // 이 학생이 이 과목에서 받은 가장 늦은 학기 성적
-        const Grade* latest = nullptr;
-        for (const Grade& g : original) {
-            if (g.studentId != studentId || g.courseCode != item.courseCode) continue;
-            if (latest == nullptr || semester::isPast(latest->semester, g.semester)) latest = &g;
-        }
+        const Grade* latest = latestGradeOf(original, studentId, item.courseCode);
         if (latest == nullptr) {
             return simFail(RetakeError::NoGrade, "성적이 없는 과목입니다: " + item.courseCode);
         }
@@ -238,6 +278,16 @@ RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& stude
         RetakeItemResult r;
         r.courseCode = item.courseCode;
         r.previousLetter = Retake::officialLetter(*latest, original);
+        if (!Retake::isRetakable(r.previousLetter)) {
+            if (passFail) {
+                return simFail(RetakeError::PassFail,
+                               "P/F 과목은 NP 일 때만 재수강할 수 있습니다: " + item.courseCode +
+                               " (현재 " + r.previousLetter + ")");
+            }
+            return simFail(RetakeError::NotRetakable,
+                           "재수강은 C+ 이하(F, NP 포함) 과목만 가능합니다: " + item.courseCode +
+                           " (현재 " + r.previousLetter + ")");
+        }
 
         // 현재 학기에 이미 성적이 있으면 대체
         simulated.erase(std::remove_if(simulated.begin(), simulated.end(), [&](const Grade& g) {
@@ -248,9 +298,14 @@ RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& stude
         virt.studentId = studentId;
         virt.courseCode = item.courseCode;
         virt.semester = currentSemester;
-        virt.score = letterToScore(item.letter);
+        if (passFail) {  // P/F 가상 성적: 등급은 assignedLetter, 점수는 P = 100 / NP = 0
+            virt.assignedLetter = item.letter;
+            virt.score = item.letter == kLetterPass ? kPassScore : kNonPassScore;
+        } else {
+            virt.score = letterToScore(item.letter);
+        }
         simulated.push_back(virt);
-        r.appliedLetter = Retake::officialLetter(simulated.back(), simulated);  // 재수강이면 A+ → A0
+        r.appliedLetter = Retake::officialLetter(simulated.back(), simulated);  // 일반 과목 재수강이면 A+ → A0
         result.items.push_back(r);
     }
 

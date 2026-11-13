@@ -32,4 +32,12 @@ std::string officialLetter(const Grade& grade, const std::vector<Grade>& grades)
 // 삭제된 성적을 뺀 목록 (GPA·과목 통계는 이것으로 계산)
 std::vector<Grade> activeGrades(const std::vector<Grade>& grades);
 
+// namespace Retake 안, activeGrades 선언 아래에 추가
+// 재수강할 수 있는 직전 성적(반영 등급): C+ C0 D+ D0 F 와 NP
+//   A+ A0 B+ B0, P, 삭제된 성적("R")은 불가
+inline bool isRetakable(const std::string& letter) {
+    return letter == "C+" || letter == "C0" || letter == "D+" || letter == "D0" ||
+           letter == "F" || letter == "NP";
+}
+
 }  // namespace Retake
