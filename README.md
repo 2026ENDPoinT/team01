@@ -124,7 +124,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | 기능 | 관리자 | 교수 | 학생 |
 |---|---|---|---|
 | 과목 목록·과목 통계 | O | O | O |
-| 과목 등록·수정·삭제 | O | X | X |
+| 과목 등록·삭제 (수정은 화면에 없음, API 만) | O | X | X |
 | 학생 목록·검색 | 전체 | 담당 과목 수강생 | 본인 |
 | 학생 등록·수정·삭제 | O | X | X |
 | 성적 조회 | 전체 | 담당 과목 | 본인 |
@@ -295,7 +295,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | DELETE | `/api/students/:id` | 학생 삭제 (성적·수강신청·계정도 삭제, 관리자) |
 | GET | `/api/courses` | 과목 목록 |
 | POST | `/api/courses` | 과목 등록 (관리자). 담당 교수·강의시간 필수 (비면 `400`, 수정 `PUT` 은 빈 강의시간 허용) |
-| PUT | `/api/courses/:code` | 과목 수정 (관리자) |
+| PUT | `/api/courses/:code` | 과목 수정 (관리자). 화면에는 수정 기능이 없음: 강의시간을 옮기면 이미 수강신청한 학생의 시간표·수강신청에서 다른 과목과 겹치는 것을 막지 못하기 때문 |
 | DELETE | `/api/courses/:code` | 과목 삭제 (성적·수강신청·게시물도 삭제, 관리자) |
 | GET | `/api/courses/:code/posts` | 과목 게시물 목록 (학기·주차·id 순, 관리자·담당 교수·수강신청한 학생) |
 | POST | `/api/courses/:code/posts` | 게시물 추가 `{semester, category, week, title, body, link, dueDate}`, `201` (관리자·담당 교수) |
