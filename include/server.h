@@ -11,6 +11,8 @@
 //   POST   /api/login                 로그인 {username,password} (공개)
 //   POST   /api/logout                로그아웃 (로그인)
 //   GET    /api/me                    내 정보 {username,role,name,studentId} (로그인)
+//   GET    /api/version               변경 번호 {"version":N} (로그인, Cache-Control: no-store) — 웹이 3초마다 확인해
+//                                     번호가 바뀌면 지금 탭을 다시 그림 (다른 접속자의 변경 반영)
 //   PUT    /api/me/password           내 비밀번호 변경 {currentPassword,newPassword} (로그인)
 //   GET    /api/accounts              계정 목록        POST /api/accounts        계정 생성 (admin)
 //   PUT    /api/accounts/:username    계정 수정        DELETE /api/accounts/:username 계정 삭제 (admin)
@@ -93,12 +95,17 @@
 //          404 (없음) / 409 (중복, 정원 초과, 수강신청 규칙 위반, 평가 항목 규칙 위반) /
 //          500 (파일 저장 실패) + {"error": "메시지"}
 // 저장: 데이터를 바꾸는 라우트는 성공한 뒤 gm.save() (계정은 accounts->save()) 로 바로 CSV 에 씀
+// 변경 번호: 데이터를 바꾸는 요청(changesData)이 성공할 때마다 dataVersion 을 1 올림 (서버 시작 시 1, 메모리에만 있음).
+//   모든 /api/* 응답에 헤더 X-Data-Version: <번호> (데이터를 바꾼 요청이면 그 요청이 올린 번호)
 //
 // 동시 접근: cpp-httplib 은 요청을 여러 스레드에서 동시에 처리함
 //   → gm, accounts, sessions 를 쓰는 모든 라우트는 첫 줄에 std::lock_guard<std::mutex> lock(mtx); (server.cpp 예시 라우트 참고)
+//   예외: GET /api/version 은 세션 확인에만 mtx 를 짧게 잡고 번호(원자 변수)는 잠금 밖에서 읽음
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <initializer_list>
 #include <mutex>
 #include <string>
@@ -118,6 +125,11 @@ struct Session {
     std::chrono::steady_clock::time_point expires;  // 로그인 후 8시간, 연장하지 않음
 };
 
+// 이 요청이 끝난 뒤 변경 번호(Server::dataVersion)를 올려야 하는지 (순수 함수, 서버 post-routing 처리기가 사용)
+//   true: method 가 POST·PUT·DELETE, path 가 /api/ 로 시작, status < 400, 데이터를 바꾸지 않는 라우트가 아님
+//   제외 라우트와 이유는 server.cpp 의 kNoDataChangeRoutes 주석
+bool changesData(const std::string& method, const std::string& path, int status);
+
 class Server {
 public:
     // bindAddress: 기본 127.0.0.1 (이 컴퓨터에서만 접속), main 의 두 번째 인자로 바꿀 수 있음
@@ -135,6 +147,8 @@ private:
     std::mutex mtx;  // gm 을 한 번에 한 요청만 쓰도록 잠금
     AccountStore* accounts = nullptr;  // 계정 (main이 소유)
     std::unordered_map<std::string, Session> sessions;  // 로그인 세션 (mtx 안에서만 접근)
+    // 변경 번호: 데이터를 바꾸는 요청이 성공할 때마다 1 올림 (changesData). 잠금 없이 읽고 씀
+    std::atomic<std::uint64_t> dataVersion{1};
 
     // 아래 도우미는 mtx 를 잡은 상태에서 호출 (server.cpp 정의)
     // 요청의 Cookie 헤더에서 sid 값을 꺼냄 (없으면 "")
