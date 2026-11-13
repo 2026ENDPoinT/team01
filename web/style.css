@@ -115,23 +115,33 @@ main { max-width: 960px; margin: 28px auto 48px; padding: 0 16px; }
     margin-left: auto;
 }
 
-/* 성적 페이지네이션: 표 오른쪽 아래에 배치 */
-#grade-pagination {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 8px;
+/* 학생·성적 공통 페이지네이션: 이동 줄과 전체 건수를 분리 */
+.pagination {
     margin: 12px 0 0;
     color: var(--muted);
     font-size: 13px;
     font-variant-numeric: tabular-nums;
 }
-#grade-pagination button {
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.pagination-controls span {
+    min-width: 92px;
+    text-align: center;
+}
+.pagination-controls button {
     min-width: 64px;
 }
-#grade-pagination button:disabled {
+.pagination-controls button:disabled {
     opacity: .35;
+}
+.pagination-total {
+    margin-top: 5px;
+    text-align: right;
+    font-size: 12px;
 }
 
 .sub-title { font-size: 16px; font-weight: 600; color: var(--accent); margin: 0 0 12px; }

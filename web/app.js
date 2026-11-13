@@ -25,7 +25,14 @@ let baseGen = 0;
 const dirtyTabs = new Set();
 const BASE_TTL_MS = 30000;
 let gradePage = 1;
+let studentPage = 1;
 const GRADE_PAGE_SIZE = 10;
+const STUDENT_PAGE_SIZE = 10;
+// 학생 페이지 이동 때는 이미 받아 둔 목록·통계를 재사용한다.
+let studentListCache = null;
+let studentListQuery = null;
+let studentStatsCache = null;
+let studentRenderSeq = 0;
 
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
@@ -126,6 +133,26 @@ const ATTEND_LOCK_MSG = '출석 점수는 출석부에서 자동 계산됩니다
 const RELATIVE_RULES = 'A0 이상 30%·B0 이상 70% 이하, 평균 3.50 이하';
 // 등급 → 평점 (서버 letterToPoint 와 같음, F·R·모르는 값은 0)
 const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.0, 'D+': 1.5, D0: 1.0 };
+
+// 학생·성적 탭이 함께 쓰는 페이지 이동 줄. 10건 이하면 표시하지 않는다.
+function renderPager(el, { page, totalPages, total, onMove }) {
+    if (!el) return;
+    const visible = totalPages > 1;
+    el.hidden = !visible;
+    el.innerHTML = visible ? `
+        <div class="pagination-controls">
+            <button type="button" data-page="prev" ${page <= 1 ? 'disabled' : ''}>이전</button>
+            <span>${page} / ${totalPages} 페이지</span>
+            <button type="button" data-page="next" ${page >= totalPages ? 'disabled' : ''}>다음</button>
+        </div>
+        <div class="pagination-total">전체 ${total}건</div>
+    ` : '';
+    el.onclick = (e) => {
+        const button = e.target.closest('button[data-page]');
+        if (!button || button.disabled) return;
+        onMove(button.dataset.page === 'next' ? page + 1 : page - 1);
+    };
+}
 
 // ───────── 역할 ─────────
 
@@ -391,6 +418,9 @@ async function renderTab() {
 // 등록·수정·삭제 뒤에 호출: 캐시를 쓰지 않고 목록을 항상 새로 받은 뒤 지금 탭을 다시 그림 (변경 직후 최신 값이 보여야 함)
 async function refreshAll() {
     if (!state.me) return;
+    studentListCache = null;
+    studentListQuery = null;
+    studentStatsCache = null;
     const seq = ++renderSeq;
     for (const n of Object.keys(renderers)) if (n !== currentTab()) dirtyTabs.add(n);
     state.baseLoadedAt = 0;  // 기다리는 사이 다른 탭이 열려도 옛 캐시를 쓰지 않게
@@ -422,6 +452,11 @@ function resetView() {
     baseGen++;
     state.baseLoadedAt = 0;
     gradePage = 1;
+    studentPage = 1;
+    studentListCache = null;
+    studentListQuery = null;
+    studentStatsCache = null;
+    studentRenderSeq++;
     state.students = [];
     state.courses = [];
     state.stats = {};
@@ -445,7 +480,7 @@ function resetView() {
         'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-hero', 'course-filter', 'course-posts', 'course-sem',
-        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'grade-pagination'].forEach((id) => ($(id).innerHTML = ''));
+        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'student-pagination', 'grade-pagination'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
     delete $('attend-body').dataset.key;
@@ -1859,23 +1894,55 @@ const studentFields = (editing) => [
 // 학생 표 그리기 (관리자). 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
 // 전체 학생 GPA 일괄 조회와 학사경고 목록으로 GPA 열·경고 횟수를 채움
 // 성적이 없는 학생은 서버가 gpa null 을 줌 → '-' (fmt)
-async function renderStudents() {
-    const seq = renderSeq;
+async function renderStudents({ reload = true } = {}) {
+    const seq = ++studentRenderSeq;
     const q = $('student-search').value.trim();
-    let list = state.students;
-    if (q) {
-        try { list = await api('GET', '/api/students/search?q=' + encodeURIComponent(q)); }
-        catch (e) { toast(e.message, true); }
-    }
-    if (seq !== renderSeq) return;
-    const body = $('student-body');
-    if (!list.length) { body.innerHTML = emptyRow(7, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
 
-    const [gpaRows, warnings] = await Promise.all([
-        api('GET', '/api/stats/gpa/batch').catch(() => []),
-        api('GET', '/api/stats/warnings').catch(() => []),
-    ]);
-    if (seq !== renderSeq) return;
+    // 검색어가 같고 페이지 이동만 한 경우에는 목록 API 를 다시 호출하지 않는다.
+    if (reload || studentListCache === null || studentListQuery !== q) {
+        let list = state.students;
+        if (q) {
+            try {
+                list = await api('GET', '/api/students/search?q=' + encodeURIComponent(q));
+            } catch (e) {
+                if (seq !== studentRenderSeq) return;
+                list = [];
+                if (e.message !== '등록되지 않은 학생입니다') toast(e.message, true);
+            }
+        }
+        if (seq !== studentRenderSeq) return;
+        studentListCache = list;
+        studentListQuery = q;
+    }
+
+    const list = studentListCache ?? [];
+    const body = $('student-body');
+    if (!list.length) {
+        body.innerHTML = emptyRow(7, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다');
+        renderPager($('student-pagination'), {
+            page: 1, totalPages: 1, total: 0, onMove: () => {},
+        });
+        return;
+    }
+
+    // GPA·학사경고는 목록을 새로 불러올 때 한 번만 조회하고 페이지 이동에서는 재사용한다.
+    if (!studentStatsCache) {
+        studentStatsCache = Promise.all([
+            api('GET', '/api/stats/gpa/batch').catch(() => []),
+            api('GET', '/api/stats/warnings').catch(() => []),
+        ]);
+    }
+    const [gpaRows, warnings] = await studentStatsCache;
+    if (seq !== studentRenderSeq) return;
+
+    const totalPages = Math.max(1, Math.ceil(list.length / STUDENT_PAGE_SIZE));
+    // 삭제로 현재 페이지가 비면 마지막 유효 페이지로 자동 이동한다.
+    studentPage = Math.min(Math.max(1, studentPage), totalPages);
+    const visibleStudents = list.slice(
+        (studentPage - 1) * STUDENT_PAGE_SIZE,
+        studentPage * STUDENT_PAGE_SIZE
+    );
+
     const gpaById = Object.fromEntries(gpaRows.map((row) => [row.studentId, gpaOf(row)]));
     // 학사경고 사유 약칭 (서버 reason 문자열 기준, 모르는 사유는 원문 그대로)
     const reasonShort = { '수강신청 미이행': '미신청', '평점평균 1.75 미만': '평점' };
@@ -1885,10 +1952,10 @@ async function renderStudents() {
         const ws = warnList[id];
         if (!ws) return '-';
         const kinds = [...new Set(ws.map((w) => reasonShort[w.reason] ?? w.reason))];
-        const tip = ws.map((w) => `${w.semester} ${w.reason}${typeof w.gpa === 'number' ? ` (GPA ${w.gpa.toFixed(2)})` : ''}`).join('\n');
-        return `<span class="badge F" title="${esc(tip).replace(/\n/g, '&#10;')}">${ws.length}회 · ${esc(kinds.join('·'))}</span>`;
+        const tip = ws.map((w) => `${w.semester} ${w.reason}${typeof w.gpa === 'number' ? ` (GPA ${w.gpa.toFixed(2)})` : ''}`).join('\\n');
+        return `<span class="badge F" title="${esc(tip).replace(/\\n/g, '&#10;')}">${ws.length}회 · ${esc(kinds.join('·'))}</span>`;
     };
-    body.innerHTML = list.map((s, i) => `
+    body.innerHTML = visibleStudents.map((s) => `
         <tr>
             <td>${esc(s.id)}</td>
             <td><b>${esc(s.name)}</b></td>
@@ -1902,16 +1969,31 @@ async function renderStudents() {
                 <button class="link danger" data-act="del" data-id="${esc(s.id)}">삭제</button>
             </td>
         </tr>`).join('');
+
+    renderPager($('student-pagination'), {
+        page: studentPage,
+        totalPages,
+        total: list.length,
+        onMove: (nextPage) => {
+            studentPage = nextPage;
+            renderStudents({ reload: false }).catch((e) => toast(e.message, true));
+        },
+    });
 }
 
 // 검색칸에 입력할 때마다 표를 다시 그림
-$('student-search').addEventListener('input', () => renderStudents().catch((e) => toast(e.message, true)));
+$('student-search').addEventListener('input', () => {
+    studentPage = 1;
+    studentListCache = null;
+    renderStudents({ reload: true }).catch((e) => toast(e.message, true));
+});
 $('student-add').onclick = () => openForm({
     title: '학생 등록',
     fields: studentFields(false),
     onSubmit: async (d) => {
         await api('POST', '/api/students', { ...d, year: Number(d.year) });
         toast('학생을 등록했습니다');
+        studentPage = 1;
         await refreshAll();
     },
 });
@@ -2465,15 +2547,15 @@ async function renderGrades() {
         </tr>`;
     }).join('') : emptyRow(7, '조건에 맞는 성적이 없습니다');
 
-    const pager = $('grade-pagination');
-    if (pager) {
-        pager.hidden = !paginated;
-        pager.innerHTML = paginated ? `
-            <button type="button" data-page="prev" ${gradePage <= 1 ? 'disabled' : ''}>이전</button>
-            <span>${gradePage} / ${totalPages} 페이지 · 전체 ${grades.length}건</span>
-            <button type="button" data-page="next" ${gradePage >= totalPages ? 'disabled' : ''}>다음</button>
-        ` : '';
-    }
+    renderPager($('grade-pagination'), {
+        page: gradePage,
+        totalPages: paginated ? totalPages : 1,
+        total: grades.length,
+        onMove: (nextPage) => {
+            gradePage = nextPage;
+            renderGrades().catch((err) => toast(err.message, true));
+        },
+    });
 }
 
 // 필터를 바꾸면 표를 다시 그림
@@ -2482,14 +2564,6 @@ async function renderGrades() {
         gradePage = 1;
         renderGrades().catch((e) => toast(e.message, true));
     }));
-
-// 관리자 성적 목록 페이지 이동
-$('grade-pagination').onclick = (e) => {
-    const button = e.target.closest('button[data-page]');
-    if (!button || button.disabled) return;
-    gradePage += button.dataset.page === 'next' ? 1 : -1;
-    renderGrades().catch((err) => toast(err.message, true));
-};
 
 // 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수(또는 등급)만 고침
 // (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문)
