@@ -107,6 +107,61 @@ TEST_CASE(addGrade_rejects_unknown_and_duplicate) {
     CHECK_EQ(gm.getGrades().size(), static_cast<size_t>(5));
 }
 
+// ----- 학생 수정: 이름·학과·학년이 입력값 그대로 저장되는지 (학생 수정 후 이름이 바뀐다는 보고의 회귀 테스트) -----
+
+namespace {
+
+Student studentOf(const std::string& id, const std::string& name, const std::string& major, int year) {
+    Student s = makeStudent(id, name, year);
+    s.major = major;
+    return s;
+}
+
+bool sameStudentValues(const Student* s, const std::string& id, const std::string& name, const std::string& major,
+                       int year) {
+    return s != nullptr && s->id == id && s->name == name && s->major == major && s->year == year;
+}
+
+}  // namespace
+
+TEST_CASE(updateStudent_keeps_each_field_as_entered) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fill(gm);  // 24000001 가, 24000002 나
+
+    // 칸을 하나씩 바꿈: 바꾼 칸만 바뀌고 나머지는 그대로, 다른 학생도 그대로
+    CHECK(gm.updateStudent("24000001", studentOf("24000001", "가나다", "컴퓨터공학", 1)));
+    CHECK(sameStudentValues(gm.findStudent("24000001"), "24000001", "가나다", "컴퓨터공학", 1));
+    CHECK(gm.updateStudent("24000001", studentOf("24000001", "가나다", "소프트웨어학", 1)));
+    CHECK(sameStudentValues(gm.findStudent("24000001"), "24000001", "가나다", "소프트웨어학", 1));
+    CHECK(gm.updateStudent("24000001", studentOf("24000001", "가나다", "소프트웨어학", 3)));
+    CHECK(sameStudentValues(gm.findStudent("24000001"), "24000001", "가나다", "소프트웨어학", 3));
+    CHECK(sameStudentValues(gm.findStudent("24000002"), "24000002", "나", "컴퓨터공학", 1));
+    CHECK_EQ(gm.getStudents().size(), static_cast<size_t>(2));
+}
+
+TEST_CASE(updateStudent_id_change_keeps_values_and_survives_reload) {
+    TempDir dir;
+    {
+        GradeManager gm(dir.str());
+        CHECK(gm.load());
+        fill(gm);
+        // 학번과 이름·학과·학년을 같이 바꿈 → 새 학번으로 입력값 그대로, 성적도 따라감
+        CHECK(gm.updateStudent("24000001", studentOf("24000009", "새이름", "전자공학", 2)));
+        CHECK(gm.findStudent("24000001") == nullptr);
+        CHECK(sameStudentValues(gm.findStudent("24000009"), "24000009", "새이름", "전자공학", 2));
+        CHECK_EQ(gm.getGradesByStudent("24000009").size(), static_cast<size_t>(2));
+        CHECK(sameStudentValues(gm.findStudent("24000002"), "24000002", "나", "컴퓨터공학", 1));
+        CHECK(gm.save());
+    }
+    // 재시작(다시 불러오기) 후에도 그대로
+    GradeManager loaded(dir.str());
+    CHECK(loaded.load());
+    CHECK(sameStudentValues(loaded.findStudent("24000009"), "24000009", "새이름", "전자공학", 2));
+    CHECK(sameStudentValues(loaded.findStudent("24000002"), "24000002", "나", "컴퓨터공학", 1));
+    CHECK(loaded.findStudent("24000001") == nullptr);
+}
+
 // ----- 평가 기준 (#66): 6분류 비율 → 최종 성적 자동 계산, 출석 자동, 등급 방식 -----
 
 namespace {
@@ -652,4 +707,122 @@ TEST_CASE(attendance_cascade_course_code_and_student_changes) {
     // 과목 삭제 → 그 과목 출결 모두 삭제
     CHECK(gm.removeCourse("109009"));
     CHECK(gm.getAttendanceByStudent("24000002").empty());
+}
+
+// ----- Pass/Fail 과목 (현준 담당: 성적 입력 검사, 평가 기준과의 관계, 성적 방식 변경) -----
+
+namespace {
+
+const char* const kPfCode = "100901";
+
+Grade pfGrade(const std::string& studentId, const std::string& letter, const std::string& code = kPfCode) {
+    Grade g = makeGrade(studentId, code, kSemester, letter == kLetterPass ? kPassScore : kNonPassScore);
+    g.assignedLetter = letter;
+    return g;
+}
+
+// 학생 2명, P/F 과목 100901(1학점), 일반 과목 109001. 두 학생 모두 두 과목 2026-2 수강신청
+void fillPassFail(GradeManager& gm) {
+    CHECK(gm.addStudent(makeStudent("24000001", "가")));
+    CHECK(gm.addStudent(makeStudent("24000002", "나")));
+    Course pf = makeCourse(kPfCode, "사회봉사", 1);
+    pf.gradeType = kGradeTypePassFail;
+    CHECK(gm.addCourse(pf));
+    CHECK(gm.addCourse(makeCourse(kCode, "자료구조")));
+    for (const char* id : {"24000001", "24000002"}) {
+        CHECK(gm.addEnrollment(makeEnrollment(id, kPfCode, kSemester)));
+        CHECK(gm.addEnrollment(makeEnrollment(id, kCode, kSemester)));
+    }
+}
+
+}  // namespace
+
+TEST_CASE(passFail_course_accepts_only_P_and_NP) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillPassFail(gm);
+
+    CHECK(gm.addGrade(pfGrade("24000001", kLetterPass)));
+    CHECK(gm.addGrade(pfGrade("24000002", kLetterNonPass)));
+    const Grade* p = findGrade(gm, "24000001", kPfCode, kSemester);
+    CHECK(p != nullptr && p->assignedLetter == "P" && p->score == 100.0);
+
+    // P/F 과목에 점수·일반 등급은 거부, P 인데 점수가 100 이 아니면 거부
+    CHECK(gm.removeGrade("24000001", kPfCode, kSemester));
+    CHECK(!gm.addGrade(makeGrade("24000001", kPfCode, kSemester, 90)));
+    Grade wrongScore = pfGrade("24000001", kLetterPass);
+    wrongScore.score = 90;
+    CHECK(!gm.addGrade(wrongScore));
+    CHECK(gm.addGrade(pfGrade("24000001", kLetterPass)));
+
+    // 수정: P → NP 가능, P/F 과목을 점수로 바꾸는 수정은 거부
+    CHECK(gm.updateGrade(pfGrade("24000001", kLetterNonPass)));
+    CHECK_EQ(findGrade(gm, "24000001", kPfCode, kSemester)->assignedLetter, std::string("NP"));
+    CHECK(!gm.updateGrade(makeGrade("24000001", kPfCode, kSemester, 80)));
+
+    // 일반 과목에는 P·NP 를 받지 않음
+    CHECK(!gm.addGrade(pfGrade("24000001", kLetterPass, kCode)));
+    CHECK(gm.addGrade(makeGrade("24000001", kCode, kSemester, 90)));
+    CHECK(!gm.updateGrade(pfGrade("24000001", kLetterPass, kCode)));
+}
+
+TEST_CASE(passFail_course_has_no_grading_scheme) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillPassFail(gm);
+    CHECK(!gm.setGradingScheme(kPfCode, kSemester, kWeights, kGradingAbsolute));
+    CHECK(!gm.hasAssessments(kPfCode, kSemester));
+    CHECK(gm.setGradingScheme(kCode, kSemester, kWeights, kGradingAbsolute));  // 일반 과목은 그대로
+}
+
+TEST_CASE(passFail_gradeType_change_only_without_grades_or_assessments) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillPassFail(gm);
+    Course toLetter = *gm.findCourse(kPfCode);
+    toLetter.gradeType = kGradeTypeLetter;
+    Course toPf = *gm.findCourse(kCode);
+    toPf.gradeType = kGradeTypePassFail;
+
+    // 성적이 없으면 바꿀 수 있음 (되돌리기까지)
+    CHECK(gm.updateCourse(kPfCode, toLetter));
+    CHECK(!gm.findCourse(kPfCode)->isPassFail());
+    toLetter.gradeType = kGradeTypePassFail;
+    CHECK(gm.updateCourse(kPfCode, toLetter));
+
+    // P/F 성적이 있으면 등급 과목으로 못 바꿈, 이름 등 다른 값은 바꿀 수 있음
+    CHECK(gm.addGrade(pfGrade("24000001", kLetterPass)));
+    Course renamed = *gm.findCourse(kPfCode);
+    renamed.gradeType = kGradeTypeLetter;
+    CHECK(!gm.updateCourse(kPfCode, renamed));
+    CHECK(gm.findCourse(kPfCode)->isPassFail());
+    renamed.gradeType = kGradeTypePassFail;
+    renamed.name = "사회봉사 (새 이름)";
+    CHECK(gm.updateCourse(kPfCode, renamed));
+    CHECK_EQ(gm.findCourse(kPfCode)->name, std::string("사회봉사 (새 이름)"));
+
+    // 평가 기준이 있는 일반 과목도 P/F 로 못 바꿈
+    CHECK(gm.setGradingScheme(kCode, kSemester, kWeights, kGradingAbsolute));
+    CHECK(!gm.updateCourse(kCode, toPf));
+    CHECK(!gm.findCourse(kCode)->isPassFail());
+}
+
+TEST_CASE(passFail_letters_survive_removeStudent_and_reload) {
+    TempDir dir;
+    {
+        GradeManager gm(dir.str());
+        CHECK(gm.load());
+        fillPassFail(gm);
+        CHECK(gm.addGrade(pfGrade("24000001", kLetterPass)));
+        CHECK(gm.addGrade(pfGrade("24000002", kLetterNonPass)));
+        // 학생을 지우면 남은 학생 등급을 다시 정하는데(applyGradingMode), P/F 과목의 P·NP 는 그대로
+        CHECK(gm.removeStudent("24000001"));
+        CHECK_EQ(findGrade(gm, "24000002", kPfCode, kSemester)->assignedLetter, std::string("NP"));
+        CHECK(gm.save());
+    }
+    GradeManager loaded(dir.str());
+    CHECK(loaded.load());
+    CHECK(loaded.findCourse(kPfCode) != nullptr && loaded.findCourse(kPfCode)->isPassFail());
+    const Grade* np = findGrade(loaded, "24000002", kPfCode, kSemester);
+    CHECK(np != nullptr && np->assignedLetter == "NP" && np->score == 0.0);
 }

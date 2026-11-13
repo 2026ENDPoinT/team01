@@ -65,7 +65,8 @@ std::string readCourse(const json& body, const std::string& defaultCode, Course&
         !(reason = readString(body, "schedule", false, "", "강의시간은 문자열이어야 합니다", c.schedule)).empty() ||
         !(reason = readString(body, "language", false, "", "강의언어는 문자열이어야 합니다", c.language)).empty() ||
         !(reason = readInt(body, "capacity", false, "", "정원은 숫자여야 합니다", "정원은 정수여야 합니다",
-                           c.capacity)).empty()) {
+                           c.capacity)).empty() ||
+        !(reason = readString(body, "gradeType", false, "", "성적 방식은 문자열이어야 합니다", c.gradeType)).empty()) {
         return reason;
     }
     const auto remote = body.find("remote");
@@ -86,6 +87,7 @@ std::string courseError(const Course& c) {
     if (!contains(courseLanguages(), c.language)) return "강의언어가 올바르지 않습니다";
     if (!isValidSchedule(c.schedule)) return "강의시간 형식이 올바르지 않습니다 (예: 월(1~2) 수(3))";
     if (c.capacity < 0 || c.capacity > 999) return "정원은 0~999 사이여야 합니다";
+    if (!isValidGradeType(c.gradeType)) return "성적 방식은 letter(등급) 또는 pf(P/F) 여야 합니다";
     if (!c.isValid()) return "값을 확인해 주세요";
     return "";
 }
