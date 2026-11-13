@@ -130,10 +130,22 @@ const myCourses = () => {
 const dlg = $('dlg');
 let dlgSubmit = null;
 let dlgValidate = null;
+// 저장 요청 중복 방지: 요청을 보내는 동안 dlgBusy = true, 저장 버튼 비활성화
+//   dlgSeq: 창을 열 때마다 1 증가. 저장 도중 창을 닫고 다른 창을 연 경우,
+//   늦게 끝난 이전 요청이 새 창을 닫거나 버튼을 건드리지 않게 하려고 씀
+let dlgBusy = false;
+let dlgSeq = 0;
+
+function setDlgBusy(busy) {
+    dlgBusy = busy;
+    $('dlg-ok').disabled = busy;
+}
 
 // 제목·내용을 채우고 창을 띄움
 // validate 가 있으면 브라우저 기본 검사(required·min·pattern)를 끄고 validate 문구만 보임 (서버와 같은 문구)
 function openDialog({ title, bodyHtml, onSubmit, validate = null, okText = '저장' }) {
+    dlgSeq++;
+    setDlgBusy(false);
     $('dlg-title').textContent = title;
     $('dlg-body').innerHTML = bodyHtml;
     $('dlg-ok').textContent = okText;
@@ -146,9 +158,11 @@ function openDialog({ title, bodyHtml, onSubmit, validate = null, okText = '저�
 
 $('dlg-cancel').onclick = () => dlg.close();
 // 저장: 폼 값을 객체로 모아 dlgSubmit 에 넘김. 성공하면 창을 닫고, 실패하면 창 안에 오류 메시지 표시
+//   요청이 끝나기 전에 다시 누르면(버튼 연타·Enter 반복) 무시 → 같은 등록이 여러 번 가지 않음
+//   실패하면 버튼을 다시 살려서 고친 뒤 다시 저장할 수 있게 함
 $('dlg-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!dlgSubmit) return;
+    if (!dlgSubmit || dlgBusy) return;
     const data = Object.fromEntries(new FormData($('dlg-form')));
     const box = $('dlg-body').querySelector('.form-error');
     const invalid = dlgValidate?.(data);
@@ -157,11 +171,18 @@ $('dlg-form').addEventListener('submit', async (e) => {
         toast(invalid, true);
         return;
     }
+    const seq = dlgSeq;
+    setDlgBusy(true);
     try {
         await dlgSubmit(data);
+        if (seq !== dlgSeq) return;  // 저장 중에 다른 창이 열림 (onSubmit 이 연 창 포함) → 그 창은 그대로 둠
         dlg.close();
     } catch (err) {
+        if (seq !== dlgSeq) return;
         if (box) box.textContent = err.message;
+        toast(err.message, true);
+    } finally {
+        if (seq === dlgSeq) setDlgBusy(false);
     }
 });
 
