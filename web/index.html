@@ -181,13 +181,14 @@
                 <button class="primary" id="post-add">+ 게시물 추가</button>
             </div>
             <div id="course-posts"></div>
-            <!-- 평가 항목 (관리자·담당 교수만, app.js renderAssess): 학기 선택 + 항목 표 + 항목 점수 입력표 -->
+            <!-- 평가 기준 (관리자·담당 교수만, app.js renderAssess): 학기 선택 + 6분류 비율·등급 방식 표 + 항목 점수 입력표 (+ 상대평가 요약 줄) -->
             <div id="assess-section" class="assess-section" hidden>
                 <div class="toolbar">
-                    <h3 class="sub-title">평가 항목</h3>
+                    <h3 class="sub-title">평가 기준</h3>
                     <label for="assess-sem">학기</label><select id="assess-sem"></select>
                     <span class="spacer"></span>
-                    <button class="primary" id="assess-add">+ 평가 항목 추가</button>
+                    <button class="danger" id="assess-del" hidden>평가 기준 삭제</button>
+                    <button class="primary" id="assess-add">평가 기준 설정</button>
                 </div>
                 <div id="assess-body"></div>
             </div>
