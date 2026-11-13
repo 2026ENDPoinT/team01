@@ -33,6 +33,8 @@ public:
     bool saveCourses(const std::vector<Course>& courses);
     bool loadCourses(std::vector<Course>& courses);
 
+    // grades.csv : studentId,courseCode,semester,score,letter (예전 4칸 파일도 읽음, 그때 letter 는 "")
+    //   letter 가 "" 도 아니고 9개 등급도 아닌 줄은 건너뜀
     bool saveGrades(const std::vector<Grade>& grades);
     bool loadGrades(std::vector<Grade>& grades);
 
@@ -67,8 +69,9 @@ public:
     //   형식이 틀린 기록(Attendance::isValid)·같은 (학번, 과목, 학기, 주차) 중복 줄은 건너뜀
     bool saveAttendance(const std::vector<Attendance>& records);
     bool loadAttendance(std::vector<Attendance>& records);
+
     // grading_modes.csv : courseCode,semester,mode
-    //   구현: #66 (지금은 스텁: save 는 true, load 는 빈 목록과 true)
+    //   형식이 틀린 줄(GradingMode::isValid)·같은 (과목, 학기) 중복 줄은 건너뜀
     bool saveGradingModes(const std::vector<GradingMode>& modes);
     bool loadGradingModes(std::vector<GradingMode>& modes);
 

@@ -7,7 +7,6 @@
 #include <vector>
 
 // 평가 분류 6개 (화면·API·CSV 에 이 순서와 이 글자 그대로)
-//   구현: #66
 const std::vector<std::string>& assessmentCategories();  // {"출석","중간고사","기말고사","과제","팀프로젝트","기타"}
 inline constexpr const char* kAttendanceCategory = "출석";  // 출석부에서 자동 계산하는 분류
 
@@ -19,11 +18,10 @@ inline constexpr const char* kGradingRelative = "relative";  // 상대평가 (re
 struct Assessment {
     std::string courseCode;
     std::string semester;   // isValidSemester 형식
-    std::string name;       // assessmentCategories() 중 하나 (#66 에서 검사)
-    int weight = 0;         // 0~100 정수 (0 = 이 학기에 반영 안 함) (#66 에서 검사)
+    std::string name;       // assessmentCategories() 중 하나
+    int weight = 0;         // 0~100 정수 (0 = 이 학기에 반영 안 함)
 
-    // 과목코드 숫자 6자리, 학기 형식, 이름(공백만 아님·60바이트 이하·줄바꿈 없음), 비율 1~100 을 검사
-    //   구현: #66 (이름 6분류, 비율 0~100 으로 바꿈)
+    // 과목코드 숫자 6자리, 학기 형식, 이름이 6분류 중 하나, 비율 0~100 을 검사
     bool isValid() const;
 };
 
@@ -34,7 +32,6 @@ struct GradingMode {
     std::string mode;       // kGradingAbsolute 또는 kGradingRelative
 
     // 과목코드 숫자 6자리, 학기 형식, mode 가 두 값 중 하나인지 검사
-    //   구현: #66
     bool isValid() const;
 };
 
@@ -46,13 +43,12 @@ struct AssessmentScore {
     std::string name;
     double score = 0.0;     // 0~100
 
-    // 학번 숫자 8자리, 과목코드·학기 형식, 이름 비어 있지 않음, 점수 0~100 (NaN 거부) 을 검사
+    // 학번 숫자 8자리, 과목코드·학기 형식, 이름이 6분류 중 하나, 점수 0~100 (NaN 거부) 을 검사
     bool isValid() const;
 };
 
 // 최종 점수 = Σ(항목 점수 × 비율) / 100, 소수 둘째 자리 반올림
 //   items 의 비율 합계가 100 이 아니면 -1, 비율이 0 인 항목은 무시,
 //   비율이 0 보다 큰 항목 중 점수가 없는 것이 있으면 -1 (미완성), items 가 비어 있어도 -1
-//   (지금은 예전 규칙 그대로. 새 규칙 구현: #66)
 //   scores 에는 한 학생·과목·학기의 점수만 들어 있다고 가정
 double finalScore(const std::vector<Assessment>& items, const std::vector<AssessmentScore>& scores);

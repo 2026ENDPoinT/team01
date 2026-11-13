@@ -1,5 +1,5 @@
 // 담당: 조장 (Eno74)
-// FileIO: 쉼표·큰따옴표가 든 값도 저장 → 불러오기 후 그대로, 파일이 없으면 빈 목록 (평가 항목·항목 점수 포함)
+// FileIO: 쉼표·큰따옴표가 든 값도 저장 → 불러오기 후 그대로, 파일이 없으면 빈 목록 (평가 항목·항목 점수·등급 방식 포함)
 //   모두 임시 폴더에서만 읽고 씀 (실제 data/ 는 건드리지 않음)
 #include <filesystem>
 #include <fstream>
@@ -26,7 +26,7 @@ bool sameCourse(const Course& a, const Course& b) {
 
 bool sameGrade(const Grade& a, const Grade& b) {
     return a.studentId == b.studentId && a.courseCode == b.courseCode && a.semester == b.semester &&
-           a.score == b.score;
+           a.score == b.score && a.assignedLetter == b.assignedLetter;
 }
 
 std::string readFile(const std::filesystem::path& path) {
@@ -60,9 +60,11 @@ std::vector<Course> sampleCourses() {
 }
 
 std::vector<Grade> sampleGrades() {
+    Grade relative = makeGrade("24000001", "109401", "2026-1", 59.5);
+    relative.assignedLetter = "D0";  // 상대평가로 정해진 등급
     return {
         makeGrade("24000001", "100101", "2026-1", 87.5),
-        makeGrade("24000001", "109401", "2026-1", 59.5),
+        relative,
         makeGrade("17000002", "100101", "2025-2", 100),
         makeGrade("17000002", "109401", "2025-2", 0),
     };
@@ -89,6 +91,7 @@ TEST_CASE(fileIO_roundtrip_keeps_special_values) {
     }
 
     // 쉼표 든 교수명은 따옴표로 감싸서 저장
+    CHECK(readFile(dir.path() / "grades.csv").rfind("studentId,courseCode,semester,score,letter\n", 0) == 0);
     CHECK(readFile(dir.path() / "courses.csv").find("\"최정훈, 한수진\"") != std::string::npos);
 
     FileIO io(dir.str());
@@ -164,10 +167,13 @@ TEST_CASE(fileIO_assessments_roundtrip) {
     midterm.semester = "2026-2";
     midterm.name = "중간고사";
     midterm.weight = 30;
-    Assessment quoted = midterm;
-    quoted.name = "과제, \"발표\"";  // 쉼표·큰따옴표가 든 이름
-    quoted.weight = 70;
-    const std::vector<Assessment> items = {midterm, quoted};
+    Assessment homework = midterm;
+    homework.name = "과제";
+    homework.weight = 70;
+    Assessment zero = midterm;
+    zero.name = "팀프로젝트";
+    zero.weight = 0;  // 0% 도 저장
+    const std::vector<Assessment> items = {midterm, homework, zero};
 
     AssessmentScore first;
     first.studentId = "26101001";
@@ -176,7 +182,7 @@ TEST_CASE(fileIO_assessments_roundtrip) {
     first.name = "중간고사";
     first.score = 87.5;
     AssessmentScore second = first;
-    second.name = "과제, \"발표\"";
+    second.name = "과제";
     second.score = 0;
     AssessmentScore third = first;
     third.studentId = "26101002";
@@ -190,7 +196,6 @@ TEST_CASE(fileIO_assessments_roundtrip) {
 
     CHECK(readFile(dir.path() / "assessments.csv").rfind("courseCode,semester,name,weight\n", 0) == 0);
     CHECK(readFile(dir.path() / "assessment_scores.csv").rfind("studentId,courseCode,semester,name,score\n", 0) == 0);
-    CHECK(readFile(dir.path() / "assessments.csv").find("\"과제, \"\"발표\"\"\"") != std::string::npos);
 
     FileIO io(dir.str());
     std::vector<Assessment> loadedItems;
@@ -216,19 +221,22 @@ TEST_CASE(fileIO_assessments_skip_broken_lines) {
     {
         std::ofstream out(dir.path() / "assessments.csv", std::ios::binary);
         out << "courseCode,semester,name,weight\n"
-            << "109001,2026-2,중간,30\n"
-            << "109001,2026-2,기말,abc\n"    // 숫자 아님
-            << "109001,2026-2,과제,0\n"      // 비율 범위 밖
-            << "109001,2026-2,중간,40\n"     // 같은 이름 중복
-            << "109001,2026-2\n";            // 칸 부족
+            << "109001,2026-2,중간고사,30\n"
+            << "109001,2026-2,기말고사,abc\n"  // 숫자 아님
+            << "109001,2026-2,과제,101\n"      // 비율 범위 밖
+            << "109001,2026-2,퀴즈,10\n"       // 6분류가 아님
+            << "109001,2026-2,중간고사,40\n"   // 같은 이름 중복
+            << "109001,2026-2,기타,0\n"        // 0% 는 정상
+            << "109001,2026-2\n";              // 칸 부족
     }
     {
         std::ofstream out(dir.path() / "assessment_scores.csv", std::ios::binary);
         out << "studentId,courseCode,semester,name,score\n"
-            << "26101001,109001,2026-2,중간,90\n"
-            << "26101001,109001,2026-2,기말,101\n"  // 점수 범위 밖
-            << "26101001,109001,2026-2,과제,nan\n"  // NaN
-            << "2610100,109001,2026-2,중간,50\n";   // 학번 7자리
+            << "26101001,109001,2026-2,중간고사,90\n"
+            << "26101001,109001,2026-2,기말고사,101\n"  // 점수 범위 밖
+            << "26101001,109001,2026-2,과제,nan\n"      // NaN
+            << "26101001,109001,2026-2,중간,50\n"       // 6분류가 아님
+            << "2610100,109001,2026-2,중간고사,50\n";   // 학번 7자리
     }
 
     FileIO io(dir.str());
@@ -236,8 +244,9 @@ TEST_CASE(fileIO_assessments_skip_broken_lines) {
     std::vector<AssessmentScore> scores;
     CHECK(io.loadAssessments(items));
     CHECK(io.loadAssessmentScores(scores));
-    CHECK_EQ(items.size(), static_cast<size_t>(1));
-    CHECK(!items.empty() && items[0].name == "중간" && items[0].weight == 30);
+    CHECK_EQ(items.size(), static_cast<size_t>(2));
+    CHECK(items.size() == 2 && items[0].name == "중간고사" && items[0].weight == 30 && items[1].name == "기타" &&
+          items[1].weight == 0);
     CHECK_EQ(scores.size(), static_cast<size_t>(1));
     CHECK(!scores.empty() && scores[0].score == 90);
 
@@ -311,4 +320,78 @@ TEST_CASE(fileIO_attendance_skip_broken_lines) {
     FileIO missing((dir.path() / "missing").string());
     CHECK(missing.loadAttendance(records));
     CHECK(records.empty());
+}
+
+// ----- 평가 기준 개편 (#66): grades.csv letter 칸, grading_modes.csv -----
+
+TEST_CASE(fileIO_grades_read_old_four_columns_and_skip_bad_letter) {
+    TempDir dir;
+    {
+        std::ofstream out(dir.path() / "grades.csv", std::ios::binary);
+        out << "studentId,courseCode,semester,score\n"  // 예전 4칸 헤더
+            << "24000001,100101,2026-1,87.5\n";
+    }
+    FileIO io(dir.str());
+    std::vector<Grade> grades;
+    CHECK(io.loadGrades(grades));
+    CHECK(grades.size() == 1 && grades[0].score == 87.5 && grades[0].assignedLetter.empty());
+
+    {
+        std::ofstream out(dir.path() / "grades.csv", std::ios::binary);
+        out << "studentId,courseCode,semester,score,letter\n"
+            << "24000001,100101,2026-1,87.5,\n"     // letter 없음 = 점수 기준
+            << "24000002,100101,2026-1,79.35,C+\n"
+            << "24000003,100101,2026-1,70,E\n"      // 9개 등급이 아님
+            << "24000004,100101,2026-1,70,a+\n"     // 대소문자 다름
+            << "24000005,100101,2026-1,70,F\n";
+    }
+    CHECK(io.loadGrades(grades));
+    CHECK_EQ(grades.size(), static_cast<size_t>(3));
+    CHECK(grades.size() == 3 && grades[0].assignedLetter.empty() && grades[1].assignedLetter == "C+" &&
+          grades[2].studentId == "24000005" && grades[2].assignedLetter == "F");
+}
+
+TEST_CASE(fileIO_grading_modes_roundtrip_and_skip_broken_lines) {
+    TempDir dir;
+    GradingMode absolute;
+    absolute.courseCode = "109201";
+    absolute.semester = "2026-2";
+    absolute.mode = kGradingAbsolute;
+    GradingMode relative = absolute;
+    relative.courseCode = "109001";
+    relative.mode = kGradingRelative;
+    {
+        FileIO io(dir.str());
+        CHECK(io.saveGradingModes({absolute, relative}));
+    }
+    CHECK(readFile(dir.path() / "grading_modes.csv") ==
+          "courseCode,semester,mode\n109201,2026-2,absolute\n109001,2026-2,relative\n");
+
+    FileIO io(dir.str());
+    std::vector<GradingMode> modes;
+    CHECK(io.loadGradingModes(modes));
+    CHECK(modes.size() == 2 && modes[0].courseCode == "109201" && modes[0].mode == kGradingAbsolute &&
+          modes[1].courseCode == "109001" && modes[1].mode == kGradingRelative);
+
+    // 다시 저장하면 이전 파일이 .bak 으로 남음
+    CHECK(io.saveGradingModes({absolute}));
+    CHECK(std::filesystem::exists(dir.path() / "grading_modes.csv.bak"));
+
+    {
+        std::ofstream out(dir.path() / "grading_modes.csv", std::ios::binary);
+        out << "courseCode,semester,mode\n"
+            << "109201,2026-2,absolute\n"
+            << "109201,2026-2,relative\n"   // 같은 (과목, 학기) 중복
+            << "109001,2026-2,rel\n"        // 모르는 방식
+            << "10900,2026-2,absolute\n"    // 과목코드 5자리
+            << "109001,2026-9,absolute\n"   // 학기 형식
+            << "109001,2026-2\n";           // 칸 부족
+    }
+    CHECK(io.loadGradingModes(modes));
+    CHECK(modes.size() == 1 && modes[0].mode == kGradingAbsolute);
+
+    // 파일이 없으면 빈 목록
+    FileIO missing((dir.path() / "missing").string());
+    CHECK(missing.loadGradingModes(modes));
+    CHECK(modes.empty());
 }
