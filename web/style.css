@@ -101,6 +101,39 @@ main { max-width: 960px; margin: 28px auto 48px; padding: 0 16px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
 .page-title { font-size: 26px; font-weight: 700; margin: 0 0 20px; }
 .page-head .page-title { margin: 0; }
+
+/* 성적 탭: 등록 버튼 두 개를 제목 오른쪽에 묶어서 정렬 */
+#tab-grades .page-head {
+    flex-wrap: wrap;
+}
+.grade-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-left: auto;
+}
+
+/* 성적 페이지네이션: 표 오른쪽 아래에 배치 */
+#grade-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+#grade-pagination button {
+    min-width: 64px;
+}
+#grade-pagination button:disabled {
+    opacity: .35;
+}
+
 .sub-title { font-size: 16px; font-weight: 600; color: var(--accent); margin: 0 0 12px; }
 
 /* 도구 줄 */
@@ -472,6 +505,16 @@ input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
 }
 /* 650px 이하: 요약 상자는 한 줄 전체 폭, 학번·수강 건수는 그 아래 두 칸 */
 @media (max-width: 650px) {
+    #tab-grades .page-head {
+        align-items: center;
+        gap: 10px;
+    }
+    .grade-actions {
+        gap: 6px;
+    }
+    #grade-pagination {
+        justify-content: center;
+    }
     .stat-boxes { grid-template-columns: repeat(2, 1fr); }
     .stat-boxes > .gpa-box { grid-column: 1 / -1; }
     .gpa-box .gpa-col { padding: 10px; }
