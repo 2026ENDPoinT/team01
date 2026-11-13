@@ -2544,6 +2544,21 @@ async function renderMyReport() {
     const body = $('myreport-body');
     const opened = new Set([...body.querySelectorAll('details.fold[open]')].map((d) => d.dataset.key));
     body.innerHTML = foldBarHtml() + simBoxHtml(summary) + progress + report;
+
+    // 핵심 성적 요약 카드는 접기 버튼 바로 아래, 시뮬레이션보다 위에 배치
+    const statBoxes = body.querySelector('.report > .stat-boxes');
+    const simBox = body.querySelector('#sim-box');
+    if (statBoxes && simBox) body.insertBefore(statBoxes, simBox);
+
+    // 진행 중 과목과 학기별 성적 사이에 은은한 구분선 추가
+    const reportSections = body.querySelectorAll('.report');
+    if (reportSections.length > 1) {
+        const divider = document.createElement('div');
+        divider.className = 'myreport-divider';
+        divider.setAttribute('role', 'separator');
+        reportSections[reportSections.length - 1].before(divider);
+    }
+
     body.querySelectorAll('details.fold').forEach((d) => { d.open = opened.has(d.dataset.key); });
     updateSimTarget(document.querySelector('#sim-target'));
     syncFoldButton(body);
