@@ -207,7 +207,7 @@ std::vector<WarningEntry> academicWarnings(const GradeManager& gm, const std::st
             if (g.studentId != studentId || g.semester != semester) continue;
             const Course* course = gm.findCourse(g.courseCode);
             if (course == nullptr) continue;
-            pointSum += letterToPoint(scoreToLetter(g.score)) * course->credit;
+            pointSum += letterToPoint(g.letter()) * course->credit;
             creditSum += course->credit;
         }
         if (creditSum == 0) continue;  // 그 학기 성적이 아직 없음

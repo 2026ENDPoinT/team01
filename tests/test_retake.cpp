@@ -33,6 +33,31 @@ TEST_CASE(retake_old_grade_is_R_and_new_capped_at_A0) {
     CHECK_EQ(Retake::officialLetter(grades[2], grades), std::string("A+"));
 }
 
+// 상대평가로 정해진 등급(assignedLetter)이 점수 기준 등급보다 우선
+TEST_CASE(officialLetter_uses_assignedLetter) {
+    std::vector<Grade> grades = {
+        makeGrade("19000001", "100101", "2025-2", 40),  // 삭제된 성적
+        makeGrade("19000001", "100101", "2026-1", 97),  // 재수강 성적
+        makeGrade("19000001", "100102", "2026-1", 97),  // 재수강 아님
+    };
+    grades[1].assignedLetter = "A+";  // 재수강 성적은 그래도 A0 까지만
+    grades[2].assignedLetter = "B+";  // 점수 97 이지만 B+
+    CHECK_EQ(Retake::officialLetter(grades[0], grades), std::string("R"));
+    CHECK_EQ(Retake::officialLetter(grades[1], grades), std::string("A0"));
+    CHECK_EQ(Retake::officialLetter(grades[2], grades), std::string("B+"));
+}
+
+TEST_CASE(gpa_uses_assignedLetter) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("19000001", "상대")));
+    CHECK(gm.addCourse(makeCourse("100101", "미적분학", 3)));
+    Grade g = makeGrade("19000001", "100101", "2026-1", 97);
+    g.assignedLetter = "C+";
+    CHECK(gm.addGrade(g));
+    CHECK_NEAR(Statistics::calcGPA(gm, "19000001"), 2.5, 1e-9);  // A+ 4.5 가 아니라 C+ 2.5
+}
+
 TEST_CASE(retake_cap_applies_to_pre2018_student) {
     const std::vector<Grade> grades = {
         makeGrade("17000001", "109201", "2025-1", 30),

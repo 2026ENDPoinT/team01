@@ -62,7 +62,7 @@ struct WarningEntry {
 // 학생 한 명의 학사경고 목록 (학기 오름차순)
 //   판단 학기: 그 학생의 첫 수강신청 학기부터 전체 성적 중 가장 늦은 정규학기까지의 정규학기(N = 1·2)
 //   - 신청 학점 합계 < 1 → 수강신청 미이행
-//   - 아니고 그 학기 성적이 있으면, 원래 등급(scoreToLetter, 재수강 규칙 미적용, 삭제된 성적 포함)의
+//   - 아니고 그 학기 성적이 있으면, 원래 등급(Grade::letter, 재수강 규칙 미적용, 삭제된 성적 포함)의
 //     학점 가중 평점이 1.75 미만 → 평점평균 1.75 미만
 //   수강신청 기록이 없거나 정규학기 성적이 하나도 없으면 빈 목록
 std::vector<WarningEntry> academicWarnings(const GradeManager& gm, const std::string& studentId);

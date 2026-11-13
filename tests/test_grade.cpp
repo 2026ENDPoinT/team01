@@ -27,6 +27,33 @@ TEST_CASE(gradeLetter_matches_scoreToLetter) {
     CHECK_EQ(g.letter(), scoreToLetter(94.9));
 }
 
+// 상대평가로 정해진 등급(assignedLetter)이 있으면 그것, 없으면 점수 기준 등급
+TEST_CASE(gradeLetter_uses_assignedLetter) {
+    Grade g;
+    g.score = 97;
+    g.assignedLetter = "C+";
+    CHECK_EQ(g.letter(), std::string("C+"));
+    g.assignedLetter = "";
+    CHECK_EQ(g.letter(), std::string("A+"));
+}
+
+TEST_CASE(gradeIsValid_assignedLetter) {
+    Grade g;
+    g.studentId = "24101234";
+    g.courseCode = "109004";
+    g.semester = "2026-1";
+    g.score = 90;
+    CHECK(g.isValid());  // assignedLetter "" 은 유효
+    for (const std::string letter : {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"}) {
+        g.assignedLetter = letter;
+        CHECK(g.isValid());
+    }
+    for (const std::string letter : {"A", "a+", " A+", "R", "E"}) {
+        g.assignedLetter = letter;
+        CHECK(!g.isValid());
+    }
+}
+
 TEST_CASE(letterToPoint_table) {
     CHECK_EQ(letterToPoint("A+"), 4.5);
     CHECK_EQ(letterToPoint("A0"), 4.0);
