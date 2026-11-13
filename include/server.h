@@ -28,7 +28,8 @@
 //   PUT    /api/courses/:code/posts/:id   게시물 수정 (같은 본문)    DELETE /api/courses/:code/posts/:id   게시물 삭제
 //                                     (admin, professor 는 담당 과목만. 작성자·작성시각은 서버가 채움)
 //   GET    /api/grades                성적 목록 (?studentId= ?courseCode= ?semester= 로 거르기)
-//                                     (admin 전체, professor 담당 과목만, student 본인 것만)
+//                                     (admin 전체, professor 담당 과목만, student 본인 것만.
+//                                      교수 응답에서는 지난 학기 행 제외)
 //   POST   /api/grades                성적 등록 → 201      PUT /api/grades           성적 수정 → 200
 //                                     본문 {studentId,courseCode,semester,score} 또는 score 대신 letter (A+ A0 B+ B0 C+ C0 D+ D0 F
 //                                     → letterToScore 점수로 저장, 둘 다 있으면 score). 응답 {studentId,courseCode,semester,score,letter}
@@ -55,7 +56,8 @@
 //   GET    /api/enrollment/settings   수강신청 학기 {"semester"} (로그인)
 //   PUT    /api/enrollment/settings   수강신청 학기 설정 (admin, ""이면 신청 마감)
 //   GET    /api/enrollments           수강신청 목록 [{studentId,courseCode,semester,hasGrade}] (?studentId= ?courseCode= ?semester=)
-//                                     (admin 전체, professor 담당 과목만, student 본인 것만)
+//                                     (admin 전체, professor 담당 과목만, student 본인 것만.
+//                                      교수 응답에서는 지난 학기 행 제외)
 //                                     hasGrade: 성적 또는 항목 점수가 있으면 true
 //   GET    /api/enrollments/counts?semester=   과목별 신청 인원 (로그인)
 //   POST   /api/enrollments           수강신청 {studentId,courseCode,semester} (admin, student 본인)

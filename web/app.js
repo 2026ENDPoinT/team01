@@ -16,6 +16,9 @@ const $ = (id) => document.getElementById(id);
 // attendSem: 과목 페이지 '출결' 영역에서 고른 학기
 // attend: 그 영역에 지금 그려 둔 {code, sem, records, summaries, seq} (출결 칸이 사용, 안 그렸거나 불러오기 실패면 null)
 // currentSem: 서버가 알려 준 현재 학기 (loadBase 가 채움, 예: '2026-2'). 지난 학기 판정 기준
+let gradePage = 1;
+const GRADE_PAGE_SIZE = 10;
+
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
@@ -123,18 +126,6 @@ const isLockedSemester = (sem) => !isAdmin() && isPastSemester(sem, state.curren
 const pastSemesterMessage = () => `지난 학기는 접근할 수 없습니다 (현재 학기: ${state.currentSem})`;
 // 학기 선택 상자에 넣을 학기 목록 (최신 학기가 위로): 현재 학기는 항상 넣고, 관리자 외에는 지난 학기를 뺌
 const visibleSemesters = (list) => sortSemesters([...list, state.currentSem]).filter((s) => !isLockedSemester(s));
-// 이 사람이 과목에서 처음 보는 학기 (수강과목 카드·과목 페이지 기본 선택·과목 정보 창이 모두 이 값을 씀)
-//   학생: 내가 수강신청한 학기, 관리자·교수: 이 과목에 수강신청이 있는 학기 (st.enrolledBySemester)
-//   그중 볼 수 있는(지난 학기가 아닌, 관리자는 전부) 가장 최근 학기. 없으면 현재 학기
-//   st: 과목 통계 (GET /api/stats/course/:code). 없으면 state.stats 에서 찾음
-function courseSemester(code, st = state.stats?.[code]) {
-    const enrolled = state.me?.role === 'student'
-        ? state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester)
-        : Object.keys(st?.enrolledBySemester ?? {});
-    return sortSemesters(enrolled).find((s) => !isLockedSemester(s)) ?? state.currentSem;
-}
-// 그 학기의 이 과목 수강신청 인원 (통계가 없으면 0)
-const semesterEnrolled = (st, sem) => st?.enrolledBySemester?.[sem] ?? 0;
 // 담당 과목 판정 (서버 teaches 와 같은 규칙): 교수 계정이고, 과목 담당 교수를 , 로 나눈 이름 중 하나가 내 이름
 const teaches = (c) => state.me?.role === 'professor' &&
     String(c.professor ?? '').split(',').map((s) => s.trim()).includes(state.me.name);
@@ -343,6 +334,7 @@ function fillSelect(el, items, allLabel, keep) {
 
 // 화면에 그려 둔 목록·선택 상자를 모두 비움 (다른 역할로 다시 로그인했을 때 이전 화면이 남지 않게)
 function resetView() {
+    gradePage = 1;
     state.students = [];
     state.courses = [];
     state.stats = {};
@@ -483,8 +475,9 @@ const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 
 // 과목 목록 그리기 (myCourses: 교수는 담당 과목, 학생은 수강신청한 과목만)
 // 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
-// 한 줄에 과목 정보(왼쪽)와 학기 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
-//   학기 = courseSemester (과목 페이지에 들어갔을 때 처음 선택되는 학기와 같음)
+// 한 줄에 과목 정보(왼쪽)와 최근 학기 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
+//   학기 = 교수·관리자는 수강신청이 있는 학기 중 볼 수 있는 가장 최근 학기 (없으면 현재 학기, staffSemesterOf),
+//     학생은 본인 수강신청 중 이 과목의 현재 학기 이후 가장 최근 학기 (둘 다 과목 페이지에서 처음 보이는 학기와 같음)
 async function renderCourses() {
     const list = $('course-list');
     const courses = myCourses();
@@ -496,10 +489,12 @@ async function renderCourses() {
         list.innerHTML = `<li class="empty">${msg}</li>`;
         return;
     }
-    list.innerHTML = courses.map((c) => {
+    const cache = new Map();
+    const latest = await Promise.all(courses.map((c, i) => courseLatest(c.code, stats[i], cache)));
+    list.innerHTML = courses.map((c, i) => {
         const st = state.stats[c.code];
         const has = st && st.count > 0;
-        const sem = courseSemester(c.code, st);
+        const { sem, enrolled } = latest[i];
         return `<li class="course-row" data-code="${esc(c.code)}">
             <div class="course-info">
                 <div class="course-name">${esc(c.name)}${c.area ? ` <span class="tag">${esc(c.area)}</span>` : ''}</div>
@@ -507,18 +502,42 @@ async function renderCourses() {
                 <div class="course-line">${esc(c.schedule) || '-'} · ${esc(c.credit)}학점 · ${esc(c.language)}${c.remote ? ' <span class="tag">원격</span>' : ''}</div>
             </div>
             <div class="course-meta">
-                <span class="stat-line">${sem ? esc(sem) + ' ' : ''}수강 <b>${esc(semesterEnrolled(st, sem))}</b> / ${capacityText(c)}</span>
+                <span class="stat-line">${sem ? esc(sem) + ' ' : ''}수강 <b>${sem ? esc(enrolled) : 0}</b> / ${capacityText(c)}</span>
                 <span class="stat-line">${has ? `평균 <b>${fmt(st.average, 1)}</b> (${fmt(st.max, 0)} / ${fmt(st.min, 0)})` : '평균 -'}</span>
             </div>
         </li>`;
     }).join('');
 }
 
+// 학생 카드·과목 정보에 보일 학기: 본인 수강신청 중 이 과목의 현재 학기 이후 가장 최근 학기 (없으면 '')
+const mySemesterOf = (code) => sortSemesters(state.myEnrollments
+    .filter((e) => e.courseCode === code && !isPastSemester(e.semester, state.currentSem))
+    .map((e) => e.semester))[0] ?? '';
+// 교수·관리자 카드·과목 정보·과목 페이지 처음 학기: 이 과목에 수강신청이 있는 학기 중
+//   볼 수 있는(관리자 외에는 지난 학기 제외) 가장 최근 학기. 없으면 현재 학기
+//   semesters: 수강신청이 있는 학기 목록 (통계의 enrolledBySemester 키, 또는 과목 페이지가 받은 수강신청 목록)
+const staffSemesterOf = (semesters) => sortSemesters(semesters).find((s) => !isLockedSemester(s)) ?? state.currentSem;
+// 카드·과목 정보에 보일 {학기, 수강 인원}. 학생은 위 학기 기준이라 그 학기의 과목별 신청 인원(/api/enrollments/counts)을 씀
+//   cache: 학기 → 인원 요청 (학기당 한 번만 부르려고 호출하는 쪽이 공유)
+//   교수·관리자는 staffSemesterOf 학기와 그 학기 인원 (통계의 enrolledBySemester)
+async function courseLatest(code, st, cache = new Map()) {
+    if (state.me.role !== 'student') {
+        const bySem = st?.enrolledBySemester ?? {};
+        const sem = staffSemesterOf(Object.keys(bySem));
+        return { sem, enrolled: bySem[sem] ?? 0 };
+    }
+    const sem = mySemesterOf(code);
+    if (!sem) return { sem: '', enrolled: 0 };
+    if (!cache.has(sem)) cache.set(sem, api('GET', '/api/enrollments/counts?semester=' + encodeURIComponent(sem)));
+    const counts = await cache.get(sem);
+    return { sem, enrolled: counts.find((x) => x.courseCode === code)?.count ?? 0 };
+}
+
 // 과목 상세 창 (보기 전용): 전체 항목 + 통계 상자 + CSV / 수정 / 삭제 버튼
 //   CSV 는 관리자·담당 교수만, 수정·삭제는 관리자만
-function showCourseDetail(c, st) {
+function showCourseDetail(c, st, latest) {
     const has = st && st.count > 0;
-    const sem = courseSemester(c.code, st);
+    const { sem, enrolled } = latest;
     const rows = [
         ['이수구분', esc(c.category)],
         ['학점', esc(c.credit)],
@@ -538,7 +557,7 @@ function showCourseDetail(c, st) {
         title: `${c.name} (${c.code})`,
         bodyHtml: `<dl class="detail-grid">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
             <div class="stat-boxes">
-                ${stat('학기 수강', sem ? esc(semesterEnrolled(st, sem)) + '명' : '-', sem ? esc(sem) : '')}
+                ${stat('최근 학기 수강', sem ? esc(enrolled) + '명' : '-', sem ? esc(sem) : '')}
                 ${stat('평균', has ? fmt(st.average, 1) : '-')}
                 ${stat('최고', has ? fmt(st.max, 0) : '-')}
                 ${stat('최저', has ? fmt(st.min, 0) : '-')}
@@ -619,7 +638,8 @@ function isExpired(due) {
 // 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
 //   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
 //     (visibleSemesters: 현재 학기는 항상 있고, 관리자 외에는 지난 학기가 없음)
-//   처음 보이는 학기: 이전 선택 → courseSemester (수강과목 카드에 보이는 학기와 같음) → 가장 최근 학기
+//   처음 보이는 학기: 이전 선택(목록에 있으면) → 수강과목 카드에 보인 학기 (학생: mySemesterOf, 관리자·교수: staffSemesterOf)
+//     → 신청 학기(지난 학기면 제외) → 가장 최근 학기
 //   관리자·담당 교수는 아래 '평가 기준'·'출결' 영역도 그림 (같은 학기 목록, 평가 기준 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기,
 //   출결 처음 학기: 이전 선택 → 평가 기준 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
 async function renderCoursePage() {
@@ -641,19 +661,22 @@ async function renderCoursePage() {
     // 기다리는 사이 다른 과목·탭으로 옮겼으면 그리지 않음 (나중에 끝난 요청이 화면을 덮지 않게)
     if (currentTab() !== 'course' || state.courseCode !== code) return;
 
-    let sems, first, open = '';
+    let sems, fallback, open = '';
     if (staff) {
         const [list, settings] = staffInfo;
         open = settings.semester;
         sems = visibleSemesters([...posts.map((p) => p.semester), ...list.map((e) => e.semester), open]);
         if (isLockedSemester(open)) open = '';
-        // 방금 받은 수강신청 목록으로 계산 (수강과목 카드는 같은 규칙을 통계의 학기별 인원으로 계산)
-        first = courseSemester(code, { enrolledBySemester: Object.fromEntries(list.map((e) => [e.semester, 1])) });
+        fallback = open || sems[0] || '';
     } else {
         sems = visibleSemesters(state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester));
-        first = courseSemester(code);
+        fallback = sems[0] || '';
     }
-    if (!sems.includes(state.courseSem)) state.courseSem = sems.includes(first) ? first : (sems[0] || '');
+    // 수강과목 카드에 보인 학기로 시작. 학생은 본인 수강신청 중 현재 학기 이후 가장 최근 학기,
+    // 교수·관리자는 이 과목 수강신청이 있는 학기 중 볼 수 있는 가장 최근 학기 (staffSemesterOf, 방금 받은 수강신청 목록으로 계산)
+    const mine = staff ? staffSemesterOf(staffInfo[0].map((e) => e.semester)) : mySemesterOf(code);
+    const firstSem = sems.includes(mine) ? mine : fallback;
+    if (!sems.includes(state.courseSem)) state.courseSem = firstSem;
     fillSelect($('course-sem'), sems.map((s) => ({ value: s, label: s })), '', state.courseSem);
 
     state.coursePosts = posts;
@@ -782,7 +805,8 @@ $('course-hero').onclick = async (e) => {
     const c = pageCourse();
     if (!c || !e.target.closest('[data-act=info]')) return;
     try {
-        showCourseDetail(c, await api('GET', '/api/stats/course/' + encodeURIComponent(c.code)));
+        const st = await api('GET', '/api/stats/course/' + encodeURIComponent(c.code));
+        showCourseDetail(c, st, await courseLatest(c.code, st));
     } catch (err) { toast(err.message, true); }
 };
 // 게시물 목록: 제목을 누르면 본문을 펼치고/접음, 수정·삭제 버튼
@@ -1210,7 +1234,7 @@ async function renderEnrollStudent(open, admin) {
         sem = input.value.trim();
     } else {
         const sel = $('enroll-sem-select');
-        const sems = sortSemesters([open, ...mine.map((e) => e.semester)]);
+        const sems = visibleSemesters([open, ...mine.map((e) => e.semester)]);
         fillSelect(sel, sems.map((s) => ({ value: s, label: s })), '', sel.value || open);
         sem = sel.value;
     }
@@ -1281,13 +1305,13 @@ async function renderEnrollProfessor(open) {
     const code = pick.value;
     const list = await api('GET', '/api/enrollments?courseCode=' + encodeURIComponent(code));
 
-    // 학기: 신청 학기 + 이 과목 수강신청에 나온 학기 (최신순)
-    // 과목을 바꿨을 때 처음 보이는 학기: 신청 학기에 수강생이 있으면 그 학기, 없으면 수강생이 있는 가장 최근 학기
+    // 학기: 신청 학기·현재 학기 + 이 과목 수강신청에 나온 학기 (최신순, 지난 학기는 뺌)
+    // 과목을 바꿨을 때 처음 보이는 학기: 신청 학기에 수강생이 있으면 그 학기, 없으면 (지난 학기 제외) 수강생이 있는 가장 최근 학기
     const sel = $('enroll-sem-select');
-    const listSems = sortSemesters(list.map((e) => e.semester));
+    const listSems = sortSemesters(list.map((e) => e.semester)).filter((s) => !isLockedSemester(s));
     let keep = sel.dataset.course === code ? sel.value : '';
-    if (!keep) keep = open && listSems.includes(open) ? open : (listSems[0] || open);
-    fillSelect(sel, sortSemesters([open, ...listSems]).map((s) => ({ value: s, label: s })), '', keep);
+    if (!keep) keep = open && listSems.includes(open) ? open : (listSems[0] || open || state.currentSem);
+    fillSelect(sel, visibleSemesters([open, ...listSems]).map((s) => ({ value: s, label: s })), '', keep);
     sel.dataset.course = code;
     const sem = sel.value;
 
@@ -1501,8 +1525,13 @@ async function studentReportHtml(s) {
             <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
             <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
+        const semesterCredits = info?.credits ?? '-';
         return `
-            <h3 class="sub-title">${esc(sem)} <span class="hint">학기 GPA ${semGpa(info)} · 등록 학점 ${esc(info?.credits ?? 0)}</span></h3>
+            <h3 class="sub-title">${esc(sem)}</h3>
+            <div class="semester-summary-line">
+                <span class="semester-gpa">GPA ${semGpa(info)}</span>
+                <span class="semester-credit">등록 학점 ${esc(semesterCredits)}학점</span>
+            </div>
             <div class="table-wrap">
                 <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
             </div>`;
@@ -1688,7 +1717,9 @@ const courseOptions = () => gradeCourses().map((c) => ({ value: c.code, label: `
 //   표에 나온 (과목, 학기) 조합마다 /api/assessments 를 한 번씩만 부름 (잠긴 지난 학기는 부르지 않음)
 async function renderGrades() {
     const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
-    const semesters = await semesterList();
+    // 교수에게는 지난 학기를 뺀 목록 (현재 학기는 항상 포함). 관리자·학생 화면은 그대로
+    const all = await semesterList();
+    const semesters = state.me.role === 'professor' ? visibleSemesters(all) : all;
     fillSelect(fs, studentOptions(), '전체 학생', fs.value);
     fillSelect(fc, courseOptions(), isAdmin() ? '전체 과목' : '전체 담당 과목', fc.value);
     fillSelect(fm, semesters.map((s) => ({ value: s, label: s })), '전체 학기', fm.value);
@@ -1700,11 +1731,20 @@ async function renderGrades() {
     const qs = params.toString();
     const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
+
+    // 관리자는 10건씩 페이지로 나누고, 교수는 기존처럼 전체 목록을 표시
+    const paginated = isAdmin();
+    const totalPages = Math.max(1, Math.ceil(grades.length / GRADE_PAGE_SIZE));
+    if (paginated) gradePage = Math.min(Math.max(1, gradePage), totalPages);
+    else gradePage = 1;
+
+    const offset = paginated ? (gradePage - 1) * GRADE_PAGE_SIZE : 0;
+    const visibleGrades = paginated ? grades.slice(offset, offset + GRADE_PAGE_SIZE) : grades;
     const cache = new Map();
-    const assessed = await Promise.all(grades.map((g) => isLockedSemester(g.semester) ? false
+    const assessed = await Promise.all(visibleGrades.map((g) => isLockedSemester(g.semester) ? false
         : assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
 
-    $('grade-body').innerHTML = grades.length ? grades.map((g, i) => {
+    $('grade-body').innerHTML = visibleGrades.length ? visibleGrades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
         const actions = isLockedSemester(g.semester)
             ? '<span class="tag" title="지난 학기 성적은 관리자만 고칠 수 있습니다">지난 학기</span>'
@@ -1723,11 +1763,32 @@ async function renderGrades() {
             <td class="actions">${actions}</td>
         </tr>`;
     }).join('') : emptyRow(7, '조건에 맞는 성적이 없습니다');
+
+    const pager = $('grade-pagination');
+    if (pager) {
+        pager.hidden = !paginated;
+        pager.innerHTML = paginated ? `
+            <button type="button" data-page="prev" ${gradePage <= 1 ? 'disabled' : ''}>이전</button>
+            <span>${gradePage} / ${totalPages} 페이지 · 전체 ${grades.length}건</span>
+            <button type="button" data-page="next" ${gradePage >= totalPages ? 'disabled' : ''}>다음</button>
+        ` : '';
+    }
 }
 
 // 필터를 바꾸면 표를 다시 그림
 ['grade-f-student', 'grade-f-course', 'grade-f-semester'].forEach((id) =>
-    ($(id).onchange = () => renderGrades().catch((e) => toast(e.message, true))));
+    ($(id).onchange = () => {
+        gradePage = 1;
+        renderGrades().catch((e) => toast(e.message, true));
+    }));
+
+// 관리자 성적 목록 페이지 이동
+$('grade-pagination').onclick = (e) => {
+    const button = e.target.closest('button[data-page]');
+    if (!button || button.disabled) return;
+    gradePage += button.dataset.page === 'next' ? 1 : -1;
+    renderGrades().catch((err) => toast(err.message, true));
+};
 
 // 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수(또는 등급)만 고침
 // (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문)
