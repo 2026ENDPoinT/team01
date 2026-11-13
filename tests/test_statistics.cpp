@@ -358,6 +358,9 @@ TEST_CASE(simulateRetake_a_plus_applied_as_a0) {
     CHECK_NEAR(sim.after.gpa, (4.0 * 3 + 3.5 * 3 + 3.0 * 2) / 8, 1e-9);  // 3.5625 (A+ 가 아니라 A0 4.0)
     CHECK_EQ(sim.after.majorCredits, 6);
     CHECK_NEAR(sim.after.majorGpa, (4.0 * 3 + 3.5 * 3) / 6, 1e-9);       // 3.75
+    // 취득 학점: 전에는 F(3학점)가 빠져 5, 후에는 A0 로 바뀌어 8 (계산 학점은 둘 다 8)
+    CHECK_EQ(sim.before.earnedCredits, 5);
+    CHECK_EQ(sim.after.earnedCredits, 8);
 
     // 저장·변경 없음: 성적 수와 gpaSummary 가 그대로
     CHECK_EQ(gm.getGrades().size(), gradeCount);
@@ -426,4 +429,75 @@ TEST_CASE(simulateRetake_rejects_pass_fail_course) {
     const Statistics::RetakeSimulation sim =
         Statistics::simulateRetake(gm, "25103008", "2026-1", {{"100001", "A0"}});
     CHECK(sim.error == Statistics::RetakeError::PassFail);
+}
+// ----- 계산 학점 / 취득 학점 (F·P/F·재수강으로 지워진 성적) -----
+
+namespace {
+
+// P/F 과목 등록 + 그 과목 성적(P = 100 / NP = 0)
+bool addPassFail(GradeManager& gm, const std::string& code, int credit) {
+    Course c = makeCourse(code, "P/F 과목", credit);
+    c.gradeType = kGradeTypePassFail;
+    return gm.addCourse(c);
+}
+
+bool addPassFailGrade(GradeManager& gm, const std::string& id, const std::string& code, const std::string& sem,
+                      const std::string& letter) {
+    Grade g = makeGrade(id, code, sem, letter == kLetterPass ? kPassScore : kNonPassScore);
+    g.assignedLetter = letter;
+    return gm.addGrade(g);
+}
+
+}  // namespace
+
+// 이슈 완료 기준: P/F 과목 P 1개 + 일반 과목 A0 3학점 → 누적 GPA 4.0, 계산 학점 3, 취득 학점은 P/F 학점 포함
+TEST_CASE(gpaSummary_pass_fail_P_counts_only_in_earned) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("24000001", "가")));
+    CHECK(gm.addCourse(makeCourse("100001", "일반", 3)));
+    CHECK(addPassFail(gm, "100901", 1));
+    CHECK(addPassFail(gm, "100902", 2));
+    CHECK(gm.addGrade(makeGrade("24000001", "100001", "2026-1", 90)));            // A0 3학점
+    CHECK(addPassFailGrade(gm, "24000001", "100901", "2026-1", kLetterPass));     // P 1학점
+    CHECK(addPassFailGrade(gm, "24000001", "100902", "2026-1", kLetterNonPass));  // NP 2학점 → 영향 없음
+
+    const Statistics::GpaSummary s = Statistics::gpaSummary(gm, "24000001");
+    CHECK_NEAR(s.gpa, 4.0, 1e-9);
+    CHECK_EQ(s.credits, 3);
+    CHECK_EQ(s.earnedCredits, 4);  // 3 + P 1, NP 0
+    CHECK(s.semesters.size() == 1 && s.semesters[0].credits == 3 && s.semesters[0].earnedCredits == 4);
+}
+
+// F·P/F(P·NP)·재수강으로 지워진 성적이 섞인 경우 (학기별·누적 모두)
+//   2025-1: 미적분 F 3 + 자료 B+ 2 + 봉사 P 1        → 계산 5, 취득 2 + 1 = 3
+//   2025-2: 알고리즘 F 3 (2026-1 재수강으로 지워짐) + 봉사2 NP 1 → 계산 0, 취득 0 (학기는 목록에 남음)
+//   2026-1: 알고리즘 재수강 A0 3                      → 계산 3, 취득 3
+//   누적: 계산 8, 취득 6 (F 3 학점만큼 계산 학점보다 작음)
+TEST_CASE(gpaSummary_earned_credits_with_f_pass_fail_and_retake) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(gm.addCourse(makeCourse("100001", "미적분", 3)));
+    CHECK(gm.addCourse(makeCourse("100002", "자료", 2)));
+    CHECK(gm.addCourse(makeCourse("100003", "알고리즘", 3)));
+    CHECK(addPassFail(gm, "100901", 1));
+    CHECK(addPassFail(gm, "100902", 1));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 40)));  // F
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 87)));  // B+
+    CHECK(addPassFailGrade(gm, "25103008", "100901", "2025-1", kLetterPass));
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2025-2", 50)));  // F → 재수강으로 지워짐
+    CHECK(addPassFailGrade(gm, "25103008", "100902", "2025-2", kLetterNonPass));
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2026-1", 92)));  // A0
+
+    const Statistics::GpaSummary s = Statistics::gpaSummary(gm, "25103008");
+    CHECK_EQ(s.semesters.size(), static_cast<size_t>(3));
+    if (s.semesters.size() == 3) {
+        CHECK(s.semesters[0].semester == "2025-1" && s.semesters[0].credits == 5 && s.semesters[0].earnedCredits == 3);
+        CHECK(s.semesters[1].semester == "2025-2" && s.semesters[1].credits == 0 && s.semesters[1].earnedCredits == 0);
+        CHECK(s.semesters[2].semester == "2026-1" && s.semesters[2].credits == 3 && s.semesters[2].earnedCredits == 3);
+    }
+    CHECK_EQ(s.credits, 8);
+    CHECK_EQ(s.earnedCredits, 6);
+    CHECK_NEAR(s.gpa, (0.0 * 3 + 3.5 * 2 + 4.0 * 3) / 8, 1e-9);  // 2.375
 }

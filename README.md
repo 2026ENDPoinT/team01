@@ -306,7 +306,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | PUT | `/api/grades` | UI 없이 API 로만 남은 성적 수정 (본문의 studentId·courseCode·semester 로 찾음, score 또는 letter, 관리자·담당 교수. 지난 학기 `403`, 평가 기준이 있는 과목·학기는 `409`) |
 | DELETE | `/api/grades?studentId=&courseCode=&semester=` | UI 없이 API 로만 남은 성적 삭제 `{"deleted": true}` (관리자·담당 교수. 지난 학기 `403`, 평가 기준이 있는 과목·학기는 `409`) |
 | GET | `/api/stats/gpa/:id` | 학생 GPA `{studentId, semester, gpa}` (`?semester=`, 관리자·본인). 계산에 들어간 학점이 0 이면 `"gpa": null` |
-| GET | `/api/stats/summary/:id` | 학기별·누적 평점과 학점 `{"semesters": [{semester, gpa, credits}], "gpa", "credits"}` (성적 있는 학기만 오름차순, `credits` 가 0 이면 `"gpa": null`, 관리자·본인) |
+| GET | `/api/stats/summary/:id` | 학기별·누적 평점과 학점 `{"semesters": [{semester, gpa, credits, earnedCredits, majorGpa, majorCredits}], "gpa", "credits", "earnedCredits", "majorGpa", "majorCredits"}` (성적 있는 학기만 오름차순, `credits` 가 0 이면 `"gpa": null`, 관리자·본인). `credits` = 계산 학점 (평점 계산에 들어간 학점, 재수강으로 지워진 성적·P/F 제외), `earnedCredits` = 취득 학점 (계산 학점 중 F 가 아닌 과목 + P/F 과목 중 P) |
 | GET | `/api/stats/course/:code` | 과목 평균/최고/최저, `latestSemester`·`latestEnrolled`, `enrolledBySemester` (학기 → 수강신청 인원) |
 | GET | `/api/stats/warnings` | 학사경고 전체 `[{studentId, name, semester, reason, gpa, credits}]` (관리자) |
 | GET | `/api/stats/warnings/:id` | 학생 학사경고 `[{semester, reason, gpa, credits}]` (관리자·본인) |
@@ -369,7 +369,7 @@ JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
 |---|---|---|
 | ① 과목·성적 등록 (과목명, 수강 학기, 학점, 성적 등급) | 수강과목 탭 `+ 과목 등록` (과목명·학점) → 수강신청 탭 (학생·과목·학기 선택 후 `신청`) → 교수·관리자의 과목 페이지 `평가 기준 설정` → `항목 점수` 입력 (출석은 `출결` 에서 자동). 등급은 항목 점수로 자동 산출 (A+ ~ F, 예: 89점 B+) | `POST /api/courses`, `POST /api/enrollments`, `PUT /api/assessments`, `PUT /api/assessment-scores` |
 | ② 과목 조회·관리 (학기별 구분, 수정·삭제) | 학기별 조회: 학생 `내 성적` 탭, 관리자 학생 탭 `성적표`의 학기별 표. 수정·삭제: 과목 페이지의 항목 점수 칸을 고치거나 비우면 (삭제) 성적·GPA 가 다시 계산됨. 과목 자체는 수강과목 탭·과목 페이지의 `수정` `삭제` | `GET /api/stats/summary/:id`, `GET /api/grades?semester=`, `PUT`·`DELETE /api/assessment-scores`, `PUT`·`DELETE /api/courses/:code` |
-| ③ 평점평균(GPA) 자동 계산 (4.5 만점, 소수 둘째 자리) | 학생 탭 → `성적표` 대화상자: 누적 GPA·등록 학점, 학기별 평점평균·등록 학점 표, GPA 변화 그래프, 학사경고. 학생 계정은 `내 성적` 탭 (같은 화면) | `GET /api/stats/summary/:id`, `GET /api/stats/gpa/:id` |
+| ③ 평점평균(GPA) 자동 계산 (4.5 만점, 소수 둘째 자리) | 학생 탭 → `성적표` 대화상자: 누적 GPA·계산 학점·취득 학점, 학기별 평점평균·계산 학점·취득 학점 표, GPA 변화 그래프, 학사경고. 학생 계정은 `내 성적` 탭 (같은 화면) | `GET /api/stats/summary/:id`, `GET /api/stats/gpa/:id` |
 | ④ 데이터 저장·불러오기 | 모든 등록·수정·삭제가 바로 `data/*.csv` 에 저장됨. 새로고침하거나 서버를 다시 켜고 로그인해도 같은 값 | 데이터를 바꾸는 라우트가 성공 뒤 `gm.save()` |
 | ⑤ 기본 예외 처리 | 과목명 빈칸·학점 0 이하는 `+ 과목 등록` 폼에서 서버가 `400` + 메시지로 돌려주고 화면이 오류 문구를 알림으로 보임. 지원하지 않는 성적 등급(`Z` 등)은 화면에 입력 칸이 없어 API `POST /api/grades` 로만 시험하며 `400`. 성적 없는 학생(조서준)의 성적표는 "등록된 성적이 없습니다" (GPA 는 `null`) | `400` 응답 (아래 시연 시나리오의 6번에 실제 문구), `GET /api/stats/gpa/:id` 의 `"gpa": null` |
 

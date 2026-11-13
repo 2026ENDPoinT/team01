@@ -84,8 +84,8 @@ GpaSummary toSummary(const std::map<std::string, GpaSum>& sums) {
         s.credits = static_cast<int>(sum.credits);
         s.majorGpa = toMajorGpa(sum);
         s.majorCredits = static_cast<int>(sum.majorCredits);
+        s.earnedCredits = static_cast<int>(sum.earned);  // push_back 전에 채워야 목록에 들어감
         summary.semesters.push_back(s);
-        s.earnedCredits = static_cast<int>(sum.earned);
         total.add(sum);
     }
     summary.gpa = toGpa(total);
