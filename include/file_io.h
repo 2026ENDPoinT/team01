@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "assessment.h"
+#include "attendance.h"
 #include "course.h"
 #include "course_post.h"
 #include "enrollment.h"
@@ -61,6 +62,11 @@ public:
     //   형식이 틀린 점수(AssessmentScore::isValid)·같은 (학번, 과목, 학기, 이름) 중복 줄은 건너뜀
     bool saveAssessmentScores(const std::vector<AssessmentScore>& scores);
     bool loadAssessmentScores(std::vector<AssessmentScore>& scores);
+
+    // attendance.csv : studentId,courseCode,semester,week,status
+    //   형식이 틀린 기록(Attendance::isValid)·같은 (학번, 과목, 학기, 주차) 중복 줄은 건너뜀
+    bool saveAttendance(const std::vector<Attendance>& records);
+    bool loadAttendance(std::vector<Attendance>& records);
 
 private:
     std::string dataDir;

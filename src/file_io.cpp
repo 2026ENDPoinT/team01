@@ -551,6 +551,19 @@ bool FileIO::loadAssessmentScores(std::vector<AssessmentScore>& scores) {
     return true;
 }
 
+// attendance.csv : studentId,courseCode,semester,week,status
+// TODO(#59): 스텁
+
+bool FileIO::saveAttendance(const std::vector<Attendance>& records) {
+    (void)records;
+    return false;
+}
+
+bool FileIO::loadAttendance(std::vector<Attendance>& records) {
+    (void)records;
+    return false;
+}
+
 // 저장 순서: 백업 → path.tmp 에 쓰기 → path.tmp 를 path 로 이름 바꾸기
 //   쓰는 도중에 프로그램이 꺼져도 원래 path 는 그대로 남아 있음
 bool FileIO::atomicWrite(const std::string& path, const std::string& content) {

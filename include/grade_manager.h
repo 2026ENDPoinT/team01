@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "assessment.h"
+#include "attendance.h"
 #include "course.h"
 #include "course_post.h"
 #include "enrollment.h"
@@ -100,6 +101,20 @@ public:
     bool removeAssessmentScore(const std::string& studentId, const std::string& courseCode,
                                const std::string& semester, const std::string& name);
 
+    // ----- 출결 (#59) -----
+    // 출결은 항목 점수로 저장하지 않음. 바뀌면 그 학생의 성적만 다시 계산(syncGrade)
+    // 형식 오류, 없는 학생·과목, 수강신청 없음이면 false. 있으면 수정, 없으면 추가.
+    bool setAttendance(const Attendance& record);
+    // 없으면 false. 지운 뒤 그 학생의 성적을 다시 계산
+    bool removeAttendance(const std::string& studentId, const std::string& courseCode,
+                          const std::string& semester, int week);
+    std::vector<Attendance> getAttendanceByCourse(const std::string& courseCode, const std::string& semester) const;
+    std::vector<Attendance> getAttendanceByStudent(const std::string& studentId) const;
+    // 성적 계산에 쓰는 출석 분류 점수 (0~100)
+    //   그 학생·과목·학기의 출결 기록이 있으면 summarizeAttendance(기록).score, 하나도 없으면 100 (모두 출석)
+    double attendanceCategoryScore(const std::string& studentId, const std::string& courseCode,
+                                   const std::string& semester) const;
+
 private:
     FileIO fileIO;
     std::vector<Student> students;
@@ -110,6 +125,7 @@ private:
     std::vector<CoursePost> posts;
     std::vector<Assessment> assessments;
     std::vector<AssessmentScore> assessmentScores;
+    std::vector<Attendance> attendance;
 
     // 항목 계산 과목이면 그 학생의 최종 점수를 다시 계산해 grades 에 반영 (항목이 없으면 아무것도 안 함)
     void syncGrade(const std::string& studentId, const std::string& courseCode, const std::string& semester);

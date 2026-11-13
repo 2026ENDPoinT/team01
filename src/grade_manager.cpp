@@ -646,6 +646,42 @@ bool GradeManager::removeAssessmentScore(const std::string& studentId, const std
     return true;
 }
 
+// ----- 출결 (#59) -----
+// TODO(#59): 스텁. 계약만 먼저 merge 하고 구현은 이어서 채움
+bool GradeManager::setAttendance(const Attendance& record) {
+    (void)record;
+    return false;
+}
+
+bool GradeManager::removeAttendance(const std::string& studentId, const std::string& courseCode,
+                                    const std::string& semester, int week) {
+    (void)studentId;
+    (void)courseCode;
+    (void)semester;
+    (void)week;
+    return false;
+}
+
+std::vector<Attendance> GradeManager::getAttendanceByCourse(const std::string& courseCode,
+                                                            const std::string& semester) const {
+    (void)courseCode;
+    (void)semester;
+    return {};
+}
+
+std::vector<Attendance> GradeManager::getAttendanceByStudent(const std::string& studentId) const {
+    (void)studentId;
+    return {};
+}
+
+double GradeManager::attendanceCategoryScore(const std::string& studentId, const std::string& courseCode,
+                                             const std::string& semester) const {
+    (void)studentId;
+    (void)courseCode;
+    (void)semester;
+    return 100.0;
+}
+
 // ----- 최종 성적 동기화 -----
 // 항목이 없는 과목·학기(직접 입력 과목)는 건드리지 않는다.
 // finalScore 가 0 이상이면 grades 의 (학번, 과목, 학기) 성적을 추가하거나 점수를 바꾸고,
