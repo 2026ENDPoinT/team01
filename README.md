@@ -51,6 +51,7 @@ cmake -B build && cmake --build build && ctest --test-dir build --output-on-fail
 | `settings.csv` | `key,value` (`enrollmentSemester` = 수강신청 학기, 비어 있으면 신청 기간이 아님) |
 | `accounts.csv` | `username,role,name,studentId,salt,passwordHash` (로그인 계정, 비밀번호는 salt + SHA-256 반복 해시) |
 | `course_posts.csv` | `id,courseCode,semester,category,week,title,body,link,dueDate,author,createdAt` (과목 게시물, body 의 줄바꿈은 `\n` 두 글자로, `\` 는 `\\` 로 저장) |
+| `attendance.csv` | `studentId,courseCode,semester,week,status` (출결 기록, 주차 1~16, 상태 `출석` `지각` `결석` `공결`) |
 
 프로그램이 등록·수정·삭제할 때마다 이 파일을 바로 고쳐 씁니다 (직전 내용은 `.bak`, git 제외).
 화면에서 테스트하느라 바뀐 내용은 커밋 전에 `git diff data/` 로 확인하고, 되돌리려면 `git checkout -- data/` 를 쓰면 됩니다.
@@ -84,12 +85,14 @@ cmake -B build && cmake --build build && ctest --test-dir build --output-on-fail
 include/      헤더 (함수 시그니처)
 src/          구현 + main.cpp
 web/          index.html, style.css, app.js
-data/         students.csv, courses.csv, grades.csv, enrollments.csv, assessments.csv, assessment_scores.csv, settings.csv, accounts.csv, course_posts.csv (위 "데이터" 참고)
+data/         students.csv, courses.csv, grades.csv, enrollments.csv, assessments.csv, assessment_scores.csv, settings.csv, accounts.csv, course_posts.csv, attendance.csv (위 "데이터" 참고)
 third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 ```
 
-의존 방향: `student/course/grade/assessment` ← `file_io` ← `grade_manager` ← `statistics`, `report_exporter` ← `server` ← `main`
+의존 방향: `student/course/grade/assessment` ← `file_io` ← `grade_manager` ← `statistics` ← `server` ← `main` (`report_exporter` 는 지금 테스트에서만 호출함. 서버의 CSV 내보내기는 자체 `escapeCSV` 사용)
+
+구조도·모듈 책임·데이터 흐름·"이걸 바꾸면 어디가 바뀌나"·예상 질문은 [docs/architecture.md](docs/architecture.md) 에 정리했습니다.
 
 ## 규칙
 
@@ -123,6 +126,8 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | 평가 항목 추가·수정·삭제 | O | 담당 과목 | X |
 | 항목 점수 조회 | 과목·학기 전체 | 담당 과목 | 본인 점수 |
 | 항목 점수 입력·수정·삭제 | O | 담당 과목 | X |
+| 출결 조회 | 과목·학기 전체 | 담당 과목 | 본인 (내 성적의 출결 요약) |
+| 출결 기록·수정·삭제 | O | 담당 과목 | X |
 | 예상 성적 (내 성적의 "진행 중 과목") | X | X | 본인 |
 | GPA·학사경고 | O | X | 본인 |
 | 석차, 전체 학사경고 | O | X | X |
@@ -157,6 +162,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 - 상단 탭 줄에 보이는 과목마다 탭이 하나씩 생깁니다. 보이는 과목은 관리자는 전체, 교수는 담당 과목, 학생은 수강신청한 과목입니다. 수강과목 목록도 같은 과목만 보여 줍니다.
 - 과목 페이지는 학기별로 나뉘고, 게시물은 주차(1~16)별로 묶어 보여 줍니다. 분류는 수업자료 `material` · 중간고사 `midterm` · 기말고사 `final` · 과제 `assignment` 4가지입니다.
 - 게시물은 제목(필수), 내용, 링크(`http://` 또는 `https://`, 파일 업로드는 없음), 날짜(과제 마감·시험일, `2026-10-20` 또는 `2026-10-20 13:00`)를 가집니다. 작성자와 작성 시각은 서버가 채웁니다.
+- 관리자·담당 교수에게는 게시물 아래에 `평가 항목` 영역과 `출결` 영역이 보입니다 (아래 "평가 항목 성적", "출결" 참고).
 
 | 기능 | 관리자 | 교수 | 학생 |
 |---|---|---|---|
@@ -179,6 +185,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
   - 항목이 하나라도 있는 과목·학기는 성적 직접 등록·수정·삭제가 모두 `409` 입니다.
   - 항목 점수가 있는 수강은 취소할 수 없습니다 (`409`). 수강신청 목록의 `hasGrade` 는 성적 또는 항목 점수가 있으면 `true` 입니다.
 - 항목이 없는 과목·학기는 지금처럼 점수 또는 등급(`A+ A0 B+ B0 C+ C0 D+ D0 F` → 95·90·85·80·75·70·65·60·0점으로 저장)으로 직접 입력합니다.
+- 이름이 `출석` 인 항목은 그 과목·학기에 출결 기록이 있으면 출결 기록에서 점수가 자동으로 들어가고, 직접 입력·삭제할 수 없습니다 ("출결" 참고).
 - 예상 성적: 학생의 `내 성적` 화면은 평가 항목이 있는 과목마다 "진행 중 과목 (평가 항목)" 영역에 내 항목 점수와 현재까지 환산을 보입니다. 화면에서 계산하며 저장하지 않습니다.
   - 현재까지 환산 = Σ(입력된 항목 점수 × 비율) ÷ Σ(입력된 항목의 비율). 예상 등급은 `scoreToLetter` 와 같은 경계를 씁니다.
   - 모든 항목이 들어가 최종 성적이 생기기 전에는 "미확정"이고, 생기면 그 성적을 보입니다.
@@ -211,9 +218,40 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | 수강신청이 없는 학생의 항목 점수 | `409` | `수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)` |
 | 항목 점수가 있는 수강 취소 | `409` | `성적이 있는 수강은 취소할 수 없습니다` |
 
+## 출결
+
+교수가 과목 페이지에서 주차별 출결을 기록하면 서버가 학생별 출석 점수를 계산합니다. 그 과목·학기에 이름이 `출석` 인 평가 항목이 있으면 그 점수가 학생의 `출석` 항목 점수로 들어가고, 이후는 "평가 항목 성적" 과 같아서 최종 성적·GPA 까지 다시 계산됩니다 (`include/attendance.h`, `GradeManager::setAttendance`).
+
+- 수업은 16주(주차 1~16, 게시물 주차와 같음)입니다. 기록은 (학번, 과목코드, 학기, 주차) 하나에 상태 하나이고, 상태는 `출석` `지각` `결석` `공결` 입니다. 공결은 출석과 같게 봅니다. 그 학생의 (과목, 학기) 수강신청이 있어야 기록할 수 있습니다.
+- 지각 3회 = 결석 1회: 결석 환산 = 결석 + 지각 ÷ 3 (나머지는 버림).
+- 출석 점수 = 100 × (16 − 결석 환산) ÷ 16, 소수 둘째 자리 반올림, 0 미만이면 0. 기록이 없는 주차는 출석으로 봅니다. 기록이 하나도 없으면 점수가 없습니다 (`score` 가 `null`). 예: 결석 1 → 93.75, 지각 3 → 93.75, 결석 2 → 87.5.
+- 결석 환산이 5 를 넘으면(16주의 1/3 초과) `출석 미달` 경고만 보입니다. 등급을 자동으로 F 로 바꾸지는 않습니다.
+- `출석` 평가 항목 자동 연동: 출결 기록이 하나라도 있는 (과목, 학기)의 `출석` 항목 점수는 출결 기록에서만 정해집니다. 출결을 바꿀 때마다 그 학생의 `출석` 점수와 성적을 다시 계산하고, 그 학생의 기록을 모두 지우면 `출석` 항목 점수도 지워집니다 (미완성이 되어 성적이 사라짐). `출석` 항목을 직접 입력·삭제하면 `409` 입니다. `출석` 항목이 없는 과목·학기는 기록만 하고 성적에는 반영하지 않습니다.
+- 과목코드·학번을 바꾸면 출결 기록도 따라가고, 과목이나 학생을 삭제하면 출결 기록도 지워집니다.
+
+화면:
+- 과목 페이지 `출결` 영역 (관리자·담당 교수, `평가 항목` 영역 아래): 자체 학기 선택 (처음에는 평가 항목 영역과 같은 학기), 행 = 그 학기 수강생, 열 = 1~16주. 칸을 누르면 `없음 → 출석 → 지각 → 결석 → 공결 → 없음` 순으로 바뀌고 바로 저장합니다 (`없음` 은 기록 삭제). 저장에 실패하면 칸이 이전 값으로 돌아가고 오류 알림이 뜹니다. 16주 열이 화면보다 넓으면 표 안에서 가로로 스크롤합니다.
+- 행 끝에 결석 환산과 출석 점수 (소수 둘째 자리, 기록이 없으면 `-`), 미달이면 `출석 미달` 배지를 보입니다. 저장할 때마다 그 학생의 행 끝 값과, 같은 학기 평가 항목 점수표의 `출석` 칸·최종 열을 서버 값으로 다시 그립니다. 점수표의 `출석` 칸은 출결 기록이 있으면 읽기 전용입니다.
+- 학생 `내 성적` 의 "진행 중 과목 (평가 항목)" 에 출결 기록이 있는 과목마다 `출석 N · 지각 N · 결석 N · 출석 점수 NN.NN` (미달이면 `출석 미달`) 을 보입니다. 기록이 없는 과목은 보이지 않습니다.
+- 화면은 출석 점수를 다시 계산하지 않고 서버가 준 `summaries` 를 그대로 보입니다. 출결을 불러오지 못하면 그 영역 안에 한 줄 오류만 보이고 다른 영역은 그대로 동작합니다.
+
+| 출결 권한 | 관리자 | 교수 | 학생 |
+|---|---|---|---|
+| 출결 조회 | 과목·학기 전체 | 담당 과목 | 본인 기록 전체 |
+| 출결 기록·수정·삭제 | O | 담당 과목 | X |
+
+| 상황 | 상태 | 메시지 |
+|---|---|---|
+| 주차가 1~16 아님, 상태가 4가지가 아님 | `400` | `출결 정보가 올바르지 않습니다 (주차 1~16, 상태 출석·지각·결석·공결)` |
+| 담당 과목이 아닌 교수, 학생이 쓰기 라우트 호출 | `403` | `권한이 없습니다` |
+| 없는 과목 · 없는 학생 | `404` | `없는 과목입니다: 999999` · `없는 학생입니다: 99999999` |
+| 지울 출결 기록이 없음 | `404` | `없는 출결 기록입니다` |
+| 수강신청이 없는 학생의 출결 | `409` | `수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)` |
+| 출결 기록이 있는 과목·학기의 `출석` 항목 점수 직접 입력·삭제 | `409` | `출석 점수는 출결 기록에서 자동 계산됩니다` |
+
 ## API
 
-요청/응답 본문은 JSON. `/api/login` 외 모든 `/api/*` 는 로그인이 필요합니다 (안 했으면 `401`, 권한 없음 `403`). 실패 시 `400` 잘못된 값·깨진 JSON·빠진 칸 / `404` 없음 / `409` 중복·정원 초과·수강신청 규칙·평가 항목 규칙 위반 / `500` 파일 저장 실패 + `{"error": "메시지"}`
+요청/응답 본문은 JSON. `/api/login` 외 모든 `/api/*` 는 로그인이 필요합니다 (안 했으면 `401`, 권한 없음 `403`). 실패 시 `400` 잘못된 값·깨진 JSON·빠진 칸 / `404` 없음 / `409` 중복·정원 초과·수강신청 규칙·평가 항목 규칙·출결 규칙 위반 / `500` 파일 저장 실패 + `{"error": "메시지"}`
 
 | 메서드 | 경로 | 설명 (권한) |
 |---|---|---|
@@ -263,6 +301,9 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | GET | `/api/assessment-scores?courseCode=&semester=` | 항목 점수 목록. 관리자·담당 교수는 두 쿼리 필수, 학생은 쿼리와 무관하게 본인 것 전부 |
 | PUT | `/api/assessment-scores` | 항목 점수 입력 `{studentId, courseCode, semester, name, score}`, 있으면 수정·없으면 추가 (관리자·담당 교수, 성적 다시 계산) |
 | DELETE | `/api/assessment-scores?studentId=&courseCode=&semester=&name=` | 항목 점수 삭제 `{"deleted": true}` (관리자·담당 교수, 성적 다시 계산) |
+| GET | `/api/attendance?courseCode=&semester=` | 출결 기록과 학생별 요약 `{"records": [{studentId, courseCode, semester, week, status}], "summaries": [{studentId, present, late, absent, absentEquivalent, score, shortage}]}` (`present` = 출석 + 공결, `score` 는 기록이 없으면 `null`, `summaries` 는 기록이 있는 학생마다 하나). 관리자·담당 교수는 두 쿼리 필수 (없으면 `400`), 학생은 쿼리와 무관하게 본인 기록 전체이고 `summaries` 에 `courseCode`·`semester` 도 들어감 |
+| PUT | `/api/attendance` | 출결 기록 `{studentId, courseCode, semester, week, status}`, 있으면 수정·없으면 추가 → `200` + 기록 (관리자·담당 교수, `출석` 항목 점수·성적 다시 계산) |
+| DELETE | `/api/attendance?studentId=&courseCode=&semester=&week=` | 출결 기록 삭제 `{"deleted": true}` (관리자·담당 교수, `출석` 항목 점수·성적 다시 계산) |
 
 JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
 - 학생 `{"id", "name", "major", "year"}`
@@ -280,6 +321,7 @@ JSON 필드 이름은 헤더의 멤버 이름과 같습니다.
 - 계정 `{"username", "role", "name", "studentId"}` — 응답에 비밀번호 해시는 없음. 학생 계정의 `name` 은 학생 이름으로 채워서 내보냄
 - 평가 항목 `{"courseCode", "semester", "name", "weight"}` — `weight` 는 반영 비율(%) 정수 1~100
 - 항목 점수 `{"studentId", "courseCode", "semester", "name", "score"}` — `score` 는 0~100
+- 출결 `{"studentId", "courseCode", "semester", "week", "status"}` — `week` 는 1~16, `status` 는 `출석` `지각` `결석` `공결`
 
 데이터를 바꾸는 라우트의 성공 응답은 모두 JSON 입니다. 등록은 `201` + 만든 객체, 수정은 `200` + 바뀐 객체, 삭제는 `200` + `{"deleted": true}` 이고, 성공한 뒤 바로 CSV 에 저장합니다. 성적 응답에는 항상 `letter` 가 들어 있습니다.
 

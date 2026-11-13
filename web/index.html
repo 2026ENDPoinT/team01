@@ -191,6 +191,16 @@
                 </div>
                 <div id="assess-body"></div>
             </div>
+            <!-- 출결 (관리자·담당 교수만, app.js renderAttend): 학기 선택 + 수강생 × 1~16주 출결 표 (넘치면 표 안에서 가로 스크롤) -->
+            <div id="attend-section" class="assess-section" hidden>
+                <div class="toolbar">
+                    <h3 class="sub-title">출결</h3>
+                    <label for="attend-sem">학기</label><select id="attend-sem"></select>
+                    <span class="spacer"></span>
+                    <span class="hint">칸을 누르면 없음 → 출석 → 지각 → 결석 → 공결 순으로 바뀌고 바로 저장 · 지각 3회 = 결석 1회 · 기록 없는 주차는 출석</span>
+                </div>
+                <div id="attend-body"></div>
+            </div>
         </section>
     </main>
 

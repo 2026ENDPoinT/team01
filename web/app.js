@@ -12,10 +12,12 @@ const $ = (id) => document.getElementById(id);
 // coursePosts: 지금 과목 페이지의 게시물 (서버가 권한에 맞게 걸러 줌, 학기·분류는 화면에서 거름)
 // assessSem: 과목 페이지 '평가 항목' 영역에서 고른 학기
 // assess: 그 영역에 지금 그려 둔 {code, sem, items} (점수 칸·버튼이 어느 항목인지 찾을 때 사용, 안 그렸으면 null)
+// attendSem: 과목 페이지 '출결' 영역에서 고른 학기
+// attend: 그 영역에 지금 그려 둔 {code, sem, records, summaries, seq} (출결 칸이 사용, 안 그렸거나 불러오기 실패면 null)
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
-    assessSem: null, assess: null,
+    assessSem: null, assess: null, attendSem: null, attend: null,
 };
 
 // ───────── 공용 도우미 ─────────
@@ -215,13 +217,14 @@ const renderers = {
 const currentTab = () => document.querySelector('main .tab.active').id.slice('tab-'.length);
 
 // 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
-//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 항목 학기 선택을 처음으로 되돌림
+//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 항목·출결 학기 선택을 처음으로 되돌림
 function showTab(name, code) {
     if (code && code !== state.courseCode) {
         state.courseCode = code;
         state.courseSem = null;
         state.postFilter = 'all';
         state.assessSem = null;
+        state.attendSem = null;
     }
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active',
         b.dataset.tab === 'course' ? name === 'course' && b.dataset.code === state.courseCode : b.dataset.tab === name));
@@ -292,11 +295,13 @@ function resetView() {
     state.coursePosts = [];
     state.assessSem = null;
     state.assess = null;
+    state.attendSem = null;
+    state.attend = null;
     ['course-list', 'student-body', 'grade-body', 'rank-body', 'enroll-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester', 'rank-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-tabs', 'course-hero', 'course-filter', 'course-posts', 'course-sem',
-        'assess-sem', 'assess-body'].forEach((id) => ($(id).innerHTML = ''));
+        'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
     $('enroll-period').textContent = '';
@@ -553,7 +558,8 @@ function isExpired(due) {
 // 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
 //   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
 //   처음 보이는 학기: 이전 선택 → 게시물이 있는 가장 최근 학기 → (관리자·교수) 신청 학기 → 가장 최근 학기
-//   관리자·담당 교수는 아래 '평가 항목' 영역도 그림 (같은 학기 목록, 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기)
+//   관리자·담당 교수는 아래 '평가 항목'·'출결' 영역도 그림 (같은 학기 목록, 평가 항목 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기,
+//   출결 처음 학기: 이전 선택 → 평가 항목 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
 async function renderCoursePage() {
     const code = state.courseCode;
     const c = pageCourse();
@@ -561,6 +567,7 @@ async function renderCoursePage() {
     const manage = canManageCourse(c);
     $('post-add').hidden = !manage;
     $('assess-section').hidden = !manage;
+    $('attend-section').hidden = !manage;
     const staff = state.me.role !== 'student';
     const [posts, staffInfo] = await Promise.all([
         api('GET', postsUrl(code)),
@@ -588,10 +595,12 @@ async function renderCoursePage() {
     state.coursePosts = posts;
     drawPosts();
 
-    if (!manage) { state.assess = null; return; }
+    if (!manage) { state.assess = null; state.attend = null; return; }
     if (!sems.includes(state.assessSem)) state.assessSem = open || state.courseSem;
     fillSelect($('assess-sem'), sems.map((s) => ({ value: s, label: s })), '', state.assessSem);
-    await renderAssess();
+    if (!sems.includes(state.attendSem)) state.attendSem = state.assessSem;
+    fillSelect($('attend-sem'), sems.map((s) => ({ value: s, label: s })), '', state.attendSem);
+    await Promise.all([renderAssess(), renderAttend()]);
 }
 
 // 과목 카드 + 분류 칩 + 주차별 게시물 목록 그리기 (선택 학기의 게시물만, 서버를 다시 부르지 않음)
@@ -747,6 +756,7 @@ const finalCell = (g) => (g ? `<b>${esc(round2(g.score))}</b> ${letterBadge(g.le
 
 // '평가 항목' 영역 그리기 (고른 학기 state.assessSem)
 //   항목 표(이름·비율·수정/삭제) + 비율 합계, 항목이 있으면 수강생별 항목 점수 입력표 (행 = 수강생, 열 = 항목, 마지막 = 최종)
+//   출결 기록이 있는 과목·학기면 '출석' 열은 읽기 전용 (lockAttendColumn)
 async function renderAssess() {
     const code = state.courseCode;
     const sem = state.assessSem ?? '';
@@ -814,6 +824,7 @@ async function renderAssess() {
         </div>`;
     }
     box.innerHTML = html;
+    await lockAttendColumn();
 }
 
 // 평가 항목 추가(item 없음) / 수정 폼. ctx = 지금 영역의 {code, sem}
@@ -896,6 +907,197 @@ $('assess-body').addEventListener('change', async (e) => {
         toast(`${studentName(sid)} ${item.name} ${raw === '' ? '삭제' : '저장'} · ` + (g ? `최종 ${round2(g.score)}점 → ${g.letter}` : '최종 성적 미완성'));
     } catch (err) { toast(err.message, true); }
 });
+
+// ───────── 출결 (과목 페이지, 관리자·담당 교수) ─────────
+
+// 출결 상태 (서버 Attendance 와 같은 값). 칸을 누를 때마다 없음('') → 출석 → 지각 → 결석 → 공결 → 없음 순으로 바뀜
+const ATTEND_STATUSES = ['출석', '지각', '결석', '공결'];
+const nextAttendStatus = (s) => ATTEND_STATUSES[ATTEND_STATUSES.indexOf(s) + 1] ?? '';
+// 상태 → 칸 색 클래스 (style.css 의 button.att.*)
+const ATTEND_CLASS = { 출석: 'present', 지각: 'late', 결석: 'absent', 공결: 'excused' };
+// 수업 주차 수 (서버 출결 주차 1~16, 게시물 주차와 같음)
+const ATTEND_WEEKS = 16;
+// 출결 기록에서 점수가 자동 계산되는 평가 항목 이름 (서버 규칙과 같음)
+const ATTEND_ITEM = '출석';
+const ATTEND_LOCK_MSG = '출석 점수는 출결 기록에서 자동 계산됩니다 (아래 출결 영역에서 고치세요)';
+// 출결 칸 하나를 구분하는 키 (학번, 주차)
+const attendKey = (sid, week) => sid + '|' + week;
+
+// 출결 기록·요약 {records, summaries} 받기 (query: 'courseCode=…&semester=…', 학생은 '' = 본인 기록 전체)
+//   응답 모양이 다르면 오류로 던짐. 출석 점수는 서버 summaries 값만 쓰고 화면에서 다시 계산하지 않음
+async function attendanceOf(query) {
+    const data = await api('GET', '/api/attendance' + (query ? '?' + query : ''));
+    if (!Array.isArray(data?.records) || !Array.isArray(data?.summaries)) throw new Error('출결 응답 형식이 올바르지 않습니다');
+    return data;
+}
+
+// '출결' 영역 그리기 (고른 학기 state.attendSem): 행 = 그 과목·학기 수강생(출결 기록만 남은 학생도 포함), 열 = 1~16주,
+//   행 끝 = 결석 환산 · 출석 점수 (+ 출석 미달 배지). 불러오기 실패는 영역 안에 한 줄 오류로 보이고 던지지 않음
+//   다시 그리는 동안 이전 표는 그대로 두되 state.attend 가 null 이라 눌러도 저장하지 않음 (다른 과목·학기면 '불러오는 중')
+async function renderAttend() {
+    const code = state.courseCode;
+    const sem = state.attendSem ?? '';
+    const box = $('attend-body');
+    const stale = () => currentTab() !== 'course' || state.courseCode !== code || state.attendSem !== sem;
+    state.attend = null;
+    if (!sem) {
+        box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
+        return;
+    }
+    const key = JSON.stringify([code, sem]);
+    if (box.dataset.key !== key || !box.querySelector('table')) box.innerHTML = '<p class="hint">출결을 불러오는 중…</p>';
+    box.dataset.key = key;
+    try {
+        const q = assessQuery(code, sem);
+        const [data, enrolls] = await Promise.all([attendanceOf(q), api('GET', '/api/enrollments?' + q)]);
+        if (stale()) return;
+        const ctx = {
+            code, sem,
+            records: new Map(data.records.map((r) => [attendKey(r.studentId, r.week), r.status])),
+            summaries: new Map(data.summaries.map((s) => [s.studentId, s])),
+            seq: new Map(),  // 학번 → 마지막으로 보낸 요약 다시 받기 번호 (늦게 온 이전 응답이 덮지 않게)
+        };
+        const ids = [...new Set([...enrolls.map((e) => e.studentId), ...data.records.map((r) => r.studentId)])].sort();
+        const weeks = Array.from({ length: ATTEND_WEEKS }, (_, i) => i + 1);
+        const rows = ids.map((sid) => `
+            <tr data-sid="${esc(sid)}" data-name="${esc(studentName(sid))}">
+                <td class="att-name"><b>${esc(studentName(sid))}</b> <span class="hint">${esc(sid)}</span></td>
+                ${weeks.map((w) => `<td class="att-td"><button type="button" class="att" data-w="${w}"></button></td>`).join('')}
+                <td class="num att-eq"></td>
+                <td class="num att-score"></td>
+            </tr>`).join('');
+        box.innerHTML = `
+            <div class="table-wrap">
+                <table class="attend-table"><thead><tr><th class="att-name">이름 · 학번</th>
+                    ${weeks.map((w) => `<th class="att-td">${w}</th>`).join('')}
+                    <th class="num">결석 환산</th><th class="num">출석 점수</th></tr></thead>
+                <tbody>${rows || emptyRow(ATTEND_WEEKS + 3, '이 학기 수강생이 없습니다')}</tbody></table>
+            </div>`;
+        box.querySelectorAll('tr[data-sid]').forEach((tr) => {
+            tr.querySelectorAll('button.att').forEach((b) => paintAttendCell(b, ctx.records.get(attendKey(tr.dataset.sid, b.dataset.w)) ?? ''));
+            paintAttendSummary(ctx, tr);
+        });
+        state.attend = ctx;
+        if (state.assess?.code === code && state.assess.sem === sem) await lockAttendColumn();
+    } catch (err) {
+        if (!stale()) box.innerHTML = `<p class="attend-error">출결을 불러오지 못했습니다: ${esc(err.message)}</p>`;
+    }
+}
+
+// 출결 칸 하나 표시: 상태 첫 글자와 색, 마우스를 올리면 'N주 상태' (없음이면 빈 칸)
+function paintAttendCell(btn, status) {
+    const label = `${btn.dataset.w}주 ${status || '없음'}`;
+    btn.className = 'att' + (Object.hasOwn(ATTEND_CLASS, status) ? ' ' + ATTEND_CLASS[status] : '');
+    btn.textContent = String(status).slice(0, 1);
+    btn.title = label;
+    btn.setAttribute('aria-label', `${btn.closest('tr').dataset.name} ${label}`);
+}
+
+// 행 끝 값: 결석 환산 · 출석 점수 (소수 둘째 자리). 서버 요약이 없거나 score 가 null(기록 없음)이면 '-'
+//   shortage 면 '출석 미달' 경고 배지 (학사경고와 같은 badge F 색)
+function paintAttendSummary(ctx, tr) {
+    const s = ctx.summaries.get(tr.dataset.sid);
+    const has = typeof s?.score === 'number';
+    tr.querySelector('.att-eq').textContent = has ? (s.absentEquivalent ?? '-') : '-';
+    tr.querySelector('.att-score').innerHTML = fmt(has ? s.score : null) + (has && s.shortage ? ' <span class="badge F">출석 미달</span>' : '');
+}
+
+// 평가 항목 점수표의 '출석' 열: 그 과목·학기에 출결 기록이 있으면 읽기 전용 (서버도 직접 수정을 409 로 막음)
+//   출결 영역이 같은 과목·학기면 그 기록으로, 아니면 서버에서 받아 판단 (못 받으면 고칠 수 있게 둠). 던지지 않음
+async function lockAttendColumn() {
+    const a = state.assess;
+    const i = a ? a.items.findIndex((x) => x.name === ATTEND_ITEM) : -1;
+    if (i < 0) return;
+    const at = state.attend;
+    let has = false;
+    if (at && at.code === a.code && at.sem === a.sem) {
+        has = at.records.size > 0;
+    } else {
+        try { has = (await attendanceOf(assessQuery(a.code, a.sem))).records.length > 0; } catch { has = false; }
+        if (state.assess !== a) return;
+    }
+    $('assess-body').querySelectorAll(`input.score-cell[data-i="${i}"]`).forEach((input) => {
+        input.disabled = has;
+        input.title = has ? ATTEND_LOCK_MSG : '';
+    });
+}
+
+// 칸을 누르면 다음 상태로 바꾸고 바로 저장 (상태는 PUT, 없음은 DELETE). 저장 중인 칸은 다시 눌러도 무시
+//   실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 항목 점수표를 다시 그림
+async function toggleAttend(btn) {
+    const ctx = state.attend;
+    if (!ctx || btn.dataset.busy) return;
+    const tr = btn.closest('tr');
+    const sid = tr.dataset.sid;
+    const week = Number(btn.dataset.w);
+    const key = attendKey(sid, week);
+    const prev = ctx.records.get(key) ?? '';
+    const next = nextAttendStatus(prev);
+    const show = (s) => {
+        if (s) ctx.records.set(key, s); else ctx.records.delete(key);
+        paintAttendCell(btn, s);
+    };
+    show(next);
+    btn.dataset.busy = '1';
+    const id = { studentId: sid, courseCode: ctx.code, semester: ctx.sem, week };
+    let saved = true;
+    try {
+        if (next) await api('PUT', '/api/attendance', { ...id, status: next });
+        else await api('DELETE', '/api/attendance?' + new URLSearchParams(id));
+    } catch (err) {
+        show(prev);
+        toast(err.message, true);
+        saved = false;
+    }
+    delete btn.dataset.busy;
+    if (state.attend !== ctx) return;
+    await lockAttendColumn();
+    if (saved) await refreshAttendRow(ctx, tr, sid, `${week}주 ${next || '기록 삭제'}`);
+}
+
+// 저장한 학생의 행 끝 값을 서버 요약으로 다시 그리고, 같은 과목·학기 평가 항목 점수표의 그 학생 '출석' 칸·최종 열도 다시 그림
+//   같은 학생을 연달아 바꾸면 마지막 저장 뒤에 보낸 요청의 응답만 그림 (seq)
+async function refreshAttendRow(ctx, tr, sid, what) {
+    const seq = (ctx.seq.get(sid) ?? 0) + 1;
+    ctx.seq.set(sid, seq);
+    const latest = () => state.attend === ctx && ctx.seq.get(sid) === seq;
+    try {
+        const data = await attendanceOf(assessQuery(ctx.code, ctx.sem));
+        if (!latest()) return;
+        const s = data.summaries.find((x) => x.studentId === sid);
+        if (s) ctx.summaries.set(sid, s); else ctx.summaries.delete(sid);
+        paintAttendSummary(ctx, tr);
+        const g = await refreshAssessAttend(ctx, sid, latest);
+        const final = g === null ? '' : g ? ` · 최종 ${round2(g.score)}점 → ${g.letter}` : ' · 최종 성적 미완성';
+        toast(`${studentName(sid) || sid} ${what} · 출석 점수 ${fmt(typeof s?.score === 'number' ? s.score : null)}${final}`);
+    } catch (err) {
+        toast(`저장했지만 다시 불러오지 못했습니다: ${err.message}`, true);
+    }
+}
+
+// 평가 항목 점수표가 같은 과목·학기이고 '출석' 항목이 있으면, 그 학생의 '출석' 칸을 서버가 다시 계산한 점수로 바꾸고
+//   최종 열은 refreshFinal 로 다시 그림. 받은 성적(없으면 undefined)을 돌려주고, 다시 그릴 표가 없으면 null
+async function refreshAssessAttend(ctx, sid, latest) {
+    const a = state.assess;
+    const i = a && a.code === ctx.code && a.sem === ctx.sem ? a.items.findIndex((x) => x.name === ATTEND_ITEM) : -1;
+    if (i < 0) return null;
+    const scores = await api('GET', '/api/assessment-scores?' + assessQuery(a.code, a.sem));
+    if (state.assess !== a || !latest()) return null;
+    const row = [...$('assess-body').querySelectorAll('tr[data-sid]')].find((r) => r.dataset.sid === sid);
+    const input = row?.querySelector(`input.score-cell[data-i="${i}"]`);
+    if (input) {
+        const v = String(scores.find((x) => x.studentId === sid && x.name === ATTEND_ITEM)?.score ?? '');
+        input.value = v;
+        input.dataset.prev = v;
+    }
+    return refreshFinal(a, sid);
+}
+
+$('attend-sem').onchange = () => { state.attendSem = $('attend-sem').value; renderAttend(); };
+$('attend-body').onclick = (e) => {
+    const b = e.target.closest('button.att');
+    if (b) toggleAttend(b);
+};
 
 // ───────── 수강신청 ─────────
 
@@ -1098,8 +1300,17 @@ async function renderStudents() {
             api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null))),
         api('GET', '/api/stats/warnings').catch(() => []),
     ]);
-    const warnCount = {};
-    warnings.forEach((w) => (warnCount[w.studentId] = (warnCount[w.studentId] ?? 0) + 1));
+    // 학사경고 사유 약칭 (서버 reason 문자열 기준, 모르는 사유는 원문 그대로)
+    const reasonShort = { '수강신청 미이행': '미신청', '평점평균 1.75 미만': '평점' };
+    const warnList = {};
+    warnings.forEach((w) => (warnList[w.studentId] ??= []).push(w));
+    const warnBadge = (id) => {
+        const ws = warnList[id];
+        if (!ws) return '-';
+        const kinds = [...new Set(ws.map((w) => reasonShort[w.reason] ?? w.reason))];
+        const tip = ws.map((w) => `${w.semester} ${w.reason}${typeof w.gpa === 'number' ? ` (GPA ${w.gpa.toFixed(2)})` : ''}`).join('\n');
+        return `<span class="badge F" title="${esc(tip).replace(/\n/g, '&#10;')}">${ws.length}회 · ${esc(kinds.join('·'))}</span>`;
+    };
     body.innerHTML = list.map((s, i) => `
         <tr>
             <td>${esc(s.id)}</td>
@@ -1107,7 +1318,7 @@ async function renderStudents() {
             <td>${esc(s.major)}</td>
             <td>${esc(s.year)}학년</td>
             <td class="num">${fmt(gpas[i])}</td>
-            <td>${warnCount[s.id] ? `<span class="badge F">${warnCount[s.id]}회</span>` : '-'}</td>
+            <td>${warnBadge(s.id)}</td>
             <td class="actions">
                 <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
                 <button class="link" data-act="edit" data-id="${esc(s.id)}">수정</button>
@@ -1253,7 +1464,7 @@ async function showStudentReport(s) {
 
 // ───────── 내 성적 (학생) ─────────
 
-// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 항목 과목이 없으면 생략) + 성적표
+// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 항목·출결 기록이 있는 과목이 없으면 생략) + 성적표
 async function renderMyReport() {
     const [progress, report] = await Promise.all([
         myAssessmentsHtml(),
@@ -1268,20 +1479,28 @@ async function renderMyReport() {
 //     없으면 현재까지 환산 = Σ(입력된 점수×비율) / Σ(점수가 입력된 항목의 비율), 소수 둘째 반올림,
 //     예상 등급은 scoreToLetter 경계 (미확정)
 //   평가 항목이 있는 과목이 없으면 빈 문자열
+//   출결 기록이 있는 과목은 내 출결 요약 줄도 보임 (평가 항목이 없어도 그 과목을 보임, 기록이 없는 과목은 줄 없음)
+//   출결을 못 받으면 이 영역 안에 한 줄 오류만 보이고 나머지는 그대로
 async function myAssessmentsHtml() {
-    const [scores, grades] = await Promise.all([
+    const [scores, grades, attend] = await Promise.all([
         api('GET', '/api/assessment-scores'),
         api('GET', '/api/grades?studentId=' + encodeURIComponent(state.me.studentId)),
+        myAttendance(),
     ]);
     const combos = new Map();
-    [...state.myEnrollments, ...scores].forEach((e) =>
+    [...state.myEnrollments, ...scores, ...attend.summaries.values()].forEach((e) =>
         combos.set(JSON.stringify([e.courseCode, e.semester]), { code: e.courseCode, sem: e.semester }));
     const cache = new Map();
     const list = await Promise.all([...combos.values()].map(async (x) => ({ ...x, items: await assessmentsOf(x.code, x.sem, cache) })));
-    const shown = list.filter((x) => x.items.length).sort((a, b) => b.sem.localeCompare(a.sem) || a.code.localeCompare(b.code));
-    if (!shown.length) return '';
+    const shown = list.filter((x) => x.items.length || attend.summaries.has(JSON.stringify([x.code, x.sem])))
+        .sort((a, b) => b.sem.localeCompare(a.sem) || a.code.localeCompare(b.code));
+    const attendError = attend.error ? `<p class="attend-error">출결을 불러오지 못했습니다: ${esc(attend.error)}</p>` : '';
+    if (!shown.length) return attendError ? `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}</div>` : '';
 
     const cards = shown.map(({ code, sem, items }) => {
+        const head = `<h4 class="assess-head">${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span></h4>`;
+        const att = attend.summaries.get(JSON.stringify([code, sem]));
+        if (!items.length) return head + `<p class="attend-line">${attendSummaryLine(att)}</p>`;
         const mine = (name) => scores.find((s) => s.courseCode === code && s.semester === sem && s.name === name);
         const total = items.reduce((t, a) => t + a.weight, 0);
         const done = items.filter((a) => mine(a.name));
@@ -1300,15 +1519,32 @@ async function myAssessmentsHtml() {
         const rows = items.map((a) => `
             <tr><td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${esc(mine(a.name)?.score ?? '-')}</td></tr>`).join('');
         return `
-            <h4 class="assess-head">${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span></h4>
+            ${head}
             <div class="table-wrap">
                 <table><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr><td colspan="3" class="estimate">${line}</td></tr></tfoot></table>
+                <tfoot><tr><td colspan="3" class="estimate">${line}</td></tr>
+                ${att ? `<tr><td colspan="3" class="estimate">${attendSummaryLine(att)}</td></tr>` : ''}</tfoot></table>
             </div>`;
     }).join('');
-    return `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${cards}</div>`;
+    return `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}${cards}</div>`;
 }
+
+// 내 출결 요약 (학생, 서버가 쿼리 없이 본인 기록 전체를 줌): {summaries: (과목, 학기) → 서버 요약, error}
+//   score 가 null(기록 없음)인 요약은 뺌. 실패하면 빈 목록과 오류 문구 (던지지 않음)
+async function myAttendance() {
+    try {
+        const data = await attendanceOf('');
+        const list = data.summaries.filter((s) => typeof s.score === 'number');
+        return { summaries: new Map(list.map((s) => [JSON.stringify([s.courseCode, s.semester]), s])), error: '' };
+    } catch (err) {
+        return { summaries: new Map(), error: err.message };
+    }
+}
+// 출결 요약 한 줄: 출석 N · 지각 N · 결석 N · 출석 점수 NN.NN (서버 값 그대로), shortage 면 '출석 미달' 경고 배지
+const attendSummaryLine = (s) =>
+    `출석 ${esc(s.present)} · 지각 ${esc(s.late)} · 결석 ${esc(s.absent)} · 출석 점수 <b>${fmt(s.score)}</b>` +
+    (s.shortage ? ' <span class="badge F">출석 미달</span>' : '');
 
 // ───────── 성적 ─────────
 
