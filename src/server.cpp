@@ -46,7 +46,9 @@ constexpr const char* kSaveFailed = "저장에 실패했습니다";
 constexpr const char* kStudentRules =
     "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)";
 constexpr const char* kScoreRules = "점수는 0~100 사이 숫자여야 합니다";
-constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)";
+constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F, P/F 과목은 P NP)";
+constexpr const char* kPassFailOnly = "P/F 과목은 P(합격) 또는 NP(불합격)로 입력하세요";
+constexpr const char* kPassFailLetterOnly = "P·NP 는 P/F 과목에만 입력할 수 있습니다";
 constexpr const char* kAssessmentRules =
     "평가 항목이 올바르지 않습니다 (평가 항목 출석·중간고사·기말고사·과제·팀프로젝트·기타, 비율 0~100 정수)";
 constexpr const char* kGradingSchemeRules =
@@ -155,7 +157,7 @@ json courseJson(const Course& c) {
         {"code", c.code}, {"name", c.name}, {"credit", c.credit},
         {"professor", c.professor}, {"category", c.category}, {"area", c.area},
         {"schedule", c.schedule}, {"language", c.language},
-        {"capacity", c.capacity}, {"remote", c.remote}
+        {"capacity", c.capacity}, {"remote", c.remote}, {"gradeType", c.gradeType}
     };
 }
 
@@ -272,7 +274,14 @@ bool readGradeBody(const json& body, Grade& grade, httplib::Response& res) {
             return false;
         }
     } else if (letter != body.end() && !letter->is_null()) {
-        grade.score = letter->is_string() ? letterToScore(letter->get<std::string>()) : -1.0;
+        const std::string text = letter->is_string() ? letter->get<std::string>() : "";
+        if (isPassFailLetter(text)) {
+            // P/F 과목 성적: 등급은 assignedLetter 에, 점수는 P = 100 / NP = 0 (과목이 P/F 인지는 checkGradeType)
+            grade.assignedLetter = text;
+            grade.score = text == kLetterPass ? kPassScore : kNonPassScore;
+        } else {
+            grade.score = letter->is_string() ? letterToScore(text) : -1.0;
+        }
         if (grade.score < 0.0) {
             setError(res, 400, kLetterRules);
             return false;
@@ -285,8 +294,27 @@ bool readGradeBody(const json& body, Grade& grade, httplib::Response& res) {
         setError(res, 400, kSemesterRules);
         return false;
     }
-    if (!grade.isValid()) {
+    Grade rest = grade;  // P·NP 는 Grade::isValid 의 등급 검사에서 빼고 checkGradeType 에서 봄
+    if (isPassFailLetter(rest.assignedLetter)) rest.assignedLetter.clear();
+    if (!rest.isValid()) {
         setError(res, 400, kGradeRules);
+        return false;
+    }
+    return true;
+}
+
+// 성적이 과목의 성적 방식에 맞는지: P/F 과목은 P·NP 만, 일반 과목은 P·NP 를 받지 않음. 어긋나면 400 을 채우고 false
+//   과목이 없으면 통과 (없는 과목은 각 라우트가 404 로 처리)
+bool checkGradeType(const GradeManager& gm, const Grade& grade, httplib::Response& res) {
+    const Course* course = gm.findCourse(grade.courseCode);
+    if (!course) return true;
+    const bool pfLetter = isPassFailLetter(grade.assignedLetter);
+    if (course->isPassFail() && !pfLetter) {
+        setError(res, 400, kPassFailOnly);
+        return false;
+    }
+    if (!course->isPassFail() && pfLetter) {
+        setError(res, 400, kPassFailLetterOnly);
         return false;
     }
     return true;
@@ -1450,8 +1478,15 @@ void Server::run() {
             return;
         }
         const std::string oldCode = req.path_params.at("code");
-        if (gm.findCourse(oldCode) == nullptr) {
+        const Course* oldCourse = gm.findCourse(oldCode);
+        if (oldCourse == nullptr) {
             setError(res, 404, "수정할 과목을 찾을 수 없습니다.");
+            return;
+        }
+        // 성적 방식은 본문에 없으면 그대로 (예전 화면·API 로 수정해도 P/F 가 풀리지 않게)
+        if (!body.contains("gradeType") || body["gradeType"].is_null()) course.gradeType = oldCourse->gradeType;
+        if (course.gradeType != oldCourse->gradeType && gm.courseHasGradesOrAssessments(oldCode)) {
+            setError(res, 409, "성적이나 평가 기준이 있는 과목은 성적 방식을 바꿀 수 없습니다");
             return;
         }
         if (course.code != oldCode && gm.findCourse(course.code) != nullptr) {
@@ -1664,6 +1699,7 @@ void Server::run() {
 
         Grade grade;
         if (!readGradeBody(body, grade, res)) return;
+        if (!checkGradeType(gm, grade, res)) return;
         if (!gm.findStudent(grade.studentId)) {
             setError(res, 404, "없는 학생입니다: " + grade.studentId);
             return;
@@ -1726,6 +1762,7 @@ void Server::run() {
 
         Grade grade;
         if (!readGradeBody(body, grade, res)) return;
+        if (!checkGradeType(gm, grade, res)) return;
 
         // 3. 학생 및 과목 존재 여부 확인
         if (!gm.findStudent(grade.studentId)) {
@@ -1860,6 +1897,7 @@ void Server::run() {
         if (!parseJsonBody(req, body, res)) return;
         Grade grade;
         if (!readGradeBody(body, grade, res)) return;
+        if (!checkGradeType(gm, grade, res)) return;
         if (account->role == "professor" &&
             !isProfessorOf(*account, gm, grade.courseCode)) {
             setError(res, 403, "권한이 없습니다");
@@ -2010,6 +2048,10 @@ void Server::run() {
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
         if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (gm.findCourse(courseCode)->isPassFail()) {
+            setError(res, 409, "P/F 과목에는 평가 기준을 만들 수 없습니다 (성적은 P·NP 로 입력)");
+            return;
+        }
 
         std::map<std::string, int> weights;
         for (auto it = weightsIt->begin(); it != weightsIt->end(); ++it) {

@@ -30,11 +30,13 @@ public:
     bool saveStudents(const std::vector<Student>& students);
     bool loadStudents(std::vector<Student>& students);
 
+    // courses.csv : code,name,credit,professor,category,area,schedule,language,capacity,remote,gradeType
+    //   예전 10칸(gradeType 없음 → "letter")·4칸 파일도 읽음. gradeType 이 letter·pf 가 아닌 줄은 건너뜀
     bool saveCourses(const std::vector<Course>& courses);
     bool loadCourses(std::vector<Course>& courses);
 
     // grades.csv : studentId,courseCode,semester,score,letter (예전 4칸 파일도 읽음, 그때 letter 는 "")
-    //   letter 가 "" 도 아니고 9개 등급도 아닌 줄은 건너뜀
+    //   letter 가 "" 도 아니고 9개 등급·P·NP 도 아닌 줄은 건너뜀
     bool saveGrades(const std::vector<Grade>& grades);
     bool loadGrades(std::vector<Grade>& grades);
 
