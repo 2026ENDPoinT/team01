@@ -184,7 +184,7 @@ std::string makeSemester(int year, int term) {
 namespace {
 
 bool isSimLetter(const std::string& letter) {
-    static const char* const kLetters[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
+    static const char* const kLetters[] = {"A0", "B+", "B0", "C+", "F"};
     return std::any_of(std::begin(kLetters), std::end(kLetters),
                        [&](const char* l) { return letter == l; });
 }
@@ -209,7 +209,7 @@ RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& stude
     for (const RetakeItem& item : items) {
         if (!isSimLetter(item.letter)) {
             return simFail(RetakeError::BadLetter,
-                           "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)");
+                           "지원하지 않는 재수강 예상 등급입니다 (A0 B+ B0 C+ F)");
         }
         if (gm.findCourse(item.courseCode) == nullptr) {
             return simFail(RetakeError::NoCourse, "없는 과목입니다: " + item.courseCode);
@@ -238,6 +238,11 @@ RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& stude
         RetakeItemResult r;
         r.courseCode = item.courseCode;
         r.previousLetter = Retake::officialLetter(*latest, original);
+        if (r.previousLetter != "C+" && r.previousLetter != "F") {
+            return simFail(RetakeError::NotEligible,
+                           "현재 성적이 C+ 또는 F인 과목만 재수강 시뮬레이션할 수 있습니다: " +
+                               item.courseCode);
+        }
 
         // 현재 학기에 이미 성적이 있으면 대체
         simulated.erase(std::remove_if(simulated.begin(), simulated.end(), [&](const Grade& g) {

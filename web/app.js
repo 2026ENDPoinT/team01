@@ -83,14 +83,14 @@ const round2 = (n) => Math.round(n * 100) / 100;
 // GPA 응답에서 숫자만 꺼냄 ({gpa: 3.5} 또는 3.5 둘 다 처리). 성적이 없으면 서버가 null → fmt 가 '-'
 const gpaOf = (r) => (typeof r === 'number' ? r : r?.gpa);
 // 직접 입력할 수 있는 등급 (서버 letterToScore 가 받는 값)
-const GRADE_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'C0', 'D+', 'D0', 'F'];
+const GRADE_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'F'];
 // 재수강 시뮬레이션에서 선택할 수 있는 예상 등급 (최고 A0)
-const RETAKE_GRADE_LETTERS = ['A0', 'B+', 'B0', 'C+', 'C0', 'D+', 'D0', 'F'];
+const RETAKE_GRADE_LETTERS = ['A0', 'B+', 'B0', 'C+', 'F'];
 // P/F 과목 (course.gradeType 'pf'): 성적은 P(합격)·NP(불합격) 만 (서버 kLetterPass·kLetterNonPass)
 const PF_LETTERS = ['P', 'NP'];
 const isPassFailCourse = (code) => state.courses.find((c) => c.code === code)?.gradeType === 'pf';
 // 점수 → 등급 (서버 scoreToLetter 와 같은 경계, "이상" 기준)
-const scoreToLetter = (s) => [[95, 'A+'], [90, 'A0'], [85, 'B+'], [80, 'B0'], [75, 'C+'], [70, 'C0'], [65, 'D+'], [60, 'D0']]
+const scoreToLetter = (s) => [[90, 'A+'], [80, 'A0'], [70, 'B+'], [60, 'B0'], [50, 'C+']]
     .find(([min]) => s >= min)?.[1] ?? 'F';
 // 등급 배지. 첫 글자(A~F, R)로 색을 정함 (style.css 의 .badge.A 등)
 const letterBadge = (l) => l ? `<span class="badge ${esc(l[0])}">${esc(l)}</span>` : '-';
@@ -136,7 +136,7 @@ const ATTEND_LOCK_MSG = '출석 점수는 출석부에서 자동 계산됩니다
 // 상대평가 규칙 안내 (서버 RelativeGrading 상수와 같은 값)
 const RELATIVE_RULES = '교수자 설정 등급별 비율 (A+·A0·B+·B0·C+·F)';
 // 등급 → 평점 (서버 letterToPoint 와 같음, F·R·모르는 값은 0)
-const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.0, 'D+': 1.5, D0: 1.0 };
+const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5 };
 const GRADE_RATIO_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'F'];
 const DEFAULT_GRADE_RATIOS = { 'A+': 30, A0: 0, 'B+': 40, B0: 0, 'C+': 30, F: 0 };
 
@@ -1005,8 +1005,7 @@ function relativeSummary(grades) {
     }
     const counts = GRADE_RATIO_LETTERS.map((letter) =>
         `${letter} ${grades.filter((g) => g.letter === letter).length}명`);
-    const c0Count = grades.filter((g) => g.letter === 'C0').length;
-    if (c0Count > 0) counts.push(`C0 ${c0Count}명 (절대평가 상한 적용)`);
+    // 6단계 체계에서는 C0·D+·D0 구간을 사용하지 않는다.
     return `상대평가 결과 · ${counts.join(' · ')} <span class="hint">(동점자는 같은 등급으로 처리)</span>`;
 }
 
@@ -2861,8 +2860,8 @@ const gradeFields = (editing) => [
     { name: 'courseCode', label: '과목', options: courseOptions(), readonly: editing },
     { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1 (1·2 정규, 3 여름, 4 겨울)' },
     { name: 'mode', label: '입력 방식', options: [{ value: 'score', label: '점수' }, { value: 'letter', label: '등급' }] },
-    { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any', min: 0, max: 100 },
-    { name: 'letter', label: '등급 (대표 점수로 저장: A+ 95 · A0 90 · B+ 85 · … · D0 60 · F 0)', options: asOptions(GRADE_LETTERS) },
+    { name: 'score', label: '점수 (0~100, 등급은 자동: 90↑ A+ · 80↑ A0 · 70↑ B+ · 60↑ B0 · 50↑ C+ · 그 아래 F)', type: 'number', step: 'any', min: 0, max: 100 },
+    { name: 'letter', label: '등급 (대표 점수로 저장: A+ 90 · A0 80 · B+ 70 · B0 60 · C+ 50 · F 0)', options: asOptions(GRADE_LETTERS) },
     { name: 'pf', label: '합격 여부 (P/F 과목, 평점에 들어가지 않음)', options: [
         { value: 'P', label: 'P (합격)' }, { value: 'NP', label: 'NP (불합격)' },
     ] },
@@ -2898,7 +2897,7 @@ const validateGrade = (d) => {
     if (isLockedSemester(d.semester.trim())) return pastSemesterMessage();
     if (d.pf !== undefined) return PF_LETTERS.includes(d.pf) ? '' : 'P/F 과목은 P(합격) 또는 NP(불합격)로 입력하세요';
     if (d.mode === 'letter') {
-        return GRADE_LETTERS.includes(d.letter) ? '' : '지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)';
+        return GRADE_LETTERS.includes(d.letter) ? '' : '지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ F)';
     }
     const score = Number(d.score);
     if ((d.score ?? '').trim() === '' || !Number.isFinite(score) || score < 0 || score > 100) return SCORE_RULES;
@@ -2910,7 +2909,7 @@ const gradeBody = (d) => {
     if (d.pf !== undefined) return { ...key, letter: d.pf };
     return d.mode === 'letter' ? { ...key, letter: d.letter } : { ...key, score: Number(d.score) };
 };
-// 저장 결과 문구 (서버가 돌려준 성적 g 기준): 점수 방식 "NN점 → 등급", 등급 방식 "등급 A+ (95점)"
+// 저장 결과 문구 (서버가 돌려준 성적 g 기준): 점수 방식 "NN점 → 등급", 등급 방식 "등급 A+ (90점)"
 //   재수강 A0 제한 등으로 반영 등급이 입력 등급과 다르면 "→ 반영 등급" 을 붙임
 //   P/F 과목은 "P (합격)" / "NP (불합격)"
 const gradeResultText = (d, g) => {

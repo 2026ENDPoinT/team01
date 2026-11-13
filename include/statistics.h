@@ -70,7 +70,7 @@ std::vector<WarningEntry> academicWarnings(const GradeManager& gm, const std::st
 // ----- 재수강 시뮬레이션 (저장하지 않음: gm 은 const) -----
 struct RetakeItem {
     std::string courseCode;
-    std::string letter;  // 받고 싶은 등급 (A+ A0 B+ B0 C+ C0 D+ D0 F)
+    std::string letter;  // 받고 싶은 등급 (A0 B+ B0 C+ F, 재수강 시뮬레이션은 A+ 불가)
 };
 struct RetakeItemResult {
     std::string courseCode;

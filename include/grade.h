@@ -21,16 +21,16 @@ struct Grade {
 };
 
 // 점수 → 등급 변환
-//   95~ A+, 90~ A0, 85~ B+, 80~ B0, 75~ C+, 70~ C0, 65~ D+, 60~ D0, 그 외 F
+//   90~ A+, 80~ A0, 70~ B+, 60~ B0, 50~ C+, 50 미만 F
 std::string scoreToLetter(double score);
 
 // 등급 → 평점 변환 (4.5 만점)
-//   A+ 4.5, A0 4.0, B+ 3.5, B0 3.0, C+ 2.5, C0 2.0, D+ 1.5, D0 1.0, F 0.0
+//   A+ 4.5, A0 4.0, B+ 3.5, B0 3.0, C+ 2.5, F 0.0
 //   모르는 문자열이면 0.0
 double letterToPoint(const std::string& letter);
 
 // 등급 → 직접 입력용 대표 점수
-//   A+ 95, A0 90, B+ 85, B0 80, C+ 75, C0 70, D+ 65, D0 60, F 0
+//   A+ 90, A0 80, B+ 70, B0 60, C+ 50, F 0
 //   대소문자를 구분하고 공백은 허용하지 않음. 모르는 문자열이면 -1
 //   scoreToLetter(letterToScore(x)) == x 가 성립
 double letterToScore(const std::string& letter);

@@ -46,7 +46,7 @@ constexpr const char* kSaveFailed = "저장에 실패했습니다";
 constexpr const char* kStudentRules =
     "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)";
 constexpr const char* kScoreRules = "점수는 0~100 사이 숫자여야 합니다";
-constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F, P/F 과목은 P NP)";
+constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ F, P/F 과목은 P NP)";
 constexpr const char* kPassFailOnly = "P/F 과목은 P(합격) 또는 NP(불합격)로 입력하세요";
 constexpr const char* kPassFailLetterOnly = "P·NP 는 P/F 과목에만 입력할 수 있습니다";
 constexpr const char* kAssessmentRules =

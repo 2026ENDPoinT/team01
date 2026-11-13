@@ -10,14 +10,12 @@
 namespace RelativeGrading {
 namespace {
 
-// 실제 평점 계산 순서. D+/D0는 상대평가 비율 구간에는 없지만,
-// 절대평가 등급보다 높은 등급을 주지 않는 기준 및 평균 조정에 사용한다.
-const char* const kGradeLadder[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
+// 실제 평점 계산 순서: 6개 등급
+const char* const kGradeLadder[] = {"A+", "A0", "B+", "B0", "C+", "F"};
 constexpr size_t kGradeCount = sizeof(kGradeLadder) / sizeof(kGradeLadder[0]);
 
-// 비율 설정의 여섯 구간. C0·D+·D0는 별도 비율 구간이 아니므로
-// 절대평가 등급 상한 또는 F 구간에 의해 결정된다.
-const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 8};
+// 비율 설정 순서와 실제 등급 순서가 동일하다.
+const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 5};
 
 size_t gradeIndex(const std::string& letter) {
     for (size_t i = 0; i < kGradeCount; ++i) {
