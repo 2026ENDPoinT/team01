@@ -29,7 +29,7 @@ const GRADE_PAGE_SIZE = 10;
 
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
-    myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
+    myEnrollments: [], timetableSem: '', timetableCandidates: [], timetableMessage: '', courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
     assessSem: null, assess: null, attendSem: null, attend: null, currentSem: '', baseLoadedAt: 0,
 };
 
@@ -272,6 +272,7 @@ async function confirmDelete(msg, fn) {
 const renderers = {
     courses: renderCourses,
     enroll: renderEnroll,
+    timetable: renderTimetable,
     students: renderStudents,
     grades: renderGrades,
     myreport: renderMyReport,
@@ -285,6 +286,7 @@ const currentTab = () => document.querySelector('main .tab.active').id.slice('ta
 const loadingSlots = {
     courses: ['course-list', '<li class="empty">불러오는 중…</li>'],
     enroll: ['enroll-content', '<p class="hint">불러오는 중…</p>'],
+    timetable: ['timetable-content', '<p class="hint">불러오는 중…</p>'],
     students: ['student-body', emptyRow(7, '불러오는 중…')],
     grades: ['grade-body', emptyRow(7, '불러오는 중…')],
     myreport: ['myreport-body', '<p class="hint">불러오는 중…</p>'],
@@ -426,6 +428,9 @@ function resetView() {
     state.accounts = [];
     state.enrollCtx = null;
     state.myEnrollments = [];
+    state.timetableSem = '';
+    state.timetableCandidates = [];
+    state.timetableMessage = '';
     state.currentSem = '';
     state.courseCode = null;
     state.courseSem = null;
@@ -436,7 +441,7 @@ function resetView() {
     state.attendSem = null;
     state.attend = null;
     closeAttendPicker();
-    ['course-list', 'student-body', 'grade-body', 'enroll-content', 'myreport-body', 'account-body',
+    ['course-list', 'student-body', 'grade-body', 'enroll-content', 'timetable-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-hero', 'course-filter', 'course-posts', 'course-sem',
@@ -1411,6 +1416,209 @@ function scheduleConflict(a, b) {
 
 // 겹침 구간 표시 글자: 월(3~4교시) / 월(3교시)
 const formatSpan = (s) => `${s.day}(${s.start === s.end ? s.start : `${s.start}~${s.end}`}교시)`;
+
+
+// ───────── 학생 시간표 ─────────
+
+// 학번·학기별 후보 과목 저장 키. 후보는 서버 데이터에 쓰지 않는다.
+function timetableStorageKey(semester) {
+    return `team01:timetable:${state.me?.studentId ?? ''}:${semester}`;
+}
+function loadTimetableCandidates(semester) {
+    if (!state.me?.studentId || !semester) return [];
+    try {
+        const raw = localStorage.getItem(timetableStorageKey(semester));
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? [...new Set(parsed.filter((code) =>
+            typeof code === 'string' && state.courses.some((c) => c.code === code))) ] : [];
+    } catch {
+        state.timetableMessage = '브라우저 저장 공간을 읽을 수 없습니다';
+        return [];
+    }
+}
+function saveTimetableCandidates() {
+    try {
+        localStorage.setItem(timetableStorageKey(state.timetableSem), JSON.stringify(state.timetableCandidates));
+        return true;
+    } catch {
+        state.timetableMessage = '후보 과목을 브라우저에 저장하지 못했습니다';
+        return false;
+    }
+}
+const timetableCourse = (code) => state.courses.find((c) => c.code === code);
+const timetableApplied = (semester) => state.myEnrollments
+    .filter((e) => e.semester === semester)
+    .map((e) => timetableCourse(e.courseCode)).filter(Boolean);
+
+function timetableConflictReason(course, others) {
+    const hits = others.map((other) => ({
+        course: other,
+        spans: scheduleConflict(course.schedule, other.schedule),
+    })).filter((x) => x.spans.length);
+    if (!hits.length) return '';
+    return hits.map((x) => `${x.course.name}: ${x.spans.map(formatSpan).join(', ')}`).join(' / ');
+}
+function timetableColorIndex(code) {
+    let hash = 0;
+    for (const ch of String(code ?? '')) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return hash % 4;
+}
+function timetableBlock(course, slot, dayIndex, rowCount, candidate = false) {
+    const rowStart = slot.start + 1;
+    const span = slot.end - slot.start + 1;
+    const title = `${course.name} · ${course.professor || '교수 미정'} · ${slot.day} ${slot.start}~${slot.end}교시`;
+    return `<div class="tt-block${candidate ? ' candidate' : ''}" data-color="${timetableColorIndex(course.code)}"
+        style="grid-column:${dayIndex + 2};grid-row:${rowStart} / span ${span}"
+        title="${esc(title)}">
+        <b>${esc(course.name)}</b><span>${esc(course.professor || '교수 미정')}</span>
+    </div>`;
+}
+
+function renderTimetableGrid(semester, applied, candidates) {
+    const allForTerm = [...applied, ...candidates];
+    const dayOrder = ['월', '화', '수', '목', '금', '토', '일'];
+    const allSlots = state.courses.flatMap((c) => parseSchedule(c.schedule));
+    const weekend = allSlots.some((s) => s.day === '토' || s.day === '일');
+    const days = weekend ? dayOrder : dayOrder.slice(0, 5);
+    const maxPeriod = Math.max(9, ...allSlots.map((s) => s.end));
+    // 블록이 격자 칸을 명시적으로 차지하므로 나머지 칸도 자동 배치에 맡기지 않고 위치를 지정한다
+    const cells = ['<div class="tt-corner" style="grid-column:1;grid-row:1"></div>',
+        ...days.map((d, i) => `<div class="tt-day" style="grid-column:${i + 2};grid-row:1">${d}</div>`)];
+    for (let period = 1; period <= maxPeriod; period++) {
+        cells.push(`<div class="tt-period" style="grid-column:1;grid-row:${period + 1}">${period}교시</div>`);
+        days.forEach((day, i) => cells.push(`<div class="tt-cell" data-day="${day}" data-period="${period}" style="grid-column:${i + 2};grid-row:${period + 1}"></div>`));
+    }
+    const blocks = [];
+    allForTerm.forEach((course) => {
+        const isCandidate = candidates.some((c) => c.code === course.code);
+        for (const slot of parseSchedule(course.schedule)) {
+            const dayIndex = days.indexOf(slot.day);
+            if (dayIndex >= 0) blocks.push(timetableBlock(course, slot, dayIndex, maxPeriod, isCandidate));
+        }
+    });
+    return `<div class="tt-grid-scroll"><div class="tt-grid" style="--tt-days:${days.length};--tt-periods:${maxPeriod};grid-template-columns:56px repeat(${days.length},minmax(0,1fr));grid-template-rows:36px repeat(${maxPeriod},48px)">
+        ${cells.join('')}${blocks.join('')}
+    </div></div>`;
+}
+
+async function renderTimetable() {
+    if (state.me?.role !== 'student') return;
+    const content = $('timetable-content');
+    const semesters = visibleSemesters([
+        state.currentSem,
+        ...state.myEnrollments.map((e) => e.semester),
+    ]);
+    const preferred = state.timetableSem && semesters.includes(state.timetableSem)
+        ? state.timetableSem : (semesters.includes(state.currentSem) ? state.currentSem : semesters[0] || '');
+    state.timetableSem = preferred;
+
+    if (!semesters.length) {
+        content.innerHTML = '<p class="hint">표시할 학기가 없습니다</p>';
+        return;
+    }
+    const appliedEnrollments = state.myEnrollments.filter((e) => e.semester === preferred);
+    const appliedCodes = new Set(appliedEnrollments.map((e) => e.courseCode));
+    state.timetableCandidates = loadTimetableCandidates(preferred)
+        .filter((code) => !appliedCodes.has(code));
+    const applied = appliedEnrollments.map((e) => timetableCourse(e.courseCode)).filter(Boolean);
+    const candidates = state.timetableCandidates.map(timetableCourse).filter(Boolean);
+    const credits = applied.reduce((sum, c) => sum + (Number(c.credit) || 0), 0);
+    const unscheduledApplied = applied.filter((c) => !parseSchedule(c.schedule).length);
+    const unscheduledCandidates = candidates.filter((c) => !parseSchedule(c.schedule).length);
+
+    content.innerHTML = `
+        <div class="toolbar tt-toolbar">
+            <label for="timetable-semester">학기</label>
+            <select id="timetable-semester">${semesters.map((s) => `<option value="${esc(s)}" ${s === preferred ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+            <span class="spacer"></span>
+            <strong>신청 학점 ${credits}학점</strong>
+        </div>
+        <div class="tt-legend"><span class="tt-legend-applied">신청 과목</span><span class="tt-legend-candidate">후보 과목</span></div>
+        ${renderTimetableGrid(preferred, applied, candidates)}
+        <section class="tt-unscheduled">
+            <h3 class="sub-title">시간 미정</h3>
+            ${unscheduledApplied.length || unscheduledCandidates.length ? `
+                <div class="tt-unscheduled-list">
+                    ${unscheduledApplied.map((c) => `<span class="tt-unscheduled-item">${esc(c.name)} <small>신청</small></span>`).join('')}
+                    ${unscheduledCandidates.map((c) => `<span class="tt-unscheduled-item candidate">${esc(c.name)} <small>후보</small></span>`).join('')}
+                </div>` : '<p class="hint">시간이 정해지지 않은 과목이 없습니다</p>'}
+        </section>
+        <section class="tt-candidate-section">
+            <h3 class="sub-title">후보 과목 추가</h3>
+            <div class="toolbar">
+                <select id="timetable-course-pick">
+                    <option value="">과목을 선택하세요</option>
+                    ${state.courses.filter((c) => !appliedCodes.has(c.code) && !state.timetableCandidates.includes(c.code))
+                        .map((c) => `<option value="${esc(c.code)}">${esc(c.name)} (${esc(c.code)}) · ${esc(c.schedule || '시간 미정')}</option>`).join('')}
+                </select>
+                <button class="primary" id="timetable-add-candidate">후보 추가</button>
+            </div>
+            <p class="hint" id="timetable-message">${esc(state.timetableMessage)}</p>
+            <div class="tt-candidate-list">
+                ${candidates.length ? candidates.map((c) => `
+                    <div class="tt-candidate-row">
+                        <div><b>${esc(c.name)}</b><span>${esc(c.code)} · ${esc(c.professor || '교수 미정')} · ${esc(c.credit)}학점 · ${esc(c.schedule || '시간 미정')}</span></div>
+                        <div class="tt-candidate-actions">
+                            <button class="primary" data-tt-act="apply" data-code="${esc(c.code)}">신청</button>
+                            <button class="link danger" data-tt-act="remove" data-code="${esc(c.code)}">제거</button>
+                        </div>
+                    </div>`).join('') : '<p class="hint">추가한 후보 과목이 없습니다</p>'}
+            </div>
+        </section>`;
+
+    content.querySelector('#timetable-semester').onchange = (event) => {
+        state.timetableSem = event.target.value;
+        state.timetableMessage = '';
+        state.timetableCandidates = loadTimetableCandidates(state.timetableSem);
+        renderTimetable().catch((e) => toast(e.message, true));
+    };
+    content.querySelector('#timetable-add-candidate').onclick = () => {
+        const code = content.querySelector('#timetable-course-pick').value;
+        const course = timetableCourse(code);
+        if (!course) return;
+        if (appliedCodes.has(code)) {
+            state.timetableMessage = '이미 신청한 과목입니다';
+        } else if (state.timetableCandidates.includes(code)) {
+            state.timetableMessage = '이미 후보에 추가한 과목입니다';
+        } else {
+            const conflict = timetableConflictReason(course, [...applied, ...candidates]);
+            if (conflict) state.timetableMessage = `시간이 겹쳐 후보에 추가할 수 없습니다: ${conflict}`;
+            else {
+                state.timetableCandidates.push(code);
+                state.timetableMessage = `${course.name} 과목을 후보에 추가했습니다`;
+                saveTimetableCandidates();
+            }
+        }
+        renderTimetable().catch((e) => toast(e.message, true));
+    };
+    content.querySelector('.tt-candidate-list').onclick = async (event) => {
+        const button = event.target.closest('button[data-tt-act]');
+        if (!button) return;
+        const code = button.dataset.code;
+        if (button.dataset.ttAct === 'remove') {
+            state.timetableCandidates = state.timetableCandidates.filter((x) => x !== code);
+            state.timetableMessage = '후보 과목을 제거했습니다';
+            saveTimetableCandidates();
+            renderTimetable().catch((e) => toast(e.message, true));
+            return;
+        }
+        if (button.dataset.ttAct === 'apply') {
+            button.disabled = true;
+            try {
+                await api('POST', '/api/enrollments', {
+                    studentId: state.me.studentId, courseCode: code, semester: state.timetableSem,
+                });
+                state.timetableCandidates = state.timetableCandidates.filter((x) => x !== code);
+                saveTimetableCandidates();
+                toast('수강신청했습니다');
+                await refreshAll();
+            } catch (error) {
+                button.disabled = false;
+                toast(error.message, true);
+            }
+        }
+    };
+}
 
 // ───────── 수강신청 ─────────
 

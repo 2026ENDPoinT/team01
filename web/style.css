@@ -520,3 +520,68 @@ input.sim-field { width: 100px; text-align: right; }
 input.sim-field.invalid { border-color: var(--danger); outline-color: rgba(239, 68, 68, .3); }
 .sim-result { margin: 0; }
 .sim-bad { color: var(--danger); }
+
+
+/* 학생 시간표 */
+main:has(#tab-timetable.active) { max-width: 1280px; }
+.tt-toolbar { margin-bottom: 10px; }
+.tt-toolbar strong { color: var(--accent); }
+.tt-legend { display: flex; gap: 14px; margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.tt-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tt-legend span::before { content: ""; width: 12px; height: 12px; border-radius: 3px; background: var(--accent-weak); border: 1px solid var(--accent); }
+.tt-legend .tt-legend-candidate::before { background: transparent; border: 1px dashed var(--accent); }
+.tt-grid-scroll { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--card); }
+.tt-grid {
+    display: grid;
+    min-width: 620px;
+    position: relative;
+    isolation: isolate;
+}
+.tt-corner, .tt-day, .tt-period, .tt-cell {
+    min-width: 0;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+}
+.tt-corner, .tt-day { background: var(--hover); }
+.tt-day { display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); }
+.tt-period { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; background: var(--bg); }
+.tt-cell { background: transparent; }
+.tt-block {
+    z-index: 2;
+    min-width: 0;
+    margin: 2px;
+    padding: 4px 5px;
+    overflow: hidden;
+    border: 1px solid var(--tt-course-color, var(--accent));
+    border-radius: 5px;
+    background: var(--tt-course-bg, var(--accent-weak));
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+.tt-block b, .tt-block span { display: block; }
+.tt-block span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.tt-block.candidate { border-style: dashed; background: var(--card); }
+.tt-block[data-color="0"] { --tt-course-color: var(--accent); --tt-course-bg: var(--accent-weak); }
+.tt-block[data-color="1"] { --tt-course-color: var(--danger); --tt-course-bg: var(--card); }
+.tt-block[data-color="2"] { --tt-course-color: var(--muted); --tt-course-bg: var(--hover); }
+.tt-block[data-color="3"] { --tt-course-color: var(--text); --tt-course-bg: var(--line); }
+.tt-unscheduled, .tt-candidate-section { margin-top: 20px; }
+.tt-unscheduled-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.tt-unscheduled-item { padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.tt-unscheduled-item small { margin-left: 5px; color: var(--muted); }
+.tt-unscheduled-item.candidate { border-style: dashed; }
+#timetable-course-pick { min-width: min(520px, 100%); max-width: 100%; }
+#timetable-message { min-height: 18px; margin: 4px 0 10px; color: var(--danger); }
+.tt-candidate-list { display: grid; gap: 7px; }
+.tt-candidate-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px dashed var(--accent); border-radius: 8px; background: var(--card); }
+.tt-candidate-row > div:first-child { min-width: 0; }
+.tt-candidate-row span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.tt-candidate-actions { display: flex; flex-shrink: 0; gap: 5px; }
+@media (max-width: 700px) {
+    main:has(#tab-timetable.active) { padding-left: 10px; padding-right: 10px; }
+    .tt-grid-scroll { overflow-x: auto; }
+    .tt-grid { min-width: 700px; }
+    .tt-candidate-row { align-items: flex-start; flex-direction: column; }
+}
