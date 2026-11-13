@@ -1,5 +1,5 @@
 // 담당: A (연준)
-// 평가 항목: finalScore 계산(완성·미완성), Assessment·AssessmentScore 값 검사
+// 평가 항목: 6분류, finalScore 계산(완성·미완성·0% 항목), Assessment·AssessmentScore·GradingMode 값 검사
 #include <cmath>
 #include <limits>
 #include <string>
@@ -29,104 +29,135 @@ AssessmentScore makeScore(const std::string& name, double score) {
     return s;
 }
 
-// 중간 30, 기말 40, 과제 20, 출석 10 (합계 100)
-std::vector<Assessment> fourItems() {
-    return {makeItem("중간", 30), makeItem("기말", 40), makeItem("과제", 20), makeItem("출석", 10)};
+GradingMode makeMode(const std::string& mode) {
+    GradingMode m;
+    m.courseCode = "109001";
+    m.semester = "2026-2";
+    m.mode = mode;
+    return m;
+}
+
+// 출석 10, 중간고사 30, 기말고사 40, 과제 20, 팀프로젝트 0, 기타 0 (합계 100)
+std::vector<Assessment> sixItems() {
+    return {makeItem("출석", 10),  makeItem("중간고사", 30),  makeItem("기말고사", 40),
+            makeItem("과제", 20),  makeItem("팀프로젝트", 0), makeItem("기타", 0)};
+}
+
+// 출석 100, 중간 90, 기말 80, 과제 100 (팀·기타 점수는 없음)
+std::vector<AssessmentScore> fourScores() {
+    return {makeScore("출석", 100), makeScore("중간고사", 90), makeScore("기말고사", 80), makeScore("과제", 100)};
 }
 
 }  // namespace
 
+TEST_CASE(assessmentCategories_six_in_order) {
+    const std::vector<std::string>& c = assessmentCategories();
+    CHECK_EQ(c.size(), static_cast<size_t>(6));
+    CHECK(c.size() == 6 && c[0] == "출석" && c[1] == "중간고사" && c[2] == "기말고사" && c[3] == "과제" &&
+          c[4] == "팀프로젝트" && c[5] == "기타");
+    CHECK_EQ(std::string(kAttendanceCategory), std::string("출석"));
+}
+
 TEST_CASE(finalScore_weighted_sum) {
-    // 중간 90×0.3 + 기말 80×0.4 + 과제 100×0.2 + 출석 100×0.1 = 27 + 32 + 20 + 10 = 89
-    const std::vector<AssessmentScore> scores = {makeScore("중간", 90), makeScore("기말", 80),
-                                                 makeScore("과제", 100), makeScore("출석", 100)};
-    CHECK_NEAR(finalScore(fourItems(), scores), 89.0, 1e-9);
+    // 출석 100×0.1 + 중간 90×0.3 + 기말 80×0.4 + 과제 100×0.2 = 10 + 27 + 32 + 20 = 89 (팀·기타 0% 는 점수 없어도 됨)
+    CHECK_NEAR(finalScore(sixItems(), fourScores()), 89.0, 1e-9);
 
     // 점수 순서는 상관없고 이름으로 맞춤
-    const std::vector<AssessmentScore> reversed = {makeScore("출석", 100), makeScore("과제", 100),
-                                                   makeScore("기말", 80), makeScore("중간", 90)};
-    CHECK_NEAR(finalScore(fourItems(), reversed), 89.0, 1e-9);
+    const std::vector<AssessmentScore> reversed = {makeScore("과제", 100), makeScore("기말고사", 80),
+                                                   makeScore("중간고사", 90), makeScore("출석", 100)};
+    CHECK_NEAR(finalScore(sixItems(), reversed), 89.0, 1e-9);
 
-    // 소수 둘째 자리 반올림: 33.333×0.3 + 0 = 9.9999 → 10.00
-    const std::vector<AssessmentScore> fraction = {makeScore("중간", 33.333), makeScore("기말", 0),
-                                                   makeScore("과제", 0), makeScore("출석", 0)};
-    CHECK_NEAR(finalScore(fourItems(), fraction), 10.0, 1e-9);
+    // 0% 항목에 점수가 있어도 무시
+    std::vector<AssessmentScore> withZeroWeight = fourScores();
+    withZeroWeight.push_back(makeScore("팀프로젝트", 0));
+    CHECK_NEAR(finalScore(sixItems(), withZeroWeight), 89.0, 1e-9);
 
-    // 경계: 모두 0 → 0, 모두 100 → 100
-    CHECK_NEAR(finalScore(fourItems(), {makeScore("중간", 0), makeScore("기말", 0), makeScore("과제", 0),
-                                        makeScore("출석", 0)}),
-               0.0, 1e-9);
-    CHECK_NEAR(finalScore({makeItem("기말", 100)}, {makeScore("기말", 100)}), 100.0, 1e-9);
+    // 소수 둘째 자리 반올림: 33.333×0.3 = 9.9999 → 10.00
+    const std::vector<AssessmentScore> fraction = {makeScore("출석", 0), makeScore("중간고사", 33.333),
+                                                   makeScore("기말고사", 0), makeScore("과제", 0)};
+    CHECK_NEAR(finalScore(sixItems(), fraction), 10.0, 1e-9);
+
+    // 경계: 한 분류 100% → 그 점수 그대로
+    CHECK_NEAR(finalScore({makeItem("기말고사", 100)}, {makeScore("기말고사", 100)}), 100.0, 1e-9);
 }
 
 TEST_CASE(finalScore_incomplete_is_minus_one) {
-    const std::vector<AssessmentScore> full = {makeScore("중간", 80), makeScore("기말", 90),
-                                               makeScore("과제", 100), makeScore("출석", 100)};
+    // 비율이 0 보다 큰 기말고사 점수가 없음
+    const std::vector<AssessmentScore> missing = {makeScore("출석", 100), makeScore("중간고사", 90),
+                                                  makeScore("과제", 100)};
+    CHECK_EQ(finalScore(sixItems(), missing), -1.0);
 
-    // 비율 합계 99
-    std::vector<Assessment> sum99 = fourItems();
-    sum99[3].weight = 9;
-    CHECK_EQ(finalScore(sum99, full), -1.0);
-
-    // 비율 합계 101 도 미완성
-    std::vector<Assessment> sum101 = fourItems();
-    sum101[3].weight = 11;
-    CHECK_EQ(finalScore(sum101, full), -1.0);
-
-    // 항목 하나(기말)의 점수가 없음
-    const std::vector<AssessmentScore> missing = {makeScore("중간", 80), makeScore("과제", 100),
-                                                  makeScore("출석", 100)};
-    CHECK_EQ(finalScore(fourItems(), missing), -1.0);
+    // 비율 합계 99, 101
+    std::vector<Assessment> sum99 = sixItems();
+    sum99[0].weight = 9;
+    CHECK_EQ(finalScore(sum99, fourScores()), -1.0);
+    std::vector<Assessment> sum101 = sixItems();
+    sum101[0].weight = 11;
+    CHECK_EQ(finalScore(sum101, fourScores()), -1.0);
 
     // 항목이 없음 (점수가 있어도)
-    CHECK_EQ(finalScore({}, full), -1.0);
+    CHECK_EQ(finalScore({}, fourScores()), -1.0);
     CHECK_EQ(finalScore({}, {}), -1.0);
 }
 
 TEST_CASE(assessment_isValid_rules) {
-    CHECK(makeItem("중간", 30).isValid());
-    CHECK(makeItem("출석", 1).isValid());
-    CHECK(makeItem("기말", 100).isValid());
-    CHECK(makeItem("과제, 발표", 20).isValid());  // 쉼표는 허용 (CSV 에서 따옴표로 감쌈)
+    for (const std::string& name : assessmentCategories()) {
+        CHECK(makeItem(name, 10).isValid());
+    }
+    CHECK(makeItem("기말고사", 0).isValid());    // 0% 허용
+    CHECK(makeItem("기말고사", 100).isValid());
 
-    CHECK(!makeItem("중간", 0).isValid());
-    CHECK(!makeItem("중간", 101).isValid());
+    CHECK(!makeItem("중간", 30).isValid());      // 6분류가 아닌 이름
+    CHECK(!makeItem("퀴즈", 30).isValid());
     CHECK(!makeItem("", 30).isValid());
-    CHECK(!makeItem("   ", 30).isValid());   // 공백만
-    CHECK(!makeItem(" \t", 30).isValid());
-    CHECK(!makeItem("중간\n기말", 30).isValid());  // 줄바꿈은 CSV 한 줄에 못 넣음
+    CHECK(!makeItem(" 과제", 30).isValid());     // 글자 그대로만
+    CHECK(!makeItem("중간고사", 101).isValid());
+    CHECK(!makeItem("중간고사", -1).isValid());
 
-    CHECK(makeItem(std::string(60, 'a'), 30).isValid());   // 60바이트까지
-    CHECK(!makeItem(std::string(61, 'a'), 30).isValid());
-
-    Assessment badCode = makeItem("중간", 30);
+    Assessment badCode = makeItem("중간고사", 30);
     badCode.courseCode = "10900";
     CHECK(!badCode.isValid());
-    Assessment badSemester = makeItem("중간", 30);
+    Assessment badSemester = makeItem("중간고사", 30);
     badSemester.semester = "2026-5";
     CHECK(!badSemester.isValid());
 }
 
 TEST_CASE(assessmentScore_isValid_rules) {
-    CHECK(makeScore("중간", 0).isValid());
-    CHECK(makeScore("중간", 100).isValid());
-    CHECK(makeScore("중간", 87.5).isValid());
+    CHECK(makeScore("중간고사", 0).isValid());
+    CHECK(makeScore("중간고사", 100).isValid());
+    CHECK(makeScore("출석", 87.5).isValid());
 
-    CHECK(!makeScore("중간", -1).isValid());
-    CHECK(!makeScore("중간", 100.5).isValid());
-    CHECK(!makeScore("중간", std::numeric_limits<double>::quiet_NaN()).isValid());
+    CHECK(!makeScore("중간", 50).isValid());      // 6분류가 아닌 이름
     CHECK(!makeScore("", 50).isValid());
+    CHECK(!makeScore("중간고사", -1).isValid());
+    CHECK(!makeScore("중간고사", 100.5).isValid());
+    CHECK(!makeScore("중간고사", std::numeric_limits<double>::quiet_NaN()).isValid());
 
-    AssessmentScore badId = makeScore("중간", 50);
+    AssessmentScore badId = makeScore("중간고사", 50);
     badId.studentId = "2610100a";
     CHECK(!badId.isValid());
-    AssessmentScore shortId = makeScore("중간", 50);
+    AssessmentScore shortId = makeScore("중간고사", 50);
     shortId.studentId = "2610100";
     CHECK(!shortId.isValid());
-    AssessmentScore badCode = makeScore("중간", 50);
+    AssessmentScore badCode = makeScore("중간고사", 50);
     badCode.courseCode = "abcdef";
     CHECK(!badCode.isValid());
-    AssessmentScore badSemester = makeScore("중간", 50);
+    AssessmentScore badSemester = makeScore("중간고사", 50);
     badSemester.semester = "2026";
+    CHECK(!badSemester.isValid());
+}
+
+TEST_CASE(gradingMode_isValid_rules) {
+    CHECK(makeMode(kGradingAbsolute).isValid());
+    CHECK(makeMode(kGradingRelative).isValid());
+    CHECK(!makeMode("rel").isValid());
+    CHECK(!makeMode("").isValid());
+    CHECK(!makeMode("Absolute").isValid());
+
+    GradingMode badCode = makeMode(kGradingAbsolute);
+    badCode.courseCode = "1090";
+    CHECK(!badCode.isValid());
+    GradingMode badSemester = makeMode(kGradingAbsolute);
+    badSemester.semester = "2026-0";
     CHECK(!badSemester.isValid());
 }

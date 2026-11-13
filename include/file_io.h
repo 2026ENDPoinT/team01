@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "assessment.h"
+#include "attendance.h"
 #include "course.h"
 #include "course_post.h"
 #include "enrollment.h"
@@ -32,6 +33,8 @@ public:
     bool saveCourses(const std::vector<Course>& courses);
     bool loadCourses(std::vector<Course>& courses);
 
+    // grades.csv : studentId,courseCode,semester,score,letter (예전 4칸 파일도 읽음, 그때 letter 는 "")
+    //   letter 가 "" 도 아니고 9개 등급도 아닌 줄은 건너뜀
     bool saveGrades(const std::vector<Grade>& grades);
     bool loadGrades(std::vector<Grade>& grades);
 
@@ -61,6 +64,16 @@ public:
     //   형식이 틀린 점수(AssessmentScore::isValid)·같은 (학번, 과목, 학기, 이름) 중복 줄은 건너뜀
     bool saveAssessmentScores(const std::vector<AssessmentScore>& scores);
     bool loadAssessmentScores(std::vector<AssessmentScore>& scores);
+
+    // attendance.csv : studentId,courseCode,semester,week,status
+    //   형식이 틀린 기록(Attendance::isValid)·같은 (학번, 과목, 학기, 주차) 중복 줄은 건너뜀
+    bool saveAttendance(const std::vector<Attendance>& records);
+    bool loadAttendance(std::vector<Attendance>& records);
+
+    // grading_modes.csv : courseCode,semester,mode
+    //   형식이 틀린 줄(GradingMode::isValid)·같은 (과목, 학기) 중복 줄은 건너뜀
+    bool saveGradingModes(const std::vector<GradingMode>& modes);
+    bool loadGradingModes(std::vector<GradingMode>& modes);
 
 private:
     std::string dataDir;

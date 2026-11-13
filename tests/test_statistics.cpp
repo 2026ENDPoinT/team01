@@ -274,3 +274,114 @@ TEST_CASE(gpaSummary_matches_calcGPA) {
     CHECK_EQ(summary.credits, creditSum);
     CHECK_EQ(summary.credits, 8);
 }
+
+// ----- 전공 GPA -----
+
+namespace {
+
+bool addCourseOf(GradeManager& gm, const std::string& code, const std::string& name, int credit,
+                 const std::string& category) {
+    Course course = makeCourse(code, name, credit);
+    course.category = category;
+    return gm.addCourse(course);
+}
+
+}  // namespace
+
+// 김민준 23101001: 전공 9학점 = (3×4.5 + 3×4.5 + 3×3.5) / 9 = 4.17, 전체 3.96·14학점과 다름
+TEST_CASE(gpaSummary_major_gpa_kim_minjun) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("23101001", "김민준")));
+    CHECK(addCourseOf(gm, "100001", "프로그래밍기초", 3, "전공필수"));
+    CHECK(addCourseOf(gm, "100002", "자료구조", 3, "전공필수"));
+    CHECK(addCourseOf(gm, "100003", "알고리즘", 3, "전공선택"));
+    CHECK(addCourseOf(gm, "100004", "글쓰기", 3, "교양필수"));
+    CHECK(addCourseOf(gm, "100005", "음악감상", 2, "교양선택"));
+    CHECK(gm.addGrade(makeGrade("23101001", "100001", "2025-1", 96)));  // A+ 4.5
+    CHECK(gm.addGrade(makeGrade("23101001", "100004", "2025-1", 90)));  // A0 4.0 (교양)
+    CHECK(gm.addGrade(makeGrade("23101001", "100005", "2025-1", 80)));  // B0 3.0 (교양)
+    CHECK(gm.addGrade(makeGrade("23101001", "100002", "2025-2", 96)));  // A+ 4.5
+    CHECK(gm.addGrade(makeGrade("23101001", "100003", "2025-2", 85)));  // B+ 3.5
+
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "23101001");
+    CHECK_EQ(summary.credits, 14);
+    CHECK_NEAR(summary.gpa, 55.5 / 14, 1e-9);                    // 3.96
+    CHECK_EQ(summary.majorCredits, 9);
+    CHECK_NEAR(summary.majorGpa, (3 * 4.5 + 3 * 4.5 + 3 * 3.5) / 9, 1e-9);  // 4.17
+    CHECK_EQ(summary.semesters.size(), static_cast<size_t>(2));
+    if (summary.semesters.size() == 2) {
+        CHECK_EQ(summary.semesters[0].credits, 8);
+        CHECK_NEAR(summary.semesters[0].gpa, 31.5 / 8, 1e-9);    // 3.94
+        CHECK_EQ(summary.semesters[0].majorCredits, 3);
+        CHECK_NEAR(summary.semesters[0].majorGpa, 4.5, 1e-9);
+        CHECK_EQ(summary.semesters[1].majorCredits, 6);
+        CHECK_NEAR(summary.semesters[1].majorGpa, (4.5 + 3.5) / 2, 1e-9);
+    }
+    // 전체 기준: 학기별 전공 학점 합 = 전체 전공 학점
+    int majorSum = 0;
+    for (const Statistics::SemesterSummary& s : summary.semesters) majorSum += s.majorCredits;
+    CHECK_EQ(summary.majorCredits, majorSum);
+    // 전체 GPA 계산은 그대로
+    CHECK_NEAR(summary.gpa, Statistics::calcGPA(gm, "23101001"), 1e-12);
+}
+
+// 교양만 들은 학기는 majorCredits 0 (서버 응답에서는 이 학기의 majorGpa 가 null)
+TEST_CASE(gpaSummary_semester_with_only_liberal_arts_has_no_major) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("24000001", "가")));
+    CHECK(addCourseOf(gm, "100001", "글쓰기", 3, "교양필수"));
+    CHECK(addCourseOf(gm, "100002", "자료구조", 3, "전공필수"));
+    CHECK(gm.addGrade(makeGrade("24000001", "100001", "2025-1", 96)));
+    CHECK(gm.addGrade(makeGrade("24000001", "100002", "2025-2", 85)));  // B+ 3.5
+
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "24000001");
+    CHECK_EQ(summary.semesters.size(), static_cast<size_t>(2));
+    if (summary.semesters.size() == 2) {
+        CHECK_EQ(summary.semesters[0].credits, 3);
+        CHECK_EQ(summary.semesters[0].majorCredits, 0);
+        CHECK_EQ(summary.semesters[1].majorCredits, 3);
+        CHECK_NEAR(summary.semesters[1].majorGpa, 3.5, 1e-9);
+    }
+    CHECK_EQ(summary.majorCredits, 3);
+    CHECK_NEAR(summary.majorGpa, 3.5, 1e-9);
+}
+
+// 성적 없는 학생(26101007): 전공 학점 0 (서버 응답에서는 majorGpa null)
+TEST_CASE(gpaSummary_without_grades_has_no_major) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("26101007", "조서준")));
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "26101007");
+    CHECK_EQ(summary.majorCredits, 0);
+    CHECK_NEAR(summary.majorGpa, 0.0, 1e-9);
+}
+
+// 전공 과목을 F 로 듣고 재수강: 지워진 F 는 빠지고 재수강은 A0(4.0)까지만 반영
+//   2025-1: 전공선택 B+ 3학점(3.5) + 교양선택 2학점, 2025-2: 전공필수 F(삭제), 2026-1: 같은 과목 재수강 98점(A+ → A0 4.0)
+//   전공 = (3.5×3 + 4.0×3) / 6 = 3.75  (F 를 넣었다면 (3.5×3 + 0 + 4.0×3) / 9 = 2.5)
+TEST_CASE(gpaSummary_major_excludes_replaced_grade_and_limits_retake) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(addCourseOf(gm, "100001", "미적분학", 3, "전공필수"));
+    CHECK(addCourseOf(gm, "100002", "알고리즘", 3, "전공선택"));
+    CHECK(addCourseOf(gm, "100003", "음악감상", 2, "교양선택"));
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 87)));  // B+ 3.5
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2025-1", 90)));  // 교양
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-2", 40)));  // F → 삭제
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2026-1", 98)));  // 재수강 A+ → A0 4.0
+
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "25103008");
+    CHECK_EQ(summary.semesters.size(), static_cast<size_t>(2));  // 삭제된 F 만 있던 2025-2 는 없음
+    if (summary.semesters.size() == 2) {
+        CHECK_EQ(summary.semesters[0].majorCredits, 3);
+        CHECK_NEAR(summary.semesters[0].majorGpa, 3.5, 1e-9);
+        CHECK_EQ(summary.semesters[1].majorCredits, 3);
+        CHECK_NEAR(summary.semesters[1].majorGpa, 4.0, 1e-9);
+    }
+    CHECK_EQ(summary.majorCredits, 6);
+    CHECK_NEAR(summary.majorGpa, (3.5 * 3 + 4.0 * 3) / 6, 1e-9);  // 3.75
+    CHECK_EQ(summary.credits, 8);
+}

@@ -12,8 +12,7 @@
             <span class="logo" aria-hidden="true">G</span>
             <h1>성적 관리</h1>
         </div>
-        <!-- data-roles: 그 탭을 볼 수 있는 역할 (로그인 후 app.js 가 나머지 탭을 숨김)
-             course-tabs: 볼 수 있는 과목마다 탭 하나 (app.js renderCourseTabs 가 채움) -->
+        <!-- data-roles: 그 탭을 볼 수 있는 역할 (로그인 후 app.js 가 나머지 탭을 숨김) -->
         <nav id="tabs" hidden>
             <button data-tab="courses" data-roles="admin professor student" class="active">수강과목</button>
             <button data-tab="enroll" data-roles="admin professor student">수강신청</button>
@@ -22,7 +21,6 @@
             <button data-tab="myreport" data-roles="student">내 성적</button>
             <button data-tab="ranking" data-roles="admin">석차</button>
             <button data-tab="accounts" data-roles="admin">계정</button>
-            <span id="course-tabs"></span>
         </nav>
         <div id="user-box" hidden>
             <span id="user-label"></span>
@@ -45,7 +43,21 @@
             </div>
             <div class="form-error" id="login-error"></div>
             <button type="submit" class="primary">로그인</button>
-            <p class="hint login-note">시연용 계정: 관리자 admin / admin1234</p>
+            <!-- 시연 계정: 누르면 아이디·비밀번호를 채움 (app.js). 계정은 README 의 샘플 계정 표 -->
+            <div class="demo-accounts">
+                <p class="hint login-note">시연 계정 (누르면 입력됨)</p>
+                <div class="demo-list">
+                    <button type="button" class="demo-account" data-username="admin" data-password="admin1234">
+                        <span class="demo-role">관리자</span><span class="demo-id">admin</span>
+                    </button>
+                    <button type="button" class="demo-account" data-username="kimcs" data-password="prof1234">
+                        <span class="demo-role">교수</span><span class="demo-id">kimcs</span>
+                    </button>
+                    <button type="button" class="demo-account" data-username="23101001" data-password="student1234">
+                        <span class="demo-role">학생</span><span class="demo-id">23101001</span>
+                    </button>
+                </div>
+            </div>
         </form>
     </section>
 
@@ -157,7 +169,7 @@
             </div>
         </section>
 
-        <!-- 과목 페이지 (과목 탭 하나에 화면 하나, 지금 고른 과목은 app.js state.courseCode) -->
+        <!-- 과목 페이지 (화면 하나에 지금 고른 과목, app.js state.courseCode) -->
         <section id="tab-course" class="tab">
             <div id="course-hero" class="course-hero"></div>
             <div class="toolbar">
@@ -167,13 +179,14 @@
                 <button class="primary" id="post-add">+ 게시물 추가</button>
             </div>
             <div id="course-posts"></div>
-            <!-- 평가 항목 (관리자·담당 교수만, app.js renderAssess): 학기 선택 + 항목 표 + 항목 점수 입력표 -->
+            <!-- 평가 기준 (관리자·담당 교수만, app.js renderAssess): 학기 선택 + 6분류 비율·등급 방식 표 + 항목 점수 입력표 (+ 상대평가 요약 줄) -->
             <div id="assess-section" class="assess-section" hidden>
                 <div class="toolbar">
-                    <h3 class="sub-title">평가 항목</h3>
+                    <h3 class="sub-title">평가 기준</h3>
                     <label for="assess-sem">학기</label><select id="assess-sem"></select>
                     <span class="spacer"></span>
-                    <button class="primary" id="assess-add">+ 평가 항목 추가</button>
+                    <button class="danger" id="assess-del" hidden>평가 기준 삭제</button>
+                    <button class="primary" id="assess-add">평가 기준 설정</button>
                 </div>
                 <div id="assess-body"></div>
             </div>

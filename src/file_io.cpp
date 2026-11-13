@@ -294,12 +294,17 @@ bool FileIO::loadCourses(std::vector<Course>& courses) {
     return true;
 }
 
-// grades.csv : studentId,courseCode,semester,score
+// grades.csv : studentId,courseCode,semester,score,letter
+//   letter: 상대평가로 정해진 등급 (Grade::assignedLetter, "" 이면 점수 기준)
+//   예전 4칸 파일(letter 없음)도 읽고, 그때 letter 는 ""
+
+const char* const kGradesHeader = "studentId,courseCode,semester,score,letter";
+const char* const kGradesHeaderV1 = "studentId,courseCode,semester,score";
 
 bool FileIO::saveGrades(const std::vector<Grade>& grades) {
-    std::string content = "studentId,courseCode,semester,score\n";
+    std::string content = std::string(kGradesHeader) + "\n";
     for (const Grade& g : grades) {
-        content += joinCsvLine({g.studentId, g.courseCode, g.semester, doubleToString(g.score)});
+        content += joinCsvLine({g.studentId, g.courseCode, g.semester, doubleToString(g.score), g.assignedLetter});
     }
     return atomicWrite(dataDir + "/grades.csv", content);
 }
@@ -307,18 +312,28 @@ bool FileIO::saveGrades(const std::vector<Grade>& grades) {
 bool FileIO::loadGrades(std::vector<Grade>& grades) {
     const std::string path = dataDir + "/grades.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, {"studentId,courseCode,semester,score"}, rows)) {
+    if (!readCsv(path, {kGradesHeader, kGradesHeaderV1}, rows)) {
         return false;
     }
 
     grades.clear();
     for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
         Grade g;
-        g.studentId = row.fields[0];
-        g.courseCode = row.fields[1];
-        g.semester = row.fields[2];
-        if (!parseDouble(row.fields[3], g.score)) {
-            warnBadNumber(path, row.lineNumber, row.fields[3]);
+        g.studentId = f[0];
+        g.courseCode = f[1];
+        g.semester = f[2];
+        if (!parseDouble(f[3], g.score)) {
+            warnBadNumber(path, row.lineNumber, f[3]);
+            continue;
+        }
+        if (f.size() >= 5) {
+            g.assignedLetter = f[4];
+        }
+        // letter 는 "" 이거나 9개 등급 중 하나 (letterToScore 가 모르는 문자열이면 -1)
+        if (!g.assignedLetter.empty() && letterToScore(g.assignedLetter) < 0) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (등급 \"" << g.assignedLetter
+                      << "\" 이 올바르지 않음)" << std::endl;
             continue;
         }
         grades.push_back(g);
@@ -547,6 +562,93 @@ bool FileIO::loadAssessmentScores(std::vector<AssessmentScore>& scores) {
             continue;
         }
         scores.push_back(s);
+    }
+    return true;
+}
+
+// attendance.csv : studentId,courseCode,semester,week,status
+
+const char* const kAttendanceHeader = "studentId,courseCode,semester,week,status";
+
+bool FileIO::saveAttendance(const std::vector<Attendance>& records) {
+    std::string content = std::string(kAttendanceHeader) + "\n";
+    for (const Attendance& a : records) {
+        content += joinCsvLine({a.studentId, a.courseCode, a.semester, std::to_string(a.week), a.status});
+    }
+    return atomicWrite(dataDir + "/attendance.csv", content);
+}
+
+bool FileIO::loadAttendance(std::vector<Attendance>& records) {
+    const std::string path = dataDir + "/attendance.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kAttendanceHeader}, rows)) {
+        return false;
+    }
+
+    records.clear();
+    for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
+        Attendance a;
+        a.studentId = f[0];
+        a.courseCode = f[1];
+        a.semester = f[2];
+        a.status = f[4];
+        if (!parseInt(f[3], a.week)) {
+            warnBadNumber(path, row.lineNumber, f[3]);
+            continue;
+        }
+
+        const bool duplicate = std::any_of(records.begin(), records.end(), [&](const Attendance& other) {
+            return other.studentId == a.studentId && other.courseCode == a.courseCode &&
+                   other.semester == a.semester && other.week == a.week;
+        });
+        if (!a.isValid() || duplicate) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (출결 값이 올바르지 않음)"
+                      << std::endl;
+            continue;
+        }
+        records.push_back(a);
+    }
+    return true;
+}
+
+// grading_modes.csv : courseCode,semester,mode
+//   형식이 틀린 줄(GradingMode::isValid)·같은 (과목, 학기) 중복 줄은 건너뜀
+
+const char* const kGradingModesHeader = "courseCode,semester,mode";
+
+bool FileIO::saveGradingModes(const std::vector<GradingMode>& modes) {
+    std::string content = std::string(kGradingModesHeader) + "\n";
+    for (const GradingMode& m : modes) {
+        content += joinCsvLine({m.courseCode, m.semester, m.mode});
+    }
+    return atomicWrite(dataDir + "/grading_modes.csv", content);
+}
+
+bool FileIO::loadGradingModes(std::vector<GradingMode>& modes) {
+    const std::string path = dataDir + "/grading_modes.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kGradingModesHeader}, rows)) {
+        return false;
+    }
+
+    modes.clear();
+    for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
+        GradingMode m;
+        m.courseCode = f[0];
+        m.semester = f[1];
+        m.mode = f[2];
+
+        const bool duplicate = std::any_of(modes.begin(), modes.end(), [&](const GradingMode& other) {
+            return other.courseCode == m.courseCode && other.semester == m.semester;
+        });
+        if (!m.isValid() || duplicate) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (등급 방식 값이 올바르지 않음)"
+                      << std::endl;
+            continue;
+        }
+        modes.push_back(m);
     }
     return true;
 }

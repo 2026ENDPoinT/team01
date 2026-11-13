@@ -42,10 +42,6 @@ constexpr const char* kAssessmentRules =
     "평가 항목이 올바르지 않습니다 (평가 항목 출석·중간고사·기말고사·과제·팀프로젝트·기타, 비율 0~100 정수)";
 constexpr const char* kGradingSchemeRules =
     "평가 기준이 올바르지 않습니다 (분류별 비율 0~100 정수, 합계 100, 방식 absolute·relative)";
-constexpr const char* kAttendanceCategory = "출석";
-const std::vector<std::string> kAssessmentCategories = {
-    "출석", "중간고사", "기말고사", "과제", "팀프로젝트", "기타"
-};
 constexpr const char* kAssessedCourse =
     "평가 항목으로 성적을 계산하는 과목입니다 (평가 항목 화면에서 점수를 입력하세요)";
 constexpr const char* kNotEnrolled = "수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)";
@@ -199,7 +195,7 @@ json gradingSchemeItemsJson(const GradeManager& gm, const std::string& courseCod
     const std::vector<Assessment> current = gm.getAssessments(courseCode, semester);
     if (current.empty()) return json::array();
     json result = json::array();
-    for (const std::string& category : kAssessmentCategories) {
+    for (const std::string& category : assessmentCategories()) {
         int weight = 0;
         for (const Assessment& item : current) {
             if (item.name == category) {
@@ -836,15 +832,21 @@ void Server::run() {
             setError(res, 404, "없는 학생입니다: " + id);
             return;
         }
-        const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, id);
+                const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, id);
         json semesters = json::array();
         for (const Statistics::SemesterSummary& s : summary.semesters) {
-            semesters.push_back({{"semester", s.semester}, {"gpa", s.gpa}, {"credits", s.credits}});
+            semesters.push_back({
+                {"semester", s.semester}, {"gpa", s.gpa}, {"credits", s.credits},
+                {"majorGpa", s.majorCredits > 0 ? json(s.majorGpa) : json(nullptr)},
+                {"majorCredits", s.majorCredits}
+            });
         }
         setJson(res, 200, json{
             {"semesters", semesters},
             {"gpa", summary.credits > 0 ? json(summary.gpa) : json(nullptr)},
-            {"credits", summary.credits}
+            {"credits", summary.credits},
+            {"majorGpa", summary.majorCredits > 0 ? json(summary.majorGpa) : json(nullptr)},
+            {"majorCredits", summary.majorCredits}
         });
     });
 
@@ -1849,8 +1851,8 @@ void Server::run() {
 
         std::map<std::string, int> weights;
         for (auto it = weightsIt->begin(); it != weightsIt->end(); ++it) {
-            if (std::find(kAssessmentCategories.begin(), kAssessmentCategories.end(), it.key()) ==
-                    kAssessmentCategories.end() || !it.value().is_number_integer()) {
+            if (std::find(assessmentCategories().begin(), assessmentCategories().end(), it.key()) ==
+                    assessmentCategories().end() || !it.value().is_number_integer()) {
                 setError(res, 400, kGradingSchemeRules);
                 return;
             }
@@ -1861,7 +1863,7 @@ void Server::run() {
             }
             weights[it.key()] = static_cast<int>(value);
         }
-        for (const std::string& category : kAssessmentCategories) {
+        for (const std::string& category : assessmentCategories()) {
             if (weights.find(category) == weights.end()) weights[category] = 0;
         }
         int total = 0;
@@ -1882,7 +1884,11 @@ void Server::run() {
                 }
             }
         }
-        if (!gm.setGradingScheme(courseCode, semester, mode, weights)) {
+        std::vector<int> weightsVector;
+        for (const std::string& category : assessmentCategories()) {
+            weightsVector.push_back(weights.at(category));
+        }
+        if (!gm.setGradingScheme(courseCode, semester, weightsVector, mode)) {
             setError(res, 400, kGradingSchemeRules);
             return;
         }
@@ -1979,8 +1985,8 @@ void Server::run() {
             setError(res, 404, "없는 학생입니다: " + score.studentId);
             return;
         }
-        if (std::find(kAssessmentCategories.begin(), kAssessmentCategories.end(), score.name) ==
-            kAssessmentCategories.end()) {
+        if (std::find(assessmentCategories().begin(), assessmentCategories().end(), score.name) ==
+            assessmentCategories().end()) {
             setError(res, 400, kAssessmentRules);
             return;
         }
@@ -1992,7 +1998,7 @@ void Server::run() {
         const auto item = std::find_if(items.begin(), items.end(), [&](const Assessment& current) {
             return current.name == score.name;
         });
-        if (item == items.end()) {
+        if (item == items.end() || item->weight == 0) {
             setError(res, 409, "비율이 0%인 항목에는 점수를 입력할 수 없습니다");
             return;
         }
@@ -2028,8 +2034,8 @@ void Server::run() {
             setError(res, 404, "없는 학생입니다: " + studentId);
             return;
         }
-        if (std::find(kAssessmentCategories.begin(), kAssessmentCategories.end(), name) ==
-            kAssessmentCategories.end()) {
+        if (std::find(assessmentCategories().begin(), assessmentCategories().end(), name) ==
+            assessmentCategories().end()) {
             setError(res, 400, kAssessmentRules);
             return;
         }
@@ -2039,7 +2045,7 @@ void Server::run() {
         }
         const std::vector<Assessment> items = gm.getAssessments(courseCode, semester);
         if (std::none_of(items.begin(), items.end(), [&](const Assessment& item) {
-                return item.name == name;
+                return item.name == name && item.weight > 0;
             })) {
             setError(res, 409, "비율이 0%인 항목에는 점수를 입력할 수 없습니다");
             return;

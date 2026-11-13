@@ -9,11 +9,13 @@ struct Grade {
     std::string courseCode;  // Course::code
     std::string semester;    // 학기 (예: "2026-1", "2026-2")
     double score = 0.0;      // 점수 (0~100)
+    std::string assignedLetter;   // 상대평가로 정해진 등급 ("" 이면 점수 기준). grades.csv 5번째 칸 letter
 
     // 학번·과목코드·학기 형식, 점수 범위 등을 검사
     bool isValid() const;
 
-    // 점수만 본 원래 등급 (scoreToLetter(score) 와 같음)
+    // 원래 등급 (재수강 규칙 적용 전): assignedLetter 가 있으면 그것, 없으면 scoreToLetter(score)
+    //   (지금은 scoreToLetter(score) 만 돌려줌. 구현: #67)
     //   화면·성적표·GPA 에는 재수강 규칙을 적용한 Retake::officialLetter 를 씀 (retake.h)
     std::string letter() const;
 };
