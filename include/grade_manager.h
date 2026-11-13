@@ -101,6 +101,21 @@ public:
     bool removeAssessmentScore(const std::string& studentId, const std::string& courseCode,
                                const std::string& semester, const std::string& name);
 
+    // ----- 평가 기준 (과목·학기마다 6분류 비율 + 등급 산출 방식) -----
+    // 등급 산출 방식. 평가 기준이 없거나 기록이 없으면 kGradingAbsolute
+    //   구현: #66
+    std::string getGradingMode(const std::string& courseCode, const std::string& semester) const;
+    // 평가 기준 만들기·바꾸기. weights 는 assessmentCategories() 순서의 6개 정수
+    //   false: 없는 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
+    //          처음 만드는데 그 과목·학기에 이미 성적(직접 입력)이 있음
+    //   성공: 6개 항목을 모두 저장(0 포함), 비율이 0 이 된 분류의 항목 점수 삭제, 수강생 전원 성적 재계산
+    //   구현: #66
+    bool setGradingScheme(const std::string& courseCode, const std::string& semester,
+                          const std::vector<int>& weights, const std::string& mode);
+    // 평가 기준 삭제: 항목·항목 점수·등급 방식·그 과목·학기 성적을 모두 지움 (직접 입력 과목으로 돌아감). 없으면 false
+    //   구현: #66
+    bool removeGradingScheme(const std::string& courseCode, const std::string& semester);
+
     // ----- 출결 (#59) -----
     // 출결은 항목 점수로 저장하지 않음. 바뀌면 그 학생의 성적만 다시 계산(syncGrade)
     // 형식 오류, 없는 학생·과목, 수강신청 없음이면 false. 있으면 수정, 없으면 추가.

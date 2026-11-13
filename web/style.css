@@ -353,17 +353,23 @@ dialog table { min-width: 420px; font-size: 13px; }
 .post-actions { flex: none; white-space: nowrap; }
 .tag.expired { background: rgba(239, 68, 68, .15); color: var(--danger); }
 
-/* 과목 페이지 평가 항목: 항목 표 + 비율 합계(100 이 아니면 경고색) + 항목 점수 입력표 */
+/* 과목 페이지 평가 기준: 6분류 표(0% 줄은 흐리게) + 비율 합계(100 이 아니면 경고색)·등급 방식 + 항목 점수 입력표 + 상대평가 요약 줄 */
 .assess-section { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--line); }
 .assess-section .toolbar .sub-title { margin: 0 8px 0 0; }
 #assess-body .table-wrap { margin-bottom: 16px; }
 .assess-head { font-size: 14px; font-weight: 600; margin: 16px 0 8px; }
+.scheme-table { min-width: 0; }
+.scheme-table tr.zero td { opacity: .45; }
 td.weight-sum { color: var(--text); }
 td.weight-sum.warn { color: var(--danger); }
+td.weight-sum .mode-label { margin-left: 12px; color: var(--muted); }
 input.score-cell { width: 76px; padding: 5px 8px; text-align: right; }
 #assess-body td.final { white-space: nowrap; }
-/* 내 성적: 평가 항목 과목의 현재까지 환산 줄 */
+.relative-line { margin: 0 0 16px; line-height: 1.6; }
+/* 내 성적: 평가 기준 과목의 요약 줄 (현재까지 환산·예상 최종) + 예상 점수 입력칸 (0~100 밖이면 invalid 빨간 테두리) */
 td.estimate { color: var(--text); }
+input.sim-input { width: 76px; padding: 4px 8px; text-align: right; }
+input.sim-input.invalid { border-color: var(--danger); outline-color: rgba(239, 68, 68, .3); }
 /* 과목 페이지 출결: 수강생 × 16주 표 (넘치면 .table-wrap 안에서 가로 스크롤, 이름 칸은 왼쪽에 고정), 칸 = 상태 버튼
    상태 색은 등급 배지와 같은 색: 출석 = A(초록), 지각 = C(노랑), 결석 = F(빨강), 공결 = B(파랑) */
 #attend-body .table-wrap { margin-bottom: 16px; }
@@ -381,7 +387,7 @@ button.att.excused { background: rgba(59, 130, 246, .18); color: #60a5fa; }
 button.att[data-busy] { opacity: .6; cursor: progress; }
 .attend-error { color: var(--danger); margin: 0 0 12px; }
 .attend-line { margin: 0 0 20px; }
-/* 평가 항목 점수표의 '출석' 칸: 출결 기록이 있으면 읽기 전용 */
+/* 평가 기준 점수표의 '출석' 칸: 출석부에서 자동 계산이라 늘 읽기 전용 */
 input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
 
 /* 성적표: 학기별 GPA 꺾은선 그래프 (인라인 SVG) */

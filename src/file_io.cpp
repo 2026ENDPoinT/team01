@@ -597,6 +597,17 @@ bool FileIO::loadAttendance(std::vector<Attendance>& records) {
     return true;
 }
 
+// grading_modes.csv : courseCode,semester,mode
+//   구현: #66 (지금은 스텁)
+bool FileIO::saveGradingModes(const std::vector<GradingMode>&) {
+    return true;
+}
+
+bool FileIO::loadGradingModes(std::vector<GradingMode>& modes) {
+    modes.clear();
+    return true;
+}
+
 // 저장 순서: 백업 → path.tmp 에 쓰기 → path.tmp 를 path 로 이름 바꾸기
 //   쓰는 도중에 프로그램이 꺼져도 원래 path 는 그대로 남아 있음
 bool FileIO::atomicWrite(const std::string& path, const std::string& content) {

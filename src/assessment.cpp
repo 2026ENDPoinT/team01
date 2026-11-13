@@ -29,6 +29,19 @@ bool isBlank(const std::string& s) {
 
 }  // namespace
 
+// 6분류 목록 (검사에 쓰는 쪽 구현: #66)
+const std::vector<std::string>& assessmentCategories() {
+    static const std::vector<std::string> categories = {"출석", "중간고사", "기말고사", "과제", "팀프로젝트", "기타"};
+    return categories;
+}
+
+// 구현: #66 (지금도 형식은 검사함)
+bool GradingMode::isValid() const {
+    if (!isValidCourseCode(courseCode)) return false;
+    if (!isValidSemester(semester)) return false;
+    return mode == kGradingAbsolute || mode == kGradingRelative;
+}
+
 bool Assessment::isValid() const {
     if (!isValidCourseCode(courseCode)) return false;  // 과목코드: 숫자 6자리 (course.h)
     if (!isValidSemester(semester)) return false;
