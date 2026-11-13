@@ -280,7 +280,11 @@ function openForm({ title, fields, values = {}, onSubmit, validate }) {
                 ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
                 ${ac} ${f.optional ? '' : 'required'}>`;
         }
-        return `<div class="field"><label>${f.label}</label>${input}</div>`;
+        return `<div class="field">
+            <label>${f.label}</label>
+            ${input}
+            ${f.description ? `<small class="hint" style="display:block; margin-top:6px;">${esc(f.description)}</small>` : ''}
+        </div>`;
     }).join('') + '<div class="form-error"></div>';
     openDialog({ title, bodyHtml: html, onSubmit, validate });
     const first = $('dlg-body').querySelector('input:not([readonly]):not([type=hidden])');
@@ -1164,18 +1168,17 @@ function openSchemeForm(ctx) {
         title: `평가 기준 설정 · ${courseName(ctx.code)} ${ctx.sem}`,
         fields: [
             ...ASSESS_CATEGORIES.map((c) => ({ name: c, label: `${c} 비율 (%, 0~100 정수)`, type: 'number', min: 0, max: 100, step: 1 })),
-            { name: 'mode', label: '등급 방식', options: GRADING_MODES },
-            ...GRADE_RATIO_LETTERS.map((letter) => ({
-                name: `ratio_${letter}`,
-                label: `상대평가 ${letter} 비율 (${
-                    ['A+', 'A0'].includes(letter)
-                        ? 'A+·A0 합계 최대 30%'
-                        : ['B+', 'B0'].includes(letter)
-                            ? 'A+·A0·B+·B0 합계 최대 70%'
-                            : '전체 합계 최대 100%'
-                })`,
-                type: 'number', min: 0, max: 100, step: 1,
-            })),
+           {
+    name: 'mode',
+    label: '등급 방식',
+    options: GRADING_MODES,
+    description: 'A+·A0 합계 최대 30% · A+·A0·B+·B0 합계 최대 70% · 전체 합계 최대 100%',
+},
+...GRADE_RATIO_LETTERS.map((letter) => ({
+    name: `ratio_${letter}`,
+    label: `상대평가 ${letter} 비율`,
+    type: 'number', min: 0, max: 100, step: 1,
+})),
         ],
         values: {
             ...Object.fromEntries(ASSESS_CATEGORIES.map((c) => [c, weightOf.get(c) ?? 0])),
