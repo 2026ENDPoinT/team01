@@ -269,6 +269,7 @@ const renderers = {
     students: renderStudents,
     grades: renderGrades,
     myreport: renderMyReport,
+    timetable: renderTimetable,
     accounts: renderAccounts,
     course: renderCoursePage,
 };
@@ -282,6 +283,7 @@ const loadingSlots = {
     students: ['student-body', emptyRow(7, '불러오는 중…')],
     grades: ['grade-body', emptyRow(7, '불러오는 중…')],
     myreport: ['myreport-body', '<p class="hint">불러오는 중…</p>'],
+    timetable: ['timetable-content', '<p class="hint">불러오는 중…</p>'],
     accounts: ['account-body', emptyRow(5, '불러오는 중…')],
     course: ['course-posts', '<p class="hint">불러오는 중…</p>'],
 };
@@ -1707,6 +1709,121 @@ async function showStudentReport(s) {
 // ───────── 내 성적 (학생) ─────────
 
 // 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
+// ───────── 학생 시간표 ─────────
+// Course.schedule 형식(예: "월(1~4) 화(6)")을 파싱한다. course.h의 요일/교시 규칙과 동일하게 처리.
+function parseTimetableSchedule(schedule) {
+    const result = [];
+    const text = String(schedule || '').trim();
+    const re = /(월|화|수|목|금|토|일)\s*\(\s*(\d{1,2})(?:\s*~\s*(\d{1,2}))?\s*\)/g;
+    let m;
+    while ((m = re.exec(text))) {
+        const day = ['월','화','수','목','금','토','일'].indexOf(m[1]);
+        const start = Number(m[2]);
+        const end = Number(m[3] || m[2]);
+        if (start < 1 || end > 30 || start > end) continue;
+        result.push({ day, start, end });
+    }
+    return result;
+}
+function timetableConflict(a, b) {
+    const aa = parseTimetableSchedule(a), bb = parseTimetableSchedule(b);
+    return aa.some(x => bb.some(y => x.day === y.day && x.start <= y.end && y.start <= x.end));
+}
+function timetableColor(code) {
+    let hash = 0;
+    for (const ch of String(code)) hash = ((hash * 31) + ch.charCodeAt(0)) | 0;
+    return `hsl(${Math.abs(hash) % 360} 48% 34%)`;
+}
+function timetableKey(semester) {
+    return `grade-manager:timetable-candidates:${state.me?.studentId || state.me?.username}:${semester}`;
+}
+function getTimetableCandidates(semester) {
+    try {
+        const value = JSON.parse(localStorage.getItem(timetableKey(semester)) || '[]');
+        return Array.isArray(value) ? value.filter(x => typeof x === 'string') : [];
+    } catch { return []; }
+}
+function setTimetableCandidates(semester, codes) {
+    localStorage.setItem(timetableKey(semester), JSON.stringify([...new Set(codes)]));
+}
+function timetableCourse(code) { return state.courses.find(c => c.code === code); }
+function timetableDays(courses) {
+    return courses.some(c => parseTimetableSchedule(c.schedule).some(x => x.day >= 5)) ? 7 : 5;
+}
+function timetableBlock(course, slot, candidate = false) {
+    const dayNames = ['월','화','수','목','금','토','일'];
+    return `<div class="timetable-block${candidate ? ' candidate' : ''}" style="grid-column:${slot.day + 2};grid-row:${slot.start + 1} / ${slot.end + 2};--course-color:${timetableColor(course.code)}" title="${esc(course.name)} · ${esc(course.professor || '교수 미정')} · ${dayNames[slot.day]} ${slot.start}~${slot.end}교시">
+        <strong>${esc(course.name)}</strong><span>${esc(course.professor || '교수 미정')}</span></div>`;
+}
+async function renderTimetable() {
+    if (state.me?.role !== 'student') return;
+    const root = $('timetable-content');
+    const enrolled = state.myEnrollments || [];
+    const semesters = sortSemesters([...enrolled.map(e => e.semester), state.currentSem]);
+    const previous = root.dataset.semester || state.currentSem;
+    const semester = semesters.includes(previous) ? previous : (semesters[0] || state.currentSem);
+    if (!semester) { root.innerHTML = '<p class="hint">표시할 학기가 없습니다</p>'; return; }
+    const enrolledCodes = [...new Set(enrolled.filter(e => e.semester === semester).map(e => e.courseCode))];
+    const enrolledCourses = enrolledCodes.map(timetableCourse).filter(Boolean);
+    const candidates = getTimetableCandidates(semester).filter(code => timetableCourse(code) && !enrolledCodes.includes(code));
+    const candidateCourses = candidates.map(timetableCourse).filter(Boolean);
+    const all = [...enrolledCourses, ...candidateCourses];
+    const days = timetableDays(all);
+    const maxPeriod = Math.max(9, ...all.flatMap(c => parseTimetableSchedule(c.schedule).map(x => x.end)));
+    const dayNames = ['월','화','수','목','금','토','일'].slice(0, days);
+    const scheduled = enrolledCourses.filter(c => parseTimetableSchedule(c.schedule).length);
+    const unscheduled = enrolledCourses.filter(c => !parseTimetableSchedule(c.schedule).length);
+    const credit = enrolledCourses.reduce((sum,c) => sum + (Number(c.credit) || 0), 0);
+    let grid = `<div class="timetable-grid" style="--day-count:${days};--period-count:${maxPeriod}"><div class="timetable-corner"></div>${dayNames.map(d => `<div class="timetable-day">${d}</div>`).join('')}`;
+    for (let p=1; p<=maxPeriod; p++) {
+        grid += `<div class="timetable-period">${p}</div>`;
+        for (let d=0; d<days; d++) grid += `<div class="timetable-cell" style="grid-column:${d+2};grid-row:${p+1}"></div>`;
+    }
+    for (const course of scheduled) for (const slot of parseTimetableSchedule(course.schedule)) grid += timetableBlock(course, slot);
+    for (const course of candidateCourses) for (const slot of parseTimetableSchedule(course.schedule)) grid += timetableBlock(course, slot, true);
+    grid += '</div>';
+    const options = state.courses.map(c => `<option value="${esc(c.code)}">${esc(c.name)} (${esc(c.code)}) · ${esc(c.schedule || '시간 미정')}</option>`).join('');
+    const candidateRows = candidateCourses.length ? candidateCourses.map(course => {
+        const conflict = enrolledCourses.find(x => timetableConflict(x.schedule, course.schedule));
+        const other = candidateCourses.find(x => x.code !== course.code && timetableConflict(x.schedule, course.schedule));
+        const reason = conflict ? `${conflict.name} 과목과 시간이 겹칩니다` : other ? `${other.name} 후보와 시간이 겹칩니다` : '';
+        return `<div class="timetable-candidate-row"><div><strong>${esc(course.name)}</strong><span>${esc(course.code)} · ${esc(course.schedule || '시간 미정')} · ${Number(course.credit)||0}학점</span>${reason ? `<small class="timetable-conflict">${esc(reason)}</small>` : ''}</div><div class="timetable-candidate-actions"><button data-timetable-remove="${esc(course.code)}">제거</button><button class="primary" data-timetable-enroll="${esc(course.code)}" ${reason ? 'disabled title="시간이 겹치는 후보는 신청할 수 없습니다"' : ''}>신청</button></div></div>`;
+    }).join('') : '<p class="hint">추가한 후보 과목이 없습니다</p>';
+    root.innerHTML = `<div class="page-head"><h2 class="page-title">시간표</h2><label>학기 <select id="timetable-semester">${semesters.map(s=>`<option value="${esc(s)}" ${s===semester?'selected':''}>${esc(s)}</option>`).join('')}</select></label></div>
+        <div class="timetable-summary"><strong>${esc(semester)} 신청 학점</strong><b>${credit}학점</b><span>${enrolledCourses.length}과목</span></div>
+        ${grid}
+        <div class="timetable-unscheduled"><strong>시간 미정</strong>${unscheduled.length ? unscheduled.map(c=>`<span>${esc(c.name)} · ${esc(c.professor || '교수 미정')}</span>`).join('') : '<span class="hint">없음</span>'}</div>
+        <section class="timetable-planner"><div class="page-head"><h3 class="sub-title">후보 과목 추가</h3><div class="timetable-add"><select id="timetable-course-pick"><option value="">과목 선택</option>${options}</select><button class="primary" id="timetable-add">후보 추가</button></div></div>
+        <p class="hint">후보는 이 브라우저에만 저장되며, 실제 수강신청 전까지 서버 데이터는 변경되지 않습니다.</p>${candidateRows}</section>`;
+    // 렌더 후 다시 만든 학기 선택 상자에 이벤트를 연결한다.
+    $('timetable-semester').onchange = () => { root.dataset.semester = $('timetable-semester').value; renderTimetable(); };
+    $('timetable-add').onclick = () => {
+        const code = $('timetable-course-pick').value;
+        const course = timetableCourse(code);
+        if (!course) { toast('추가할 과목을 선택하세요', true); return; }
+        if (enrolledCodes.includes(code)) { toast('이미 신청한 과목입니다', true); return; }
+        const existing = candidates.map(timetableCourse).filter(Boolean);
+        const conflict = [...enrolledCourses, ...existing].find(x => timetableConflict(x.schedule, course.schedule));
+        if (conflict) { toast(`${conflict.name} 과목과 강의시간이 겹칩니다`, true); return; }
+        setTimetableCandidates(semester, [...candidates, code]);
+        renderTimetable();
+    };
+    root.querySelectorAll('[data-timetable-remove]').forEach(btn => btn.onclick = () => {
+        setTimetableCandidates(semester, candidates.filter(code => code !== btn.dataset.timetableRemove)); renderTimetable();
+    });
+    root.querySelectorAll('[data-timetable-enroll]').forEach(btn => btn.onclick = async () => {
+        const courseCode = btn.dataset.timetableEnroll;
+        try {
+            await api('POST', '/api/enrollments', { studentId: state.me.studentId, courseCode, semester });
+            toast('수강신청했습니다');
+            setTimetableCandidates(semester, candidates.filter(code => code !== courseCode));
+            state.baseLoadedAt = 0;
+            await loadBase();
+            await renderTimetable();
+        } catch (e) { toast(e.message, true); }
+    });
+}
+
 async function renderMyReport() {
     const seq = renderSeq;
     const [progress, report] = await Promise.all([

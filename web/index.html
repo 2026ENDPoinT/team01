@@ -19,6 +19,7 @@
             <button data-tab="students" data-roles="admin">학생</button>
             <button data-tab="grades" data-roles="admin professor">성적</button>
             <button data-tab="myreport" data-roles="student">내 성적</button>
+            <button data-tab="timetable" data-roles="student">시간표</button>
             <button data-tab="accounts" data-roles="admin">계정</button>
         </nav>
         <div id="user-box" hidden>
@@ -137,6 +138,11 @@
                 <h2 class="page-title">내 성적</h2>
             </div>
             <div id="myreport-body"></div>
+        </section>
+
+        <!-- 시간표 (학생 전용) -->
+        <section id="tab-timetable" class="tab">
+            <div id="timetable-content"><p class="hint">불러오는 중…</p></div>
         </section>
 
         <!-- 계정 (관리자) -->

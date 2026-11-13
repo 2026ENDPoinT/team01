@@ -521,3 +521,37 @@ input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
     .gpa-box b { font-size: 18px; }
     .gpa-box b.small { font-size: 15px; }
 }
+
+/* 학생 시간표 */
+main:has(#tab-timetable.active) { max-width: 1280px; }
+#tab-timetable { min-width: 0; }
+#tab-timetable .page-head { align-items: center; }
+#tab-timetable .page-head label { display:flex; align-items:center; gap:8px; color:var(--muted); }
+.timetable-summary { display:flex; align-items:center; gap:14px; margin: 0 0 14px; padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.timetable-summary b { color:var(--accent); font-size:18px; }
+.timetable-summary span { color:var(--muted); }
+.timetable-grid { display:grid; grid-template-columns:48px repeat(var(--day-count), minmax(0,1fr)); grid-template-rows:34px repeat(var(--period-count), minmax(54px,1fr)); position:relative; border-top:1px solid var(--line); border-left:1px solid var(--line); background:var(--card); }
+.timetable-corner,.timetable-day,.timetable-period,.timetable-cell { border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
+.timetable-day { display:flex; align-items:center; justify-content:center; font-weight:700; background:var(--hover); }
+.timetable-period { grid-column:1; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; }
+.timetable-cell { min-width:0; }
+.timetable-block { z-index:1; min-width:0; margin:2px; padding:5px 7px; overflow:hidden; display:flex; flex-direction:column; gap:3px; border-radius:6px; background:var(--course-color); border:1px solid var(--course-color); color:#fff; font-size:12px; line-height:1.25; }
+.timetable-block strong,.timetable-block span { overflow:hidden; text-overflow:ellipsis; }
+.timetable-block span { opacity:.85; font-size:11px; }
+.timetable-block.candidate { background:color-mix(in srgb, var(--course-color) 16%, var(--card)); color:var(--text); border:2px dashed var(--course-color); }
+.timetable-unscheduled { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin:14px 0 24px; padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+.timetable-unscheduled strong { margin-right:8px; }
+.timetable-unscheduled span:not(.hint) { color:var(--muted); }
+.timetable-planner { border-top:1px solid var(--line); padding-top:16px; }
+.timetable-add,.timetable-candidate-actions { display:flex; align-items:center; gap:8px; }
+.timetable-candidate-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+.timetable-candidate-row > div:first-child { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.timetable-candidate-row span,.timetable-candidate-row small { color:var(--muted); }
+.timetable-conflict { color:var(--danger) !important; }
+@media (max-width:700px) {
+    #tab-timetable { overflow-x:auto; }
+    .timetable-grid { min-width:720px; grid-template-rows:34px repeat(var(--period-count), 58px); }
+    .timetable-add { width:100%; }
+    .timetable-add select { min-width:0; flex:1; }
+    .timetable-candidate-row { align-items:flex-start; }
+}
