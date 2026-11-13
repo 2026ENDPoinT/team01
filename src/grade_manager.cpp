@@ -697,3 +697,25 @@ void GradeManager::syncCourse(const std::string& courseCode, const std::string& 
         }
     }
 }
+
+// ----- 평가 기준 (스텁) -----
+// 구현: #66
+std::string GradeManager::getGradingMode(const std::string&, const std::string&) const {
+    return kGradingAbsolute;
+}
+
+// 구현: #66
+bool GradeManager::setGradingScheme(const std::string&, const std::string&, const std::vector<int>&,
+                                    const std::string&) {
+    return false;
+}
+
+// 구현: #66
+bool GradeManager::removeGradingScheme(const std::string&, const std::string&) {
+    return false;
+}
+
+// 구현: #66 (출결 기록 조회는 #59)
+double GradeManager::attendanceCategoryScore(const std::string&, const std::string&, const std::string&) const {
+    return 100.0;
+}
