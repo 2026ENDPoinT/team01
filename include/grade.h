@@ -9,7 +9,7 @@ struct Grade {
     std::string courseCode;  // Course::code
     std::string semester;    // 학기 (예: "2026-1", "2026-2")
     double score = 0.0;      // 점수 (0~100)
-    std::string assignedLetter;   // 상대평가로 정해진 등급 ("" 이면 점수 기준). grades.csv 5번째 칸 letter
+    std::string assignedLetter;   // 상대평가로 정해진 등급, 또는 P/F 과목의 "P"·"NP" ("" 이면 점수 기준)
 
     // 학번·과목코드·학기 형식, 점수 범위 등을 검사
     bool isValid() const;

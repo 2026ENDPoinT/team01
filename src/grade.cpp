@@ -52,7 +52,10 @@ bool Grade::isValid() const {
     if (!isValidSemester(semester)) return false;
     if (std::isnan(score) || score < 0.0 || score > 100.0) return false;  // NaN 도 거름
     // 상대평가로 정해진 등급: ""(없음) 이거나 9개 등급(A+~D0, F) 중 하나
-    if (!assignedLetter.empty() && letterToScore(assignedLetter) < 0.0) return false;
+    if (!assignedLetter.empty() && !isPassFailLetter(assignedLetter) &&
+        letterToScore(assignedLetter) < 0.0) {
+        return false;
+    }
     return true;
 }
 
