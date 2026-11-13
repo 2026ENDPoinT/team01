@@ -1419,15 +1419,21 @@ async function studentReportHtml(s) {
     // 학기 → {gpa, credits}. 계산 학점이 0 인 학기(지워진 성적만 있음 등)는 평점 '-'
     const semInfo = Object.fromEntries(summary.semesters.map((x) => [x.semester, x]));
     const semGpa = (x) => (x && x.credits > 0 ? fmt(x.gpa) : '-');
+        // 전공 평점·학점: 전공 학점이 0(또는 서버가 필드를 안 줌)이면 '-'
+    const majorGpaText = (x) => (x && x.majorCredits > 0 ? fmt(x.majorGpa) : '-');
+    const majorCreditText = (x) => (x && x.majorCredits > 0 ? esc(x.majorCredits) : '-');
 
     const summaryHtml = hasGpa ? `
         <h3 class="sub-title">학기별 평점</h3>
         <div class="table-wrap">
-            <table><thead><tr><th>학기</th><th class="num">평점평균</th><th class="num">등록 학점</th></tr></thead>
+                        <table><thead><tr><th>학기</th><th class="num">평점평균</th><th class="num">등록 학점</th>
+                <th class="num">전공 평점</th><th class="num">전공 학점</th></tr></thead>
             <tbody>${summary.semesters.map((x) => `
-                <tr><td>${esc(x.semester)}</td><td class="num">${semGpa(x)}</td><td class="num">${esc(x.credits)}</td></tr>`).join('')}
+                <tr><td>${esc(x.semester)}</td><td class="num">${semGpa(x)}</td><td class="num">${esc(x.credits)}</td>
+                <td class="num">${majorGpaText(x)}</td><td class="num">${majorCreditText(x)}</td></tr>`).join('')}
             </tbody>
-            <tfoot><tr><td>전체 누적</td><td class="num"><b>${fmt(summary.gpa)}</b></td><td class="num"><b>${esc(summary.credits)}</b></td></tr></tfoot></table>
+            <tfoot><tr><td>전체 누적</td><td class="num"><b>${fmt(summary.gpa)}</b></td><td class="num"><b>${esc(summary.credits)}</b></td>
+                <td class="num"><b>${majorGpaText(summary)}</b></td><td class="num"><b>${majorCreditText(summary)}</b></td></tr></tfoot></table>
         </div>
         ${gpaChartSvg(summary.semesters.filter((x) => x.credits > 0))}`
         : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
@@ -1459,6 +1465,8 @@ async function studentReportHtml(s) {
                 ${stat('학번', esc(s.id), true)}
                 ${hasGpa ? stat('전체 누적 GPA', fmt(summary.gpa)) : stat('전체 누적 GPA', '성적 없음', true)}
                 ${stat('전체 등록 학점', esc(summary.credits))}
+                ${stat('전공 GPA', majorGpaText(summary))}
+                ${stat('전공 학점', majorCreditText(summary))}
                 ${stat('수강 건수', grades.length)}
             </div>
             ${summaryHtml}

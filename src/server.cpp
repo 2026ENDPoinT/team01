@@ -808,15 +808,21 @@ void Server::run() {
             setError(res, 404, "없는 학생입니다: " + id);
             return;
         }
-        const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, id);
+                const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, id);
         json semesters = json::array();
         for (const Statistics::SemesterSummary& s : summary.semesters) {
-            semesters.push_back({{"semester", s.semester}, {"gpa", s.gpa}, {"credits", s.credits}});
+            semesters.push_back({
+                {"semester", s.semester}, {"gpa", s.gpa}, {"credits", s.credits},
+                {"majorGpa", s.majorCredits > 0 ? json(s.majorGpa) : json(nullptr)},
+                {"majorCredits", s.majorCredits}
+            });
         }
         setJson(res, 200, json{
             {"semesters", semesters},
             {"gpa", summary.credits > 0 ? json(summary.gpa) : json(nullptr)},
-            {"credits", summary.credits}
+            {"credits", summary.credits},
+            {"majorGpa", summary.majorCredits > 0 ? json(summary.majorGpa) : json(nullptr)},
+            {"majorCredits", summary.majorCredits}
         });
     });
 
