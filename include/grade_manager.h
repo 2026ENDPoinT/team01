@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "assessment.h"
 #include "course.h"
 #include "course_post.h"
 #include "enrollment.h"
@@ -18,27 +19,28 @@ class GradeManager {
 public:
     explicit GradeManager(const std::string& dataDir);
 
-    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물)
+    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물·평가 항목·항목 점수)
     bool load();
     bool save();
 
     // ----- 학생 -----
     bool addStudent(const Student& student);                    // 학번 중복이면 false
-    bool updateStudent(const std::string& id, const Student& student);  // 학번이 바뀌면 성적·수강신청 학번도 바꿈
-    bool removeStudent(const std::string& id);                  // 그 학생의 성적·수강신청도 같이 삭제
+    bool updateStudent(const std::string& id, const Student& student);  // 학번이 바뀌면 성적·수강신청·항목 점수 학번도 바꿈
+    bool removeStudent(const std::string& id);                  // 그 학생의 성적·수강신청·항목 점수도 같이 삭제
     const Student* findStudent(const std::string& id) const;
     std::vector<Student> searchStudents(const std::string& keyword) const;  // 학번 또는 이름에 keyword 포함
     const std::vector<Student>& getStudents() const;
 
     // ----- 과목 -----
     bool addCourse(const Course& course);                       // 과목코드 중복이면 false
-    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물 코드도 바꿈
-    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물도 같이 삭제
+    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물·평가 항목·항목 점수 코드도 바꿈
+    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물·평가 항목·항목 점수도 같이 삭제
     const Course* findCourse(const std::string& code) const;
     const std::vector<Course>& getCourses() const;
 
     // ----- 성적 -----
     // 성적은 (학번, 과목코드, 학기) 세 개로 하나를 구분
+    // 항목 계산 과목(hasAssessments)의 성적을 직접 추가·수정·삭제하지 못하게 막는 것은 서버가 함
     bool addGrade(const Grade& grade);                          // 없는 학생/과목이거나 중복이면 false (수강신청 검사는 서버가 함)
     bool updateGrade(const Grade& grade);                       // 같은 (학번, 과목, 학기) 의 점수 수정
     bool removeGrade(const std::string& studentId, const std::string& courseCode,
@@ -51,6 +53,7 @@ public:
     // ----- 수강신청 -----
     // 수강신청도 (학번, 과목코드, 학기) 세 개로 하나를 구분
     // 학기 형식 오류, 없는 학생/과목, 중복이면 false. 정원·강의시간 겹침은 서버가 검사
+    // removeEnrollment 는 성적·항목 점수를 건드리지 않음 (성적·항목 점수가 있는 수강 취소는 서버가 막음)
     bool addEnrollment(const Enrollment& enrollment);
     bool removeEnrollment(const std::string& studentId, const std::string& courseCode,
                           const std::string& semester);
@@ -69,6 +72,34 @@ public:
     const CoursePost* findPost(int id) const;
     const std::vector<CoursePost>& getPosts() const;
 
+    // ----- 평가 항목 -----
+    // 항목이 1개 이상 있는 (과목, 학기) = "항목 계산 과목": 그 성적은 항목 점수로만 만들어짐
+    // 항목을 추가·수정·삭제하면 그 과목·학기에 수강신청한 학생 전원의 성적을 다시 계산
+    //   finalScore ≥ 0 이면 grades 의 성적을 추가하거나 점수를 바꾸고, -1(미완성)이면 그 성적을 지움
+    bool hasAssessments(const std::string& courseCode, const std::string& semester) const;
+    std::vector<Assessment> getAssessments(const std::string& courseCode, const std::string& semester) const;
+    const std::vector<Assessment>& getAllAssessments() const;
+    // 과목 없음, 형식 오류, 같은 이름 중복, 비율 합계 100 초과,
+    // 첫 항목인데 그 과목·학기에 이미 성적(grades)이 있으면 false
+    bool addAssessment(const Assessment& item);
+    // name 항목을 item 으로 바꿈 (이름이 바뀌면 항목 점수의 이름도 바꿈). 없음·이름 중복·합계 초과면 false
+    //   형식 오류, item 의 과목코드·학기가 인자와 다르면(항목 이동) 도 false. 합계는 바꾸기 전 자기 비율을 빼고 계산
+    bool updateAssessment(const std::string& courseCode, const std::string& semester,
+                          const std::string& name, const Assessment& item);
+    // 항목과 그 항목의 점수 삭제. 없으면 false
+    //   마지막 항목을 지우면 그 과목·학기의 항목 점수와 성적(grades)도 모두 지움
+    bool removeAssessment(const std::string& courseCode, const std::string& semester, const std::string& name);
+
+    // ----- 항목 점수 -----
+    // 항목 점수를 바꾸거나 지우면 그 학생의 그 과목·학기 성적을 다시 계산
+    std::vector<AssessmentScore> getAssessmentScores(const std::string& courseCode, const std::string& semester) const;
+    std::vector<AssessmentScore> getAssessmentScoresByStudent(const std::string& studentId) const;
+    // 있으면 점수 수정, 없으면 추가. 형식 오류, 항목 없음, 같은 (학번, 과목, 학기) 수강신청 없음이면 false
+    bool setAssessmentScore(const AssessmentScore& score);
+    // 없으면 false
+    bool removeAssessmentScore(const std::string& studentId, const std::string& courseCode,
+                               const std::string& semester, const std::string& name);
+
 private:
     FileIO fileIO;
     std::vector<Student> students;
@@ -77,4 +108,11 @@ private:
     std::vector<Enrollment> enrollments;
     std::string enrollmentSemester;
     std::vector<CoursePost> posts;
+    std::vector<Assessment> assessments;
+    std::vector<AssessmentScore> assessmentScores;
+
+    // 항목 계산 과목이면 그 학생의 최종 점수를 다시 계산해 grades 에 반영 (항목이 없으면 아무것도 안 함)
+    void syncGrade(const std::string& studentId, const std::string& courseCode, const std::string& semester);
+    // 그 과목·학기에 수강신청한 학생 전원에게 syncGrade
+    void syncCourse(const std::string& courseCode, const std::string& semester);
 };

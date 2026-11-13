@@ -10,9 +10,12 @@ const $ = (id) => document.getElementById(id);
 // myEnrollments: 학생 자기 수강신청 목록 (loadBase 가 채움, 다른 역할은 빈 목록) → 학생이 볼 수 있는 과목을 정함
 // courseCode·courseSem·postFilter: 과목 페이지에서 지금 보는 과목 · 학기 · 분류 칩 ('all' = 전체)
 // coursePosts: 지금 과목 페이지의 게시물 (서버가 권한에 맞게 걸러 줌, 학기·분류는 화면에서 거름)
+// assessSem: 과목 페이지 '평가 항목' 영역에서 고른 학기
+// assess: 그 영역에 지금 그려 둔 {code, sem, items} (점수 칸·버튼이 어느 항목인지 찾을 때 사용, 안 그렸으면 null)
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
+    assessSem: null, assess: null,
 };
 
 // ───────── 공용 도우미 ─────────
@@ -51,8 +54,15 @@ function toast(msg, isError = false) {
 
 // 숫자를 소수 d 자리로, 숫자가 아니면 '-'
 const fmt = (n, d = 2) => (typeof n === 'number' ? n.toFixed(d) : '-');
-// GPA 응답에서 숫자만 꺼냄 ({gpa: 3.5} 또는 3.5 둘 다 처리)
+// 소수 둘째 자리 반올림한 숫자 (점수 표시용: 89 → 89, 79.333 → 79.33)
+const round2 = (n) => Math.round(n * 100) / 100;
+// GPA 응답에서 숫자만 꺼냄 ({gpa: 3.5} 또는 3.5 둘 다 처리). 성적이 없으면 서버가 null → fmt 가 '-'
 const gpaOf = (r) => (typeof r === 'number' ? r : r?.gpa);
+// 직접 입력할 수 있는 등급 (서버 letterToScore 가 받는 값)
+const GRADE_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'C0', 'D+', 'D0', 'F'];
+// 점수 → 등급 (서버 scoreToLetter 와 같은 경계, "이상" 기준)
+const scoreToLetter = (s) => [[95, 'A+'], [90, 'A0'], [85, 'B+'], [80, 'B0'], [75, 'C+'], [70, 'C0'], [65, 'D+'], [60, 'D0']]
+    .find(([min]) => s >= min)?.[1] ?? 'F';
 // 등급 배지. 첫 글자(A~F, R)로 색을 정함 (style.css 의 .badge.A 등)
 const letterBadge = (l) => l ? `<span class="badge ${esc(l[0])}">${esc(l)}</span>` : '-';
 // 학번/과목코드 → 이름 (state 에서 찾음, 없으면 빈 문자열)
@@ -64,8 +74,21 @@ const emptyRow = (cols, msg) => `<tr><td class="empty" colspan="${cols}">${msg}<
 const capacityText = (c) => (c.capacity > 0 ? esc(c.capacity) : '제한 없음');
 // 학기 형식 YYYY-N (1·2 정규학기, 3 여름·4 겨울 계절학기)
 const SEMESTER_RE = /^\d{4}-[1-4]$/;
+// 학기 형식 오류 문구 (서버 kSemesterRules 와 같음)
+const SEMESTER_RULES = '학기 형식이 올바르지 않습니다 (예: 2026-1, 1·2 정규학기, 3 여름·4 겨울 계절학기)';
+// 점수 범위 오류 문구 (서버 kScoreRules 와 같음)
+const SCORE_RULES = '점수는 0~100 사이 숫자여야 합니다';
 // 중복을 지운 학기 목록 (최신 학기가 위로, 빈 값 제외)
 const sortSemesters = (list) => [...new Set(list.filter(Boolean))].sort().reverse();
+
+// 평가 항목·항목 점수 API 의 과목·학기 쿼리
+const assessQuery = (code, sem) => new URLSearchParams({ courseCode: code, semester: sem }).toString();
+// (과목, 학기) 평가 항목 목록. cache(Map) 에 요청을 담아 같은 조합은 한 번만 부름 (실패하면 빈 목록)
+function assessmentsOf(code, sem, cache) {
+    const k = JSON.stringify([code, sem]);
+    if (!cache.has(k)) cache.set(k, api('GET', '/api/assessments?' + assessQuery(code, sem)).catch(() => []));
+    return cache.get(k);
+}
 
 // ───────── 역할 ─────────
 
@@ -95,11 +118,13 @@ let dlgSubmit = null;
 let dlgValidate = null;
 
 // 제목·내용을 채우고 창을 띄움
+// validate 가 있으면 브라우저 기본 검사(required·min·pattern)를 끄고 validate 문구만 보임 (서버와 같은 문구)
 function openDialog({ title, bodyHtml, onSubmit, validate = null, okText = '저장' }) {
     $('dlg-title').textContent = title;
     $('dlg-body').innerHTML = bodyHtml;
     $('dlg-ok').textContent = okText;
     $('dlg-ok').style.display = onSubmit ? '' : 'none';
+    $('dlg-form').noValidate = !!validate;
     dlgSubmit = onSubmit;
     dlgValidate = validate;
     dlg.showModal();
@@ -190,12 +215,13 @@ const renderers = {
 const currentTab = () => document.querySelector('main .tab.active').id.slice('tab-'.length);
 
 // 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
-//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류 선택을 처음으로 되돌림
+//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 항목 학기 선택을 처음으로 되돌림
 function showTab(name, code) {
     if (code && code !== state.courseCode) {
         state.courseCode = code;
         state.courseSem = null;
         state.postFilter = 'all';
+        state.assessSem = null;
     }
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active',
         b.dataset.tab === 'course' ? name === 'course' && b.dataset.code === state.courseCode : b.dataset.tab === name));
@@ -264,10 +290,13 @@ function resetView() {
     state.courseSem = null;
     state.postFilter = 'all';
     state.coursePosts = [];
+    state.assessSem = null;
+    state.assess = null;
     ['course-list', 'student-body', 'grade-body', 'rank-body', 'enroll-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester', 'rank-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
-        'course-tabs', 'course-hero', 'course-filter', 'course-posts', 'course-sem'].forEach((id) => ($(id).innerHTML = ''));
+        'course-tabs', 'course-hero', 'course-filter', 'course-posts', 'course-sem',
+        'assess-sem', 'assess-body'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
     $('enroll-period').textContent = '';
@@ -359,13 +388,14 @@ const courseFields = () => [
     { name: 'capacity', label: '학기당 정원 (0 = 제한 없음)', type: 'number' },
     { name: 'remote', label: '원격강좌', options: [{ value: 'N', label: '아니오' }, { value: 'Y', label: '예' }] },
 ];
-// 과목 폼 값 검사 (서버 course.cpp 규칙과 같게): 잘못되면 이유, 괜찮으면 빈 문자열
+// 과목 폼 값 검사 (서버 courseInvalidReason 과 같은 규칙·문구): 잘못되면 이유, 괜찮으면 빈 문자열
 const validateCourse = (d) => {
-    if (!/^\d{6}$/.test(d.code ?? '')) return '과목 코드는 숫자 6자리여야 합니다';
-    if (!(d.name ?? '').trim()) return '과목명을 입력하세요 (공백만으로는 안 됩니다)';
+    if (!/^\d{6}$/.test(d.code ?? '')) return '과목코드는 숫자 6자리여야 합니다';
+    if (!(d.name ?? '').trim()) return '과목명이 비어 있습니다';
     const credit = Number(d.credit);
-    if (d.credit === '' || !Number.isInteger(credit) || credit < 1 || credit > 4) return '학점은 1~4 사이의 정수여야 합니다';
-    if (d.capacity !== '' && (!Number.isInteger(Number(d.capacity)) || Number(d.capacity) < 0)) return '정원은 0 이상의 정수여야 합니다 (0 = 제한 없음)';
+    if ((d.credit ?? '').trim() === '' || !Number.isInteger(credit) || credit < 1 || credit > 4) return '학점은 1~4 사이여야 합니다';
+    const capacity = Number(d.capacity);
+    if (!Number.isInteger(capacity) || capacity < 0 || capacity > 999) return '정원은 0~999 사이여야 합니다';
     return '';
 };
 // 폼 값 → API 본문 (숫자·참거짓 변환)
@@ -499,8 +529,8 @@ const postCategory = (v) => POST_CATEGORIES.find((k) => k.value === v) ?? { valu
 const postsUrl = (code) => '/api/courses/' + encodeURIComponent(code) + '/posts';
 // 지금 과목 페이지의 과목 (없으면 undefined)
 const pageCourse = () => state.courses.find((c) => c.code === state.courseCode);
-// 게시물을 추가·수정·삭제할 수 있는지: 관리자 또는 담당 교수
-const canEditPosts = (c) => isAdmin() || teaches(c);
+// 게시물·평가 항목을 추가·수정·삭제할 수 있는지: 관리자 또는 담당 교수
+const canManageCourse = (c) => isAdmin() || teaches(c);
 // 마감·시험일이 지났는지 (날짜만 있으면 그날 23:59 기준, 시각은 브라우저 지역 시간)
 function isExpired(due) {
     if (!due) return false;
@@ -511,11 +541,14 @@ function isExpired(due) {
 // 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
 //   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
 //   처음 보이는 학기: 이전 선택 → 게시물이 있는 가장 최근 학기 → (관리자·교수) 신청 학기 → 가장 최근 학기
+//   관리자·담당 교수는 아래 '평가 항목' 영역도 그림 (같은 학기 목록, 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기)
 async function renderCoursePage() {
     const code = state.courseCode;
     const c = pageCourse();
     if (!c) { showTab('courses'); return; }
-    $('post-add').hidden = !canEditPosts(c);
+    const manage = canManageCourse(c);
+    $('post-add').hidden = !manage;
+    $('assess-section').hidden = !manage;
     const staff = state.me.role !== 'student';
     const [posts, staffInfo] = await Promise.all([
         api('GET', postsUrl(code)),
@@ -527,11 +560,12 @@ async function renderCoursePage() {
     // 기다리는 사이 다른 과목·탭으로 옮겼으면 그리지 않음 (나중에 끝난 요청이 화면을 덮지 않게)
     if (currentTab() !== 'course' || state.courseCode !== code) return;
 
-    let sems, fallback;
+    let sems, fallback, open = '';
     if (staff) {
         const [list, settings] = staffInfo;
-        sems = sortSemesters([...posts.map((p) => p.semester), ...list.map((e) => e.semester), settings.semester]);
-        fallback = settings.semester || sems[0] || '';
+        open = settings.semester;
+        sems = sortSemesters([...posts.map((p) => p.semester), ...list.map((e) => e.semester), open]);
+        fallback = open || sems[0] || '';
     } else {
         sems = sortSemesters(state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester));
         fallback = sems[0] || '';
@@ -541,6 +575,11 @@ async function renderCoursePage() {
 
     state.coursePosts = posts;
     drawPosts();
+
+    if (!manage) { state.assess = null; return; }
+    if (!sems.includes(state.assessSem)) state.assessSem = open || state.courseSem;
+    fillSelect($('assess-sem'), sems.map((s) => ({ value: s, label: s })), '', state.assessSem);
+    await renderAssess();
 }
 
 // 과목 카드 + 분류 칩 + 주차별 게시물 목록 그리기 (선택 학기의 게시물만, 서버를 다시 부르지 않음)
@@ -569,7 +608,7 @@ function drawPosts() {
         .sort((a, b) => a.week - b.week || order(a.category) - order(b.category) || a.id - b.id);
     const box = $('course-posts');
     if (!shown.length) { box.innerHTML = '<p class="empty">이 학기에 등록된 게시물이 없습니다</p>'; return; }
-    const editable = canEditPosts(c);
+    const editable = canManageCourse(c);
     const weeks = [...new Set(shown.map((p) => p.week))];
     box.innerHTML = weeks.map((w) => `
         <h3 class="week-head">${esc(w)}주</h3>
@@ -674,6 +713,177 @@ $('course-posts').onclick = (e) => {
             () => api('DELETE', postsUrl(state.courseCode) + '/' + encodeURIComponent(p.id)));
     }
 };
+
+// ───────── 평가 항목 (과목 페이지, 관리자·담당 교수) ─────────
+
+// 평가 항목 폼 검사 (서버 Assessment::isValid 와 같은 규칙, 서버 kAssessmentRules 와 같은 문구)
+//   이름: 앞뒤 공백을 지우고 비어 있지 않고 60바이트 이하, 비율: 1~100 정수
+const ASSESS_RULES = '평가 항목이 올바르지 않습니다 (이름 필수, 비율 1~100 정수)';
+const validateAssessment = (d) => {
+    const name = (d.name ?? '').trim();
+    if (!name || new TextEncoder().encode(name).length > 60) return ASSESS_RULES;
+    const weight = Number(d.weight);
+    if ((d.weight ?? '').trim() === '' || !Number.isInteger(weight) || weight < 1 || weight > 100) return ASSESS_RULES;
+    return '';
+};
+const assessFields = () => [
+    { name: 'name', label: '이름 (예: 중간고사, 출석)', placeholder: '예: 중간고사' },
+    { name: 'weight', label: '반영 비율 (%, 1~100 정수)', type: 'number', min: 1, max: 100, step: 1 },
+];
+// 항목 점수표 마지막 열: 서버가 계산한 최종 점수와 등급 (성적이 없으면 = 미완성 '-')
+const finalCell = (g) => (g ? `<b>${esc(round2(g.score))}</b> ${letterBadge(g.letter)}` : '-');
+
+// '평가 항목' 영역 그리기 (고른 학기 state.assessSem)
+//   항목 표(이름·비율·수정/삭제) + 비율 합계, 항목이 있으면 수강생별 항목 점수 입력표 (행 = 수강생, 열 = 항목, 마지막 = 최종)
+async function renderAssess() {
+    const code = state.courseCode;
+    const sem = state.assessSem ?? '';
+    const box = $('assess-body');
+    // 다 받기 전에는 추가 버튼·점수 칸이 이전 학기를 가리키지 않게 비워 둠
+    state.assess = null;
+    $('assess-add').disabled = !sem;
+    if (!sem) {
+        box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
+        return;
+    }
+    const q = assessQuery(code, sem);
+    const [items, enrolls, scores, grades] = await Promise.all([
+        api('GET', '/api/assessments?' + q),
+        api('GET', '/api/enrollments?' + q),
+        api('GET', '/api/assessment-scores?' + q),
+        api('GET', '/api/grades?' + q),
+    ]);
+    // 기다리는 사이 과목·학기·탭이 바뀌었으면 그리지 않음
+    if (currentTab() !== 'course' || state.courseCode !== code || state.assessSem !== sem) return;
+    state.assess = { code, sem, items };
+
+    const total = items.reduce((t, a) => t + a.weight, 0);
+    const itemRows = items.length ? items.map((a, i) => `
+        <tr>
+            <td><b>${esc(a.name)}</b></td>
+            <td class="num">${esc(a.weight)}</td>
+            <td class="actions">
+                <button type="button" class="link" data-act="edit" data-i="${i}">수정</button>
+                <button type="button" class="link danger" data-act="del" data-i="${i}">삭제</button>
+            </td>
+        </tr>`).join('') : emptyRow(3, '평가 항목이 없습니다. 항목을 추가하면 이 과목·학기 성적은 항목 점수로 자동 계산됩니다');
+    const sumRow = items.length ? `<tfoot><tr><td colspan="3" class="weight-sum${total === 100 ? '' : ' warn'}">
+        비율 합계 <b>${total} / 100</b>${total === 100 ? '' : ' · 합계가 100이어야 최종 성적이 계산됩니다'}</td></tr></tfoot>` : '';
+    let html = `
+        <div class="table-wrap">
+            <table><thead><tr><th>이름</th><th class="num">비율(%)</th><th></th></tr></thead>
+            <tbody>${itemRows}</tbody>${sumRow}</table>
+        </div>`;
+
+    if (items.length) {
+        const scoreOf = new Map(scores.map((s) => [JSON.stringify([s.studentId, s.name]), s.score]));
+        const gradeOf = new Map(grades.map((g) => [g.studentId, g]));
+        const rows = [...enrolls].sort((a, b) => a.studentId.localeCompare(b.studentId)).map((e) => {
+            const cells = items.map((a, i) => {
+                const v = esc(scoreOf.get(JSON.stringify([e.studentId, a.name])) ?? '');
+                return `<td class="num"><input class="score-cell" type="number" step="any" min="0" max="100" data-i="${i}"
+                    value="${v}" data-prev="${v}" aria-label="${esc(studentName(e.studentId))} ${esc(a.name)}"></td>`;
+            }).join('');
+            return `
+            <tr data-sid="${esc(e.studentId)}">
+                <td>${esc(e.studentId)}</td>
+                <td><b>${esc(studentName(e.studentId))}</b></td>
+                ${cells}
+                <td class="num final">${finalCell(gradeOf.get(e.studentId))}</td>
+            </tr>`;
+        }).join('');
+        html += `
+        <h4 class="assess-head">항목 점수 <span class="hint">칸을 고치면 바로 저장 · 빈칸으로 지우면 점수 삭제 · 모든 항목에 점수가 있고 합계가 100이면 최종 성적 자동 계산</span></h4>
+        <div class="table-wrap">
+            <table><thead><tr><th>학번</th><th>이름</th>
+                ${items.map((a) => `<th class="num">${esc(a.name)} <span class="hint">${esc(a.weight)}%</span></th>`).join('')}
+                <th class="num">최종 (점수·등급)</th></tr></thead>
+            <tbody>${rows || emptyRow(items.length + 3, '이 학기 수강생이 없습니다')}</tbody></table>
+        </div>`;
+    }
+    box.innerHTML = html;
+}
+
+// 평가 항목 추가(item 없음) / 수정 폼. ctx = 지금 영역의 {code, sem}
+function openAssessForm(ctx, item) {
+    openForm({
+        title: `${item ? '평가 항목 수정' : '평가 항목 추가'} · ${courseName(ctx.code)} ${ctx.sem}`,
+        fields: assessFields(),
+        values: item ?? {},
+        validate: validateAssessment,
+        onSubmit: async (d) => {
+            const name = d.name.trim();
+            const weight = Number(d.weight);
+            if (item) {
+                await api('PUT', '/api/assessments', { courseCode: ctx.code, semester: ctx.sem, name: item.name, newName: name, weight });
+                toast('수정했습니다');
+            } else {
+                await api('POST', '/api/assessments', { courseCode: ctx.code, semester: ctx.sem, name, weight });
+                toast(`평가 항목을 추가했습니다: ${name} ${weight}%`);
+            }
+            await refreshAll();
+        },
+    });
+}
+
+// 저장한 학생의 최종 열만 다시 그림 (표 전체를 다시 그리지 않아 다음 칸 입력이 끊기지 않음). 받은 성적(없으면 undefined)을 돌려줌
+async function refreshFinal(ctx, sid) {
+    const [g] = await api('GET', '/api/grades?' + new URLSearchParams({ studentId: sid, courseCode: ctx.code, semester: ctx.sem }));
+    if (state.assess !== ctx) return g;
+    const row = [...$('assess-body').querySelectorAll('tr[data-sid]')].find((r) => r.dataset.sid === sid);
+    if (row) row.querySelector('.final').innerHTML = finalCell(g);
+    return g;
+}
+
+$('assess-add').onclick = () => { if (state.assess) openAssessForm(state.assess, null); };
+$('assess-sem').onchange = () => {
+    state.assessSem = $('assess-sem').value;
+    renderAssess().catch((e) => toast(e.message, true));
+};
+// 항목 표의 수정·삭제 버튼
+$('assess-body').onclick = (e) => {
+    const b = e.target.closest('button[data-act]');
+    const ctx = state.assess;
+    const item = b && ctx?.items[Number(b.dataset.i)];
+    if (!item) return;
+    if (b.dataset.act === 'edit') openAssessForm(ctx, item);
+    if (b.dataset.act === 'del') confirmDelete(
+        `"${item.name}" 평가 항목을 삭제할까요?\n그 항목의 점수도 지워지고 최종 성적이 다시 계산됩니다.`,
+        () => api('DELETE', '/api/assessments?' + new URLSearchParams({ courseCode: ctx.code, semester: ctx.sem, name: item.name })));
+};
+// 점수 칸을 바꾸면(Enter·칸 이동) 저장: 숫자면 PUT, 빈칸이면 DELETE. 실패하면 이전 값으로 되돌리고 토스트
+$('assess-body').addEventListener('change', async (e) => {
+    const input = e.target.closest('input.score-cell');
+    const ctx = state.assess;
+    if (!input || !ctx) return;
+    const item = ctx.items[Number(input.dataset.i)];
+    const sid = input.closest('tr').dataset.sid;
+    const prev = input.dataset.prev;
+    const raw = input.value.trim();
+    const key = { studentId: sid, courseCode: ctx.code, semester: ctx.sem, name: item.name };
+    try {
+        if (input.validity.badInput) throw new Error(SCORE_RULES);
+        if (raw === '') {
+            if (prev === '') return;
+            await api('DELETE', '/api/assessment-scores?' + new URLSearchParams(key));
+        } else {
+            const score = Number(raw);
+            if (!Number.isFinite(score) || score < 0 || score > 100) throw new Error(SCORE_RULES);
+            if (prev !== '' && Number(prev) === score) { input.value = prev; return; }
+            const saved = await api('PUT', '/api/assessment-scores', { ...key, score });
+            input.value = saved.score;
+        }
+        input.dataset.prev = input.value;
+    } catch (err) {
+        input.value = prev;
+        toast(err.message, true);
+        return;
+    }
+    try {
+        const g = await refreshFinal(ctx, sid);
+        toast(`${studentName(sid)} ${item.name} ${raw === '' ? '삭제' : '저장'} · ` + (g ? `최종 ${round2(g.score)}점 → ${g.letter}` : '최종 성적 미완성'));
+    } catch (err) { toast(err.message, true); }
+});
 
 // ───────── 수강신청 ─────────
 
@@ -860,7 +1070,7 @@ const studentFields = (editing) => [
 
 // 학생 표 그리기 (관리자). 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
 // 학생마다 GPA API 를 한 번씩 불러서 GPA 열을 채우고, 학사경고 목록으로 학생별 경고 횟수를 셈
-// 성적이 한 건도 없는 학생은 GPA 를 0.00 대신 '-' 로 표시 (전체 성적을 한 번만 받아 학번별로 셈)
+// 성적이 없는 학생은 서버가 gpa null 을 줌 → '-' (fmt)
 async function renderStudents() {
     const q = $('student-search').value.trim();
     let list = state.students;
@@ -871,13 +1081,11 @@ async function renderStudents() {
     const body = $('student-body');
     if (!list.length) { body.innerHTML = emptyRow(7, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
 
-    const [gpas, warnings, allGrades] = await Promise.all([
+    const [gpas, warnings] = await Promise.all([
         Promise.all(list.map((s) =>
             api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null))),
         api('GET', '/api/stats/warnings').catch(() => []),
-        api('GET', '/api/grades').catch(() => null),
     ]);
-    const hasGrade = new Set((allGrades ?? []).map((g) => g.studentId));
     const warnCount = {};
     warnings.forEach((w) => (warnCount[w.studentId] = (warnCount[w.studentId] ?? 0) + 1));
     body.innerHTML = list.map((s, i) => `
@@ -886,7 +1094,7 @@ async function renderStudents() {
             <td><b>${esc(s.name)}</b></td>
             <td>${esc(s.major)}</td>
             <td>${esc(s.year)}학년</td>
-            <td class="num">${allGrades && !hasGrade.has(s.id) ? '-' : fmt(gpas[i])}</td>
+            <td class="num">${fmt(gpas[i])}</td>
             <td>${warnCount[s.id] ? `<span class="badge F">${warnCount[s.id]}회</span>` : '-'}</td>
             <td class="actions">
                 <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
@@ -929,35 +1137,74 @@ $('student-body').onclick = (e) => {
         () => api('DELETE', '/api/students/' + encodeURIComponent(s.id)));
 };
 
-// 학생 한 명의 성적표 HTML: 요약(학번·전체 GPA·누적 등록 학점·수강 건수) + 학기별 성적(학기 GPA·등록 학점) + 학사경고 + CSV 내려받기
+// 학사경고 기준 평점 (GPA 그래프의 점선)
+const WARNING_GPA = 1.75;
+// 학기별 GPA 꺾은선 그래프 (인라인 SVG, 색은 style.css 의 .gpa-chart 규칙 = 기존 CSS 변수)
+//   points: [{semester, gpa}] 학기 오름차순. x = 학기, y = 0~4.5, 점 위에 값(소수 둘째), 학사경고 1.75 점선
+//   학기가 1개 이하면 빈 문자열 (그래프 숨김)
+function gpaChartSvg(points) {
+    if (points.length < 2) return '';
+    // pad: 첫·마지막 점을 y축 글자와 오른쪽 끝에서 띄움. top: 위 여백에 범례를 두어 4.5 점의 값 글자와 겹치지 않게
+    const W = 480, H = 230, left = 32, right = 12, top = 42, bottom = 28, pad = 30;
+    const x = (i) => left + pad + (i * (W - left - right - 2 * pad)) / (points.length - 1);
+    const y = (g) => top + (1 - Math.min(Math.max(g, 0), 4.5) / 4.5) * (H - top - bottom);
+    const grid = [0, 1, 2, 3, 4, 4.5].map((g) => `
+        <line class="grid" x1="${left}" x2="${W - right}" y1="${y(g)}" y2="${y(g)}"/>
+        <text class="axis" x="${left - 8}" y="${y(g) + 4}" text-anchor="end">${g}</text>`).join('');
+    // 기준선 + 오른쪽 위 범례 (점 값 글자와 겹치지 않게 그래프 위 여백에 둠)
+    const limit = `
+        <line class="limit" x1="${left}" x2="${W - right}" y1="${y(WARNING_GPA)}" y2="${y(WARNING_GPA)}"/>
+        <line class="limit" x1="${W - right - 118}" x2="${W - right - 98}" y1="10" y2="10"/>
+        <text class="limit-label" x="${W - right}" y="14" text-anchor="end">학사경고 기준 ${WARNING_GPA}</text>`;
+    const line = `<polyline class="line" points="${points.map((p, i) => `${x(i)},${y(p.gpa)}`).join(' ')}"/>`;
+    const dots = points.map((p, i) => `
+        <circle class="dot${p.gpa < WARNING_GPA ? ' warn' : ''}" cx="${x(i)}" cy="${y(p.gpa)}" r="4"/>
+        <text class="value" x="${x(i)}" y="${y(p.gpa) - 9}" text-anchor="middle">${fmt(p.gpa)}</text>
+        <text class="axis" x="${x(i)}" y="${H - 8}" text-anchor="middle">${esc(p.semester)}</text>`).join('');
+    return `
+        <h3 class="sub-title">학기별 GPA 변화</h3>
+        <svg class="gpa-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="학기별 GPA 변화 그래프">${grid}${limit}${line}${dots}</svg>`;
+}
+
+// 학생 한 명의 성적표 HTML: 요약(학번·전체 누적 GPA·전체 등록 학점·수강 건수) + 학기별 평점 표 + GPA 그래프
+//   + 학기별 성적 목록 + 학사경고 + CSV 내려받기
 // 성적표 창(관리자)과 내 성적 페이지(학생)가 같이 씀. s = {id, name}
-// 학기 GPA 는 서버(/api/stats/gpa/:id?semester=)가 계산한 값을 그대로 쓰고, 등록 학점은 과목 학점(credit)의 합
-// 재수강으로 지워진 성적(등급 R)은 GPA·학점에서 빠지므로 학점 합에서도 뺌
+// 평점·학점은 서버 /api/stats/summary/:id (gpaSummary) 값을 그대로 씀
+//   (재수강으로 지워진 성적·없는 과목은 서버가 이미 뺌, 계산 학점이 0 이면 gpa null = 등록된 성적 없음)
 async function studentReportHtml(s) {
     const id = encodeURIComponent(s.id);
-    const [grades, gpaAll, warnings] = await Promise.all([
+    const [grades, summary, warnings] = await Promise.all([
         api('GET', '/api/grades?studentId=' + id),
-        api('GET', '/api/stats/gpa/' + id).then(gpaOf).catch(() => null),
+        api('GET', '/api/stats/summary/' + id),
         api('GET', '/api/stats/warnings/' + id),
     ]);
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
     const creditOf = (code) => Number(state.courses.find((c) => c.code === code)?.credit) || 0;
-    const semesters = sortSemesters(grades.map((g) => g.semester));
-    const semGpas = await Promise.all(semesters.map((sem) =>
-        api('GET', `/api/stats/gpa/${id}?semester=${encodeURIComponent(sem)}`).then(gpaOf).catch(() => null)));
-    let totalCredits = 0;
-    const semHtml = semesters.map((sem, i) => {
-        const inSem = grades.filter((g) => g.semester === sem);
-        const counted = inSem.filter((g) => g.letter !== 'R');
-        const credits = counted.reduce((t, g) => t + creditOf(g.courseCode), 0);
-        totalCredits += credits;
-        const gpaText = counted.length ? fmt(semGpas[i]) : '-';
-        const rows = inSem.map((g) => `
+    const hasGpa = typeof summary.gpa === 'number';
+    // 학기 → {gpa, credits}. 계산 학점이 0 인 학기(지워진 성적만 있음 등)는 평점 '-'
+    const semInfo = Object.fromEntries(summary.semesters.map((x) => [x.semester, x]));
+    const semGpa = (x) => (x && x.credits > 0 ? fmt(x.gpa) : '-');
+
+    const summaryHtml = hasGpa ? `
+        <h3 class="sub-title">학기별 평점</h3>
+        <div class="table-wrap">
+            <table><thead><tr><th>학기</th><th class="num">평점평균</th><th class="num">등록 학점</th></tr></thead>
+            <tbody>${summary.semesters.map((x) => `
+                <tr><td>${esc(x.semester)}</td><td class="num">${semGpa(x)}</td><td class="num">${esc(x.credits)}</td></tr>`).join('')}
+            </tbody>
+            <tfoot><tr><td>전체 누적</td><td class="num"><b>${fmt(summary.gpa)}</b></td><td class="num"><b>${esc(summary.credits)}</b></td></tr></tfoot></table>
+        </div>
+        ${gpaChartSvg(summary.semesters.filter((x) => x.credits > 0))}`
+        : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
+
+    const semHtml = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
+        const info = semInfo[sem];
+        const rows = grades.filter((g) => g.semester === sem).map((g) => `
             <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
             <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
         return `
-            <h3 class="sub-title">${esc(sem)} <span class="hint">학기 GPA ${gpaText} · 등록 학점 ${credits}</span></h3>
+            <h3 class="sub-title">${esc(sem)} <span class="hint">학기 GPA ${semGpa(info)} · 등록 학점 ${esc(info?.credits ?? 0)}</span></h3>
             <div class="table-wrap">
                 <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
             </div>`;
@@ -975,11 +1222,12 @@ async function studentReportHtml(s) {
         <div class="report">
             <div class="stat-boxes">
                 ${stat('학번', esc(s.id), true)}
-                ${grades.length ? stat('전체 GPA', fmt(gpaAll)) : stat('전체 GPA', '성적 없음', true)}
-                ${stat('누적 등록 학점', totalCredits)}
+                ${hasGpa ? stat('전체 누적 GPA', fmt(summary.gpa)) : stat('전체 누적 GPA', '성적 없음', true)}
+                ${stat('전체 등록 학점', esc(summary.credits))}
                 ${stat('수강 건수', grades.length)}
             </div>
-            ${grades.length ? semHtml : '<p class="hint">등록된 성적이 없습니다</p>'}
+            ${summaryHtml}
+            ${semHtml}
             <h3 class="sub-title">학사경고</h3>
             ${warnHtml}
             <div class="detail-actions"><a class="btn-link" href="/api/export/student/${id}">CSV 내려받기</a></div>
@@ -993,8 +1241,61 @@ async function showStudentReport(s) {
 
 // ───────── 내 성적 (학생) ─────────
 
+// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 항목 과목이 없으면 생략) + 성적표
 async function renderMyReport() {
-    $('myreport-body').innerHTML = await studentReportHtml({ id: state.me.studentId, name: state.me.name });
+    const [progress, report] = await Promise.all([
+        myAssessmentsHtml(),
+        studentReportHtml({ id: state.me.studentId, name: state.me.name }),
+    ]);
+    $('myreport-body').innerHTML = progress + report;
+}
+
+// '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 평가 항목이 있는 것마다
+//   항목별 비율·내 점수 표와 한 줄 요약
+//     최종 성적이 있으면 그 점수·등급
+//     없으면 현재까지 환산 = Σ(입력된 점수×비율) / Σ(점수가 입력된 항목의 비율), 소수 둘째 반올림,
+//     예상 등급은 scoreToLetter 경계 (미확정)
+//   평가 항목이 있는 과목이 없으면 빈 문자열
+async function myAssessmentsHtml() {
+    const [scores, grades] = await Promise.all([
+        api('GET', '/api/assessment-scores'),
+        api('GET', '/api/grades?studentId=' + encodeURIComponent(state.me.studentId)),
+    ]);
+    const combos = new Map();
+    [...state.myEnrollments, ...scores].forEach((e) =>
+        combos.set(JSON.stringify([e.courseCode, e.semester]), { code: e.courseCode, sem: e.semester }));
+    const cache = new Map();
+    const list = await Promise.all([...combos.values()].map(async (x) => ({ ...x, items: await assessmentsOf(x.code, x.sem, cache) })));
+    const shown = list.filter((x) => x.items.length).sort((a, b) => b.sem.localeCompare(a.sem) || a.code.localeCompare(b.code));
+    if (!shown.length) return '';
+
+    const cards = shown.map(({ code, sem, items }) => {
+        const mine = (name) => scores.find((s) => s.courseCode === code && s.semester === sem && s.name === name);
+        const total = items.reduce((t, a) => t + a.weight, 0);
+        const done = items.filter((a) => mine(a.name));
+        const doneWeight = done.reduce((t, a) => t + a.weight, 0);
+        const final = grades.find((g) => g.courseCode === code && g.semester === sem);
+        let line;
+        if (final) {
+            line = `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}`;
+        } else if (doneWeight > 0) {
+            const est = round2(done.reduce((t, a) => t + mine(a.name).score * a.weight, 0) / doneWeight);
+            line = `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
+                <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
+        } else {
+            line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
+        }
+        const rows = items.map((a) => `
+            <tr><td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${esc(mine(a.name)?.score ?? '-')}</td></tr>`).join('');
+        return `
+            <h4 class="assess-head">${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span></h4>
+            <div class="table-wrap">
+                <table><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot><tr><td colspan="3" class="estimate">${line}</td></tr></tfoot></table>
+            </div>`;
+    }).join('');
+    return `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${cards}</div>`;
 }
 
 // ───────── 성적 ─────────
@@ -1005,6 +1306,8 @@ const courseOptions = () => gradeCourses().map((c) => ({ value: c.code, label: `
 
 // 성적 표 그리기. 필터 선택 상자를 최신 목록으로 채우고, 고른 조건을 쿼리로 붙여 성적을 받아옴
 // 수정/삭제 버튼에는 성적을 구분하는 키 [학번, 과목코드, 학기] 를 JSON 으로 담아 둠
+// 평가 항목으로 계산되는 (과목, 학기) 성적은 수정·삭제 대신 '평가 항목' 표시 (서버도 409 로 막음)
+//   표에 나온 (과목, 학기) 조합마다 /api/assessments 를 한 번씩만 부름
 async function renderGrades() {
     const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
     const semesters = await semesterList();
@@ -1019,9 +1322,15 @@ async function renderGrades() {
     const qs = params.toString();
     const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
+    const cache = new Map();
+    const assessed = await Promise.all(grades.map((g) => assessmentsOf(g.courseCode, g.semester, cache).then((items) => items.length > 0)));
 
-    $('grade-body').innerHTML = grades.length ? grades.map((g) => {
+    $('grade-body').innerHTML = grades.length ? grades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
+        const actions = assessed[i]
+            ? '<span class="tag" title="평가 항목 점수로 자동 계산되는 성적입니다 (과목 페이지에서 항목 점수를 입력하세요)">평가 항목</span>'
+            : `<button class="link" data-act="edit" data-k='${key}'>수정</button>
+                <button class="link danger" data-act="del" data-k='${key}'>삭제</button>`;
         return `
         <tr>
             <td>${esc(g.semester)}</td>
@@ -1030,10 +1339,7 @@ async function renderGrades() {
             <td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
             <td class="num">${esc(g.score)}</td>
             <td>${letterBadge(g.letter)}</td>
-            <td class="actions">
-                <button class="link" data-act="edit" data-k='${key}'>수정</button>
-                <button class="link danger" data-act="del" data-k='${key}'>삭제</button>
-            </td>
+            <td class="actions">${actions}</td>
         </tr>`;
     }).join('') : emptyRow(7, '조건에 맞는 성적이 없습니다');
 }
@@ -1042,21 +1348,54 @@ async function renderGrades() {
 ['grade-f-student', 'grade-f-course', 'grade-f-semester'].forEach((id) =>
     ($(id).onchange = () => renderGrades().catch((e) => toast(e.message, true))));
 
-// 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수만 고침
-// (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문). 등급은 서버가 점수로 정함
+// 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수(또는 등급)만 고침
+// (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문)
+// 입력 방식: 점수(등급은 서버가 점수로 정함) / 등급(서버 letterToScore 의 대표 점수로 저장). bindGradeMode 가 칸을 바꿔 보임
 const gradeFields = (editing) => [
     { name: 'studentId', label: '학생', options: studentOptions(), readonly: editing },
     { name: 'courseCode', label: '과목', options: courseOptions(), readonly: editing },
-    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1 (1·2 정규, 3 여름, 4 겨울)', pattern: '\\d{4}-[1-4]', hint: '학기는 YYYY-N 형식이어야 합니다 (N: 1~4)' },
+    { name: 'semester', label: '학기', readonly: editing, placeholder: '예: 2026-1 (1·2 정규, 3 여름, 4 겨울)' },
+    { name: 'mode', label: '입력 방식', options: [{ value: 'score', label: '점수' }, { value: 'letter', label: '등급' }] },
     { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any', min: 0, max: 100 },
+    { name: 'letter', label: '등급 (대표 점수로 저장: A+ 95 · A0 90 · B+ 85 · … · D0 60 · F 0)', options: asOptions(GRADE_LETTERS) },
 ];
-// 성적 폼 값 검사: 잘못되면 이유, 괜찮으면 빈 문자열
+// 입력 방식에 따라 점수 칸 / 등급 선택 상자 중 하나만 보임. 숨긴 칸은 disabled 라 폼 값(FormData)에서 빠짐
+function bindGradeMode() {
+    const body = $('dlg-body');
+    const mode = body.querySelector('select[name=mode]');
+    const score = body.querySelector('input[name=score]');
+    const letter = body.querySelector('select[name=letter]');
+    const sync = () => {
+        const byLetter = mode.value === 'letter';
+        score.disabled = byLetter;
+        score.closest('.field').hidden = byLetter;
+        letter.disabled = !byLetter;
+        letter.closest('.field').hidden = !byLetter;
+    };
+    // 방식을 바꾸면 이전 방식의 검사 오류 문구는 지움
+    mode.onchange = () => { sync(); body.querySelector('.form-error').textContent = ''; };
+    sync();
+}
+// 성적 폼 값 검사 (서버와 같은 문구): 잘못되면 이유, 괜찮으면 빈 문자열
 const validateGrade = (d) => {
-    if (!SEMESTER_RE.test((d.semester ?? '').trim())) return '학기는 YYYY-N 형식이어야 합니다 (N: 1~4, 예: 2026-1)';
+    if (!SEMESTER_RE.test((d.semester ?? '').trim())) return SEMESTER_RULES;
+    if (d.mode === 'letter') {
+        return GRADE_LETTERS.includes(d.letter) ? '' : '지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)';
+    }
     const score = Number(d.score);
-    if (d.score === '' || !Number.isFinite(score) || score < 0 || score > 100) return '점수는 0~100 사이의 숫자여야 합니다';
+    if ((d.score ?? '').trim() === '' || !Number.isFinite(score) || score < 0 || score > 100) return SCORE_RULES;
     return '';
 };
+// 폼 값 → API 본문: 점수 방식이면 {score}, 등급 방식이면 {letter}
+const gradeBody = (d) => {
+    const key = { studentId: d.studentId, courseCode: d.courseCode, semester: d.semester.trim() };
+    return d.mode === 'letter' ? { ...key, letter: d.letter } : { ...key, score: Number(d.score) };
+};
+// 저장 결과 문구 (서버가 돌려준 성적 g 기준): 점수 방식 "NN점 → 등급", 등급 방식 "등급 A+ (95점)"
+//   재수강 A0 제한 등으로 반영 등급이 입력 등급과 다르면 "→ 반영 등급" 을 붙임
+const gradeResultText = (d, g) => (d.mode === 'letter'
+    ? `등급 ${d.letter} (${round2(g.score)}점)${g.letter !== d.letter ? ` → ${g.letter}` : ''}`
+    : `${round2(g.score)}점 → ${g.letter}`);
 
 // 성적 등록 (수강신청한 학생·과목·학기만 가능). 고를 학생이나 과목이 없으면 안내만 띄움
 $('grade-add').onclick = () => {
@@ -1067,13 +1406,15 @@ $('grade-add').onclick = () => {
     openForm({
         title: '성적 등록',
         fields: gradeFields(false),
+        values: { mode: 'score' },
         validate: validateGrade,
         onSubmit: async (d) => {
-            await api('POST', '/api/grades', { ...d, score: Number(d.score) });
-            toast(`성적을 등록했습니다: ${Number(d.score)}점`);
+            const g = await api('POST', '/api/grades', gradeBody(d));
+            toast(`성적을 등록했습니다: ${gradeResultText(d, g)}`);
             await refreshAll();
         },
     });
+    bindGradeMode();
 };
 // 성적 표 안 버튼 처리. 수정은 서버에서 그 성적을 다시 받아 폼에 채움
 $('grade-body').onclick = async (e) => {
@@ -1089,14 +1430,15 @@ $('grade-body').onclick = async (e) => {
         openForm({
             title: '성적 수정',
             fields: gradeFields(true),
-            values: g,
+            values: { ...g, mode: 'score', letter: GRADE_LETTERS.includes(g.letter) ? g.letter : scoreToLetter(g.score) },
             validate: validateGrade,
             onSubmit: async (d) => {
-                await api('PUT', '/api/grades', { ...d, score: Number(d.score) });
-                toast(`수정했습니다: ${Number(d.score)}점`);
+                const saved = await api('PUT', '/api/grades', gradeBody(d));
+                toast(`수정했습니다: ${gradeResultText(d, saved)}`);
                 await refreshAll();
             },
         });
+        bindGradeMode();
     }
     if (b.dataset.act === 'del') confirmDelete(
         `${studentName(studentId)} · ${courseName(courseCode)} · ${semester} 성적을 삭제할까요?`,

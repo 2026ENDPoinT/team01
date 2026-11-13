@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "assessment.h"
 #include "course.h"
 #include "course_post.h"
 #include "enrollment.h"
@@ -50,6 +51,16 @@ public:
     //   body 의 줄바꿈은 파일에서 두 글자 \n 으로 저장 (\ 는 \\)
     bool savePosts(const std::vector<CoursePost>& posts);
     bool loadPosts(std::vector<CoursePost>& posts);
+
+    // assessments.csv : courseCode,semester,name,weight
+    //   형식이 틀린 항목(Assessment::isValid)·같은 (과목, 학기, 이름) 중복 줄은 건너뜀
+    bool saveAssessments(const std::vector<Assessment>& items);
+    bool loadAssessments(std::vector<Assessment>& items);
+
+    // assessment_scores.csv : studentId,courseCode,semester,name,score
+    //   형식이 틀린 점수(AssessmentScore::isValid)·같은 (학번, 과목, 학기, 이름) 중복 줄은 건너뜀
+    bool saveAssessmentScores(const std::vector<AssessmentScore>& scores);
+    bool loadAssessmentScores(std::vector<AssessmentScore>& scores);
 
 private:
     std::string dataDir;

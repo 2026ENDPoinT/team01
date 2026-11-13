@@ -27,6 +27,12 @@ std::string scoreToLetter(double score);
 //   모르는 문자열이면 0.0
 double letterToPoint(const std::string& letter);
 
+// 등급 → 직접 입력용 대표 점수
+//   A+ 95, A0 90, B+ 85, B0 80, C+ 75, C0 70, D+ 65, D0 60, F 0
+//   대소문자를 구분하고 공백은 허용하지 않음. 모르는 문자열이면 -1
+//   scoreToLetter(letterToScore(x)) == x 가 성립
+double letterToScore(const std::string& letter);
+
 // 학기 형식 검사: "YYYY-N", N: 1·2 정규학기, 3 여름 계절학기, 4 겨울 계절학기 (예: "2026-1")
 bool isValidSemester(const std::string& semester);
 

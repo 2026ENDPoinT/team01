@@ -1,5 +1,5 @@
 // 담당: 조장 (Eno74)
-// FileIO: 쉼표·큰따옴표가 든 값도 저장 → 불러오기 후 그대로, 파일이 없으면 빈 목록
+// FileIO: 쉼표·큰따옴표가 든 값도 저장 → 불러오기 후 그대로, 파일이 없으면 빈 목록 (평가 항목·항목 점수 포함)
 //   모두 임시 폴더에서만 읽고 씀 (실제 data/ 는 건드리지 않음)
 #include <filesystem>
 #include <fstream>
@@ -155,4 +155,96 @@ TEST_CASE(gradeManager_save_load_roundtrip) {
     CHECK(calc != nullptr && calc->professor == "최정훈, 한수진");
     const Student* quoted = loaded.findStudent("24000001");
     CHECK(quoted != nullptr && quoted->name == "홍\"길동\"" && quoted->major == "컴퓨터공학,AI");
+}
+
+TEST_CASE(fileIO_assessments_roundtrip) {
+    TempDir dir;
+    Assessment midterm;
+    midterm.courseCode = "109001";
+    midterm.semester = "2026-2";
+    midterm.name = "중간고사";
+    midterm.weight = 30;
+    Assessment quoted = midterm;
+    quoted.name = "과제, \"발표\"";  // 쉼표·큰따옴표가 든 이름
+    quoted.weight = 70;
+    const std::vector<Assessment> items = {midterm, quoted};
+
+    AssessmentScore first;
+    first.studentId = "26101001";
+    first.courseCode = "109001";
+    first.semester = "2026-2";
+    first.name = "중간고사";
+    first.score = 87.5;
+    AssessmentScore second = first;
+    second.name = "과제, \"발표\"";
+    second.score = 0;
+    AssessmentScore third = first;
+    third.studentId = "26101002";
+    third.score = 100;
+    const std::vector<AssessmentScore> scores = {first, second, third};
+    {
+        FileIO io(dir.str());
+        CHECK(io.saveAssessments(items));
+        CHECK(io.saveAssessmentScores(scores));
+    }
+
+    CHECK(readFile(dir.path() / "assessments.csv").rfind("courseCode,semester,name,weight\n", 0) == 0);
+    CHECK(readFile(dir.path() / "assessment_scores.csv").rfind("studentId,courseCode,semester,name,score\n", 0) == 0);
+    CHECK(readFile(dir.path() / "assessments.csv").find("\"과제, \"\"발표\"\"\"") != std::string::npos);
+
+    FileIO io(dir.str());
+    std::vector<Assessment> loadedItems;
+    std::vector<AssessmentScore> loadedScores;
+    CHECK(io.loadAssessments(loadedItems));
+    CHECK(io.loadAssessmentScores(loadedScores));
+
+    CHECK_EQ(loadedItems.size(), items.size());
+    for (size_t i = 0; i < items.size() && i < loadedItems.size(); i++) {
+        CHECK(loadedItems[i].courseCode == items[i].courseCode && loadedItems[i].semester == items[i].semester &&
+              loadedItems[i].name == items[i].name && loadedItems[i].weight == items[i].weight);
+    }
+    CHECK_EQ(loadedScores.size(), scores.size());
+    for (size_t i = 0; i < scores.size() && i < loadedScores.size(); i++) {
+        CHECK(loadedScores[i].studentId == scores[i].studentId && loadedScores[i].courseCode == scores[i].courseCode &&
+              loadedScores[i].semester == scores[i].semester && loadedScores[i].name == scores[i].name &&
+              loadedScores[i].score == scores[i].score);
+    }
+}
+
+TEST_CASE(fileIO_assessments_skip_broken_lines) {
+    TempDir dir;
+    {
+        std::ofstream out(dir.path() / "assessments.csv", std::ios::binary);
+        out << "courseCode,semester,name,weight\n"
+            << "109001,2026-2,중간,30\n"
+            << "109001,2026-2,기말,abc\n"    // 숫자 아님
+            << "109001,2026-2,과제,0\n"      // 비율 범위 밖
+            << "109001,2026-2,중간,40\n"     // 같은 이름 중복
+            << "109001,2026-2\n";            // 칸 부족
+    }
+    {
+        std::ofstream out(dir.path() / "assessment_scores.csv", std::ios::binary);
+        out << "studentId,courseCode,semester,name,score\n"
+            << "26101001,109001,2026-2,중간,90\n"
+            << "26101001,109001,2026-2,기말,101\n"  // 점수 범위 밖
+            << "26101001,109001,2026-2,과제,nan\n"  // NaN
+            << "2610100,109001,2026-2,중간,50\n";   // 학번 7자리
+    }
+
+    FileIO io(dir.str());
+    std::vector<Assessment> items;
+    std::vector<AssessmentScore> scores;
+    CHECK(io.loadAssessments(items));
+    CHECK(io.loadAssessmentScores(scores));
+    CHECK_EQ(items.size(), static_cast<size_t>(1));
+    CHECK(!items.empty() && items[0].name == "중간" && items[0].weight == 30);
+    CHECK_EQ(scores.size(), static_cast<size_t>(1));
+    CHECK(!scores.empty() && scores[0].score == 90);
+
+    // 파일이 없으면 빈 목록
+    FileIO missing((dir.path() / "missing").string());
+    CHECK(missing.loadAssessments(items));
+    CHECK(missing.loadAssessmentScores(scores));
+    CHECK(items.empty());
+    CHECK(scores.empty());
 }

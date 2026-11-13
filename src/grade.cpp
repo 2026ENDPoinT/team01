@@ -82,3 +82,16 @@ double letterToPoint(const std::string& letter) {
     if (letter == "D0") return 1.0;
     return 0.0;  // F, "R", 모르는 문자열
 }
+
+double letterToScore(const std::string& letter) {
+    if (letter == "A+") return 95.0;
+    if (letter == "A0") return 90.0;
+    if (letter == "B+") return 85.0;
+    if (letter == "B0") return 80.0;
+    if (letter == "C+") return 75.0;
+    if (letter == "C0") return 70.0;
+    if (letter == "D+") return 65.0;
+    if (letter == "D0") return 60.0;
+    if (letter == "F") return 0.0;
+    return -1.0;  // 모르는 문자열 ("A", "", "a+", " A+" 포함)
+}

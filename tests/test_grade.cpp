@@ -41,6 +41,33 @@ TEST_CASE(letterToPoint_table) {
     CHECK_EQ(letterToPoint(""), 0.0);
 }
 
+TEST_CASE(letterToScore_table) {
+    CHECK_EQ(letterToScore("A+"), 95.0);
+    CHECK_EQ(letterToScore("A0"), 90.0);
+    CHECK_EQ(letterToScore("B+"), 85.0);
+    CHECK_EQ(letterToScore("B0"), 80.0);
+    CHECK_EQ(letterToScore("C+"), 75.0);
+    CHECK_EQ(letterToScore("C0"), 70.0);
+    CHECK_EQ(letterToScore("D+"), 65.0);
+    CHECK_EQ(letterToScore("D0"), 60.0);
+    CHECK_EQ(letterToScore("F"), 0.0);
+}
+
+TEST_CASE(letterToScore_roundtrip_with_scoreToLetter) {
+    for (const std::string letter : {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"}) {
+        CHECK_EQ(scoreToLetter(letterToScore(letter)), letter);
+    }
+}
+
+TEST_CASE(letterToScore_rejects_unknown) {
+    CHECK_EQ(letterToScore("A"), -1.0);
+    CHECK_EQ(letterToScore(""), -1.0);
+    CHECK_EQ(letterToScore("a+"), -1.0);   // 대소문자 구분
+    CHECK_EQ(letterToScore(" A+"), -1.0);  // 공백 허용 안 함
+    CHECK_EQ(letterToScore("A+ "), -1.0);
+    CHECK_EQ(letterToScore("R"), -1.0);
+}
+
 TEST_CASE(gradeIsValid_score_range) {
     Grade g;
     g.studentId = "24101234";
