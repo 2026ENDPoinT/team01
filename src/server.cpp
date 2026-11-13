@@ -3,6 +3,7 @@
 #include "statistics.h"
 #include "course_post.h"
 #include "retake.h"
+#include "request_validation.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -14,7 +15,6 @@
 #include <map>
 #include <iostream>
 #include <random>
-#include <regex>
 #include <sstream>
 #include <tuple>
 #include <unordered_set>
@@ -36,6 +36,8 @@ constexpr const char* kGradeRules =
 constexpr const char* kSemesterRules =
     "학기 형식이 올바르지 않습니다 (예: 2026-1, 1·2 정규학기, 3 여름·4 겨울 계절학기)";
 
+constexpr const char* kAccountInvalid = "계정 정보가 올바르지 않습니다";
+// 위 검사를 통과했는데 AccountStore 가 거부한 경우 (남는 규칙 안내)
 constexpr const char* kAccountRules =
     "계정 정보가 올바르지 않습니다 (아이디 영문·숫자·_ 3~20자, 비밀번호 8~64자, 교수·관리자는 이름 필수, 학생은 학번 필수)";
 
@@ -86,19 +88,8 @@ int thisYear() {
     return local ? local->tm_year + 1900 : 0;
 }
 
-bool validUsername(const std::string& username) {
-    static const std::regex pattern("^[A-Za-z0-9_]{3,20}$");
-    return std::regex_match(username, pattern);
-}
-
 bool validPassword(const std::string& password) {
     return password.size() >= 8 && password.size() <= 64;
-}
-
-bool nonWhitespace(const std::string& value) {
-    return std::any_of(value.begin(), value.end(), [](unsigned char c) {
-        return !std::isspace(c);
-    });
 }
 
 bool isAdmin(const Account& account) {
@@ -341,22 +332,6 @@ bool parseJsonBody(const httplib::Request& req, json& body, httplib::Response& r
 }
 
 // 과목 값 검사: 문제가 있으면 사유 문구, 없으면 빈 문자열
-std::string courseInvalidReason(const Course& c) {
-    auto has = [](const std::vector<std::string>& v, const std::string& s) {
-        return std::find(v.begin(), v.end(), s) != v.end();
-    };
-    if (!isValidCourseCode(c.code)) return "과목코드는 숫자 6자리여야 합니다";
-    if (std::all_of(c.name.begin(), c.name.end(), [](unsigned char ch) { return std::isspace(ch) != 0; }))
-        return "과목명이 비어 있습니다";
-    if (c.credit < 1 || c.credit > 4) return "학점은 1~4 사이여야 합니다";
-    if (!has(courseCategories(), c.category)) return "이수구분이 올바르지 않습니다";
-    if (!has(courseLanguages(), c.language)) return "강의언어가 올바르지 않습니다";
-    if (!isValidSchedule(c.schedule)) return "강의시간 형식이 올바르지 않습니다 (예: 월(1~2) 수(3))";
-    if (c.capacity < 0 || c.capacity > 999) return "정원은 0~999 사이여야 합니다";
-    if (!c.isValid()) return "값을 확인해 주세요";
-    return "";
-}
-
 constexpr const char* kPostRules =
     "게시물 정보가 올바르지 않습니다 (분류, 학기, 주차 1~16, 제목 필수, "
     "링크는 http:// 또는 https://, 날짜 예: 2026-10-20 또는 2026-10-20 13:00)";
@@ -675,11 +650,11 @@ void Server::run() {
             !readOptString(body, "studentId", "", account.studentId, res) ||
             !readOptString(body, "password", "", password, res)) return;
 
-        if (!validUsername(account.username) || !isValidRole(account.role) ||
-            !validPassword(password) ||
-            (account.role != "student" && !nonWhitespace(account.name)) ||
-            (account.role == "student" && account.studentId.empty())) {
-            setError(res, 400, kAccountRules);
+        // 틀린 항목을 짚는 문구 (예: "비밀번호는 8~64자여야 합니다")
+        const std::string reason = RequestValidation::accountError(
+            account.username, true, account.role, account.name, account.studentId, password, true);
+        if (!reason.empty()) {
+            setError(res, 400, std::string(kAccountInvalid) + " (" + reason + ")");
             return;
         }
         if (accounts->find(account.username)) {
@@ -735,11 +710,10 @@ void Server::run() {
             setError(res, 400, "마지막 관리자 계정은 삭제하거나 바꿀 수 없습니다");
             return;
         }
-        if (!isValidRole(role) ||
-            (role != "student" && !nonWhitespace(name)) ||
-            (role == "student" && studentId.empty()) ||
-            (!password.empty() && !validPassword(password))) {
-            setError(res, 400, kAccountRules);
+        // 비밀번호는 "" 이면 바꾸지 않으므로 넣었을 때만 검사
+        const std::string reason = RequestValidation::accountError(username, false, role, name, studentId, password, false);
+        if (!reason.empty()) {
+            setError(res, 400, std::string(kAccountInvalid) + " (" + reason + ")");
             return;
         }
         if (role == "student") {
@@ -1396,22 +1370,8 @@ void Server::run() {
         json body;
         if (!parseJsonBody(req, body, res)) return;
         Course course;
-        try {
-            course.code = body.at("code").get<std::string>();
-            course.name = body.at("name").get<std::string>();
-            course.credit = body.at("credit").get<decltype(course.credit)>();
-            course.professor = body.at("professor").get<std::string>();
-            course.category = body.value("category", "전공선택");
-            course.area = body.value("area", "");
-            course.schedule = body.value("schedule", "");
-            course.language = body.value("language", "한국어전용");
-            course.capacity = body.value("capacity", 0);
-            course.remote = body.value("remote", false);
-        } catch (...) {
-            setError(res, 400, "과목 정보가 올바르지 않습니다");
-            return;
-        }
-        const std::string reason = courseInvalidReason(course);
+        // 틀린 항목을 짚는 문구 (예: 학점 "abc" → "학점은 숫자여야 합니다")
+        const std::string reason = RequestValidation::readCourse(body, "", course);
         if (!reason.empty()) {
             setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
             return;
@@ -1433,22 +1393,8 @@ void Server::run() {
         json body;
         if (!parseJsonBody(req, body, res)) return;
         Course course;
-        try {
-            course.code = body.value("code", req.path_params.at("code"));
-            course.name = body.at("name").get<std::string>();
-            course.credit = body.at("credit").get<decltype(course.credit)>();
-            course.professor = body.at("professor").get<std::string>();
-            course.category = body.value("category", "전공선택");
-            course.area = body.value("area", "");
-            course.schedule = body.value("schedule", "");
-            course.language = body.value("language", "한국어전용");
-            course.capacity = body.value("capacity", 0);
-            course.remote = body.value("remote", false);
-        } catch (...) {
-            setError(res, 400, "과목 정보가 올바르지 않습니다");
-            return;
-        }
-        const std::string reason = courseInvalidReason(course);
+        // 본문에 code 가 없으면 주소의 과목코드 그대로
+        const std::string reason = RequestValidation::readCourse(body, req.path_params.at("code"), course);
         if (!reason.empty()) {
             setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
             return;
