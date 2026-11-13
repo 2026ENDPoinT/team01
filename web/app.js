@@ -1848,6 +1848,9 @@ const gradeResultText = (d, g) => (d.mode === 'letter'
     ? `등급 ${d.letter} (${round2(g.score)}점)${g.letter !== d.letter ? ` → ${g.letter}` : ''}`
     : `${round2(g.score)}점 → ${g.letter}`);
 
+// 서버 kNotEnrolled 와 같은 문구 (성적 등록에서 수강신청이 없을 때 돌려줌)
+const NOT_ENROLLED_MSG = '수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)';
+
 // 성적 등록 (수강신청한 학생·과목·학기만 가능). 고를 학생이나 과목이 없으면 안내만 띄움
 $('grade-add').onclick = () => {
     if (!state.students.length || !courseOptions().length) {
@@ -1861,8 +1864,19 @@ $('grade-add').onclick = () => {
         validate: validateGrade,
         onOpen: () => {},
         onSubmit: async (d) => {
-            const g = await api('POST', '/api/grades', gradeBody(d));
-            toast(`성적을 등록했습니다: ${gradeResultText(d, g)}`);
+            enrollGuide.hidden = true;
+            openQuickButton.hidden = true;
+            try {
+                const g = await api('POST', '/api/grades', gradeBody(d));
+                toast(`성적을 등록했습니다: ${gradeResultText(d, g)}`);
+            } catch (err) {
+                // 수강신청이 없어서 막힌 경우에만 빠른 성적 등록 안내 (오류 문구는 그대로 폼에 표시)
+                if (err.message === NOT_ENROLLED_MSG) {
+                    enrollGuide.hidden = false;
+                    openQuickButton.hidden = false;
+                }
+                throw err;
+            }
             await refreshAll();
         },
     });
@@ -1883,6 +1897,30 @@ $('grade-add').onclick = () => {
     moveButton.textContent = '평가 기준 화면 열기';
     moveButton.hidden = true;
     body.appendChild(moveButton);
+
+    // 수강신청이 없다는 오류가 났을 때만 보이는 안내와, 입력값을 유지한 채 빠른 성적 등록을 여는 버튼
+    const enrollGuide = document.createElement('div');
+    enrollGuide.className = 'form-error';
+    enrollGuide.style.color = '#d97706';
+    enrollGuide.textContent = "수강신청이 없습니다. '빠른 성적 등록' 으로 수강 정보와 성적을 한 번에 등록할 수 있습니다";
+    enrollGuide.hidden = true;
+    body.appendChild(enrollGuide);
+
+    const openQuickButton = document.createElement('button');
+    openQuickButton.type = 'button';
+    openQuickButton.textContent = '빠른 성적 등록으로 열기';
+    openQuickButton.hidden = true;
+    body.appendChild(openQuickButton);
+
+    openQuickButton.onclick = () => {
+        const values = Object.fromEntries(new FormData($('dlg-form')));
+        openQuickGradeForm(values);
+    };
+
+    // 학생·과목·학기·점수를 고치면 이전 오류에 맞춘 안내는 숨김
+    const hideEnrollGuide = () => { enrollGuide.hidden = true; openQuickButton.hidden = true; };
+    body.addEventListener('input', hideEnrollGuide);
+    body.addEventListener('change', hideEnrollGuide);
 
     let checkId = 0;
 
@@ -1944,11 +1982,16 @@ quickGradeButton.onclick = () => {
             : '담당 과목 또는 수강생이 없습니다', true);
         return;
     }
+    openQuickGradeForm();
+};
 
+// 빠른 성적 등록 폼 열기. values 로 학생·과목·학기·입력 방식·점수(등급)를 미리 채울 수 있음
+//   (성적 등록 폼에서 "수강신청이 없습니다" 안내의 버튼으로 넘어올 때 입력값을 그대로 가져옴)
+function openQuickGradeForm(values = { mode: 'score' }) {
     openForm({
         title: '빠른 성적 등록',
         fields: gradeFields(false),
-        values: { mode: 'score' },
+        values,
         validate: validateGrade,
 
         onSubmit: async (d) => {
@@ -1971,7 +2014,7 @@ quickGradeButton.onclick = () => {
     });
 
     bindGradeMode();
-};
+}
 
 
 
