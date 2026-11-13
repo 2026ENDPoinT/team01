@@ -62,6 +62,11 @@ public:
     bool saveAssessmentScores(const std::vector<AssessmentScore>& scores);
     bool loadAssessmentScores(std::vector<AssessmentScore>& scores);
 
+    // grading_modes.csv : courseCode,semester,mode
+    //   구현: #66 (지금은 스텁: save 는 true, load 는 빈 목록과 true)
+    bool saveGradingModes(const std::vector<GradingMode>& modes);
+    bool loadGradingModes(std::vector<GradingMode>& modes);
+
 private:
     std::string dataDir;
 
