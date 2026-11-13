@@ -459,6 +459,16 @@ bool rejectPastSemester(const GradeManager& gm, const Account& account,
     return true;
 }
 
+// 성적을 만들거나 바꾸는 쓰기(성적·평가 기준·항목 점수·출결)가 지난 학기를 대상으로 하면
+// 관리자도 예외 없이 403 을 채우고 true (빈 학기·미래 학기는 false)
+bool rejectPastGradeChange(const GradeManager& gm, const std::string& sem, httplib::Response& res) {
+    if (sem.empty()) return false;
+    const std::string current = currentSemester(gm);
+    if (!semester::isPast(sem, current)) return false;
+    setError(res, 403, "지난 학기 성적은 변경할 수 없습니다 (현재 학기: " + current + ")");
+    return true;
+}
+
 // 파일 전체를 읽는다 (없거나 읽기 실패면 false)
 bool readWholeFile(const std::string& path, std::string& out) {
     std::ifstream in(path, std::ios::binary);
@@ -1807,7 +1817,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
-        if (rejectPastSemester(gm, *account, grade.semester, res)) return;
+        if (rejectPastGradeChange(gm, grade.semester, res)) return;
         const int year = thisYear();
         if (!isSemesterInRange(grade.studentId, grade.semester, year)) {
             const int admission = admissionYear(grade.studentId);
@@ -1876,7 +1886,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
-        if (rejectPastSemester(gm, *account, grade.semester, res)) return;
+        if (rejectPastGradeChange(gm, grade.semester, res)) return;
 
         // 5. 학생의 입학년도에 맞는 학기인지 확인
         const int year = thisYear();
@@ -1997,7 +2007,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
-        if (rejectPastSemester(gm, *account, grade.semester, res)) return;
+        if (rejectPastGradeChange(gm, grade.semester, res)) return;
         if (gm.hasAssessments(grade.courseCode, grade.semester)) {
             setError(res, 409, kAssessedCourse);
             return;
@@ -2026,7 +2036,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
-        if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (rejectPastGradeChange(gm, semester, res)) return;
         if (gm.hasAssessments(courseCode, semester)) {
             setError(res, 409, kAssessedCourse);
             return;
@@ -2141,7 +2151,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
-        if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (rejectPastGradeChange(gm, semester, res)) return;
         if (gm.findCourse(courseCode)->isPassFail()) {
             setError(res, 409, "P/F 과목에는 평가 기준을 만들 수 없습니다 (성적은 P·NP 로 입력)");
             return;
@@ -2219,7 +2229,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
-        if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (rejectPastGradeChange(gm, semester, res)) return;
         if (!gm.removeGradingScheme(courseCode, semester)) {
             setError(res, 404, "평가 기준이 없습니다");
             return;
@@ -2281,7 +2291,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, score.courseCode, res)) return;
-        if (rejectPastSemester(gm, *account, score.semester, res)) return;
+        if (rejectPastGradeChange(gm, score.semester, res)) return;
         if (!gm.findStudent(score.studentId)) {
             setError(res, 404, "없는 학생입니다: " + score.studentId);
             return;
@@ -2331,7 +2341,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
-        if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (rejectPastGradeChange(gm, semester, res)) return;
         if (!gm.findStudent(studentId)) {
             setError(res, 404, "없는 학생입니다: " + studentId);
             return;
@@ -2440,7 +2450,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, record.courseCode, res)) return;
-        if (rejectPastSemester(gm, *account, record.semester, res)) return;
+        if (rejectPastGradeChange(gm, record.semester, res)) return;
         if (!gm.findStudent(record.studentId)) {
             setError(res, 404, "없는 학생입니다: " + record.studentId);
             return;
@@ -2485,7 +2495,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
-        if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (rejectPastGradeChange(gm, semester, res)) return;
         if (!gm.findStudent(studentId)) {
             setError(res, 404, "없는 학생입니다: " + studentId);
             return;
