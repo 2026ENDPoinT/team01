@@ -1166,7 +1166,14 @@ function openSchemeForm(ctx) {
             ...ASSESS_CATEGORIES.map((c) => ({ name: c, label: `${c} 비율 (%, 0~100 정수)`, type: 'number', min: 0, max: 100, step: 1 })),
             { name: 'mode', label: '등급 방식', options: GRADING_MODES },
             ...GRADE_RATIO_LETTERS.map((letter) => ({
-                name: `ratio_${letter}`, label: `상대평가 ${letter} 비율 (%, 0~100 정수)`,
+                name: `ratio_${letter}`,
+                label: `상대평가 ${letter} 비율 (${
+                    ['A+', 'A0'].includes(letter)
+                        ? 'A+·A0 합계 최대 30%'
+                        : ['B+', 'B0'].includes(letter)
+                            ? 'A+·A0·B+·B0 합계 최대 70%'
+                            : '전체 합계 최대 100%'
+                })`,
                 type: 'number', min: 0, max: 100, step: 1,
             })),
         ],
@@ -1228,29 +1235,32 @@ const updateRatioMaxes = (changedLetter = null) => {
 
         if (changed && changed.value !== '') {
             const value = Number(changed.value);
+
             if (Number.isFinite(value)) {
                 const max = maxRatioFor(changedLetter);
-                const adjusted = Math.max(0, Math.min(100, max, Math.trunc(value)));
 
-                // 안내 문구 영역 생성
-                let hint = changed.parentElement.querySelector('.ratio-limit-hint');
-
-                if (!hint) {
-                    hint = document.createElement('small');
-                    hint.className = 'ratio-limit-hint';
-                    hint.style.color = '#dc2626';
-                    hint.style.display = 'block';
-                    hint.style.marginTop = '4px';
-                    changed.insertAdjacentElement('afterend', hint);
-                }
-
-                // 허용 범위를 초과한 경우 안내
+                // 허용 범위를 초과하면 입력값을 최대 허용값으로 조정
                 if (value > max) {
-                    changed.value = String(adjusted);
-                    hint.textContent =
-                        `입력한 값은 허용 범위를 초과하여 ${adjusted}%로 조정했습니다. 최대 허용값은 ${max}%입니다.`;
+                    changed.value = String(
+                        Math.max(0, Math.min(100, max, Math.trunc(value)))
+                    );
+
+                    // 안내 문구 영역 생성
+                    let hint = changed.parentElement.querySelector('.ratio-limit-hint');
+
+                    if (!hint) {
+                        hint = document.createElement('small');
+                        hint.className = 'ratio-limit-hint';
+                        hint.style.color = '#dc2626';
+                        hint.style.display = 'block';
+                        hint.style.marginTop = '4px';
+                        changed.insertAdjacentElement('afterend', hint);
+                    }
+
+                    hint.textContent = `최대 허용값은 ${max}%입니다.`;
                 } else {
-                    hint.textContent = '';
+                    const hint = changed.parentElement.querySelector('.ratio-limit-hint');
+                    if (hint) hint.textContent = '';
                 }
             }
         } else if (changed) {
@@ -1467,38 +1477,73 @@ function closeAttendPicker(focusCell = false) {
 function openAttendPicker(btn, ctx) {
     const tr = btn.closest('tr');
     const cur = ctx.records.get(attendKey(tr.dataset.sid, btn.dataset.w)) ?? '';
+
     const box = document.createElement('div');
     box.className = 'att-picker';
     box.setAttribute('role', 'menu');
     box.setAttribute('aria-orientation', 'horizontal');
     box.setAttribute('aria-label', `${tr.dataset.name} ${btn.dataset.w}주 출결 선택`);
+
+    // 메뉴 버튼 생성
     box.innerHTML = ATTEND_CHOICES.map((c) => {
         const radio = c.status !== '';
         const on = radio && c.status === cur;
+
         return `<button type="button" role="${radio ? 'menuitemradio' : 'menuitem'}" ${radio ? `aria-checked="${on}"` : ''}
             class="att ${ATTEND_CLASS[c.status] ?? 'clear'}${on ? ' current' : ''}" data-status="${c.status}"
             title="${c.title}" aria-label="${c.title}" ${!radio && cur === '' ? 'disabled' : ''}>${c.text}</button>`;
     }).join('');
+
+    // 메뉴 버튼 클릭
     box.onclick = (e) => {
         const pick = e.target.closest('button[data-status]');
         if (!pick || attendPicker?.box !== box) return;
+
         closeAttendPicker(true);
         setAttend(btn, pick.dataset.status);
     };
+
+    // 메뉴를 다른 요소와 구분하기 위한 배경 및 테두리
+    box.style.position = 'fixed';
+    box.style.zIndex = '9999';
+    box.style.backgroundColor = '#111827';
+    box.style.border = '1px solid #64748b';
+    box.style.borderRadius = '12px';
+    box.style.padding = '6px';
+    box.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.65)';
+    box.style.display = 'flex';
+    box.style.gap = '6px';
+    box.style.opacity = '1';
+
     document.body.appendChild(box);
-    // 칸 가운데 아래에 붙이고 화면 밖으로 나가지 않게 보정 (아래에 자리가 없고 위에는 있으면 칸 위)
+
+    // 선택한 칸의 위쪽에 메뉴 배치
     const r = btn.getBoundingClientRect();
     const vw = document.documentElement.clientWidth;
     const vh = document.documentElement.clientHeight;
+
     const w = box.offsetWidth;
     const h = box.offsetHeight;
-    const gap = 4;
+
+    const gap = 6;
     const edge = 8;
-    let top = r.bottom + gap;
-    if (top + h > vh - edge && r.top - gap - h >= edge) top = r.top - gap - h;
-    box.style.top = Math.max(edge, Math.min(top, vh - h - edge)) + 'px';
-    box.style.left = Math.max(edge, Math.min(r.left + (r.width - w) / 2, vw - w - edge)) + 'px';
+
+    // 항상 위쪽을 우선 사용
+    let top = r.top - h - gap;
+
+    // 위쪽 공간이 부족하면 화면 안쪽 위에 표시
+    top = Math.max(edge, top);
+
+    box.style.top = Math.min(top, vh - h - edge) + 'px';
+
+    // 가로 방향은 화면 밖으로 나가지 않게 조정
+    box.style.left = Math.max(
+        edge,
+        Math.min(r.left + (r.width - w) / 2, vw - w - edge)
+    ) + 'px';
+
     attendPicker = { box, btn, ctx };
+
     btn.setAttribute('aria-expanded', 'true');
     box.querySelector('button:not(:disabled)').focus({ preventScroll: true });
 }
