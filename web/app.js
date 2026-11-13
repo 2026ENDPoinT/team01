@@ -1537,11 +1537,19 @@ async function studentReportHtml(s) {
     return `
         <div class="report">
             <div class="stat-boxes">
+                <div class="gpa-box">
+                    <div class="gpa-col">
+                        <span>전체 누적 GPA</span>
+                        ${hasGpa ? `<b>${fmt(summary.gpa)}</b>` : '<b class="small">성적 없음</b>'}
+                        <small>등록 학점 ${esc(summary.credits)}</small>
+                    </div>
+                    <div class="gpa-col">
+                        <span>전공 GPA</span>
+                        <b>${majorGpaText(summary)}</b>
+                        <small>전공 학점 ${majorCreditText(summary)}</small>
+                    </div>
+                </div>
                 ${stat('학번', esc(s.id), true)}
-                ${hasGpa ? stat('전체 누적 GPA', fmt(summary.gpa)) : stat('전체 누적 GPA', '성적 없음', true)}
-                ${stat('전체 등록 학점', esc(summary.credits))}
-                ${stat('전공 GPA', majorGpaText(summary))}
-                ${stat('전공 학점', majorCreditText(summary))}
                 ${stat('수강 건수', grades.length)}
             </div>
             ${summaryHtml}

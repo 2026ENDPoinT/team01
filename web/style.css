@@ -270,6 +270,11 @@ dialog h2 { margin: 0 0 16px; font-size: 18px; }
 .stat-boxes small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
 .stat-boxes.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .stat-boxes b.small { font-size: 16px; line-height: 28px; }
+/* 성적표 요약: 전체 누적 GPA | 전공 GPA 를 한 상자 안에 (각 칸 아래에 학점) */
+.stat-boxes > .gpa-box { grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; padding: 0; }
+.gpa-box .gpa-col { min-width: 0; padding: 10px 12px; }
+.gpa-box .gpa-col + .gpa-col { border-left: 1px solid var(--line); }
+.gpa-box b { overflow-wrap: anywhere; }
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 dialog .table-wrap { margin-bottom: 16px; background: transparent; }
 dialog table { min-width: 420px; font-size: 13px; }
@@ -464,4 +469,12 @@ input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
     .course-hero { flex-wrap: wrap; padding: 16px; }
     .post { padding: 12px 14px; }
     .stat-boxes { grid-template-columns: repeat(2, 1fr); }
+}
+/* 650px 이하: 요약 상자는 한 줄 전체 폭, 학번·수강 건수는 그 아래 두 칸 */
+@media (max-width: 650px) {
+    .stat-boxes { grid-template-columns: repeat(2, 1fr); }
+    .stat-boxes > .gpa-box { grid-column: 1 / -1; }
+    .gpa-box .gpa-col { padding: 10px; }
+    .gpa-box b { font-size: 18px; }
+    .gpa-box b.small { font-size: 15px; }
 }
