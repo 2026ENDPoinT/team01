@@ -956,10 +956,17 @@ void Server::run() {
         std::lock_guard<std::mutex> lock(mtx);
         if (!requireRole(req, res, {"admin", "professor", "student"})) return;
         const auto stats = Statistics::courseStats(gm, req.path_params.at("code"));
+        // 학기별 수강신청 인원 (화면이 과목 카드·과목 페이지에서 같은 학기를 고르고 그 학기 인원을 보이는 데 씀)
+        json enrolledBySemester = json::object();
+        for (const Enrollment& e : gm.getEnrollments()) {
+            if (e.courseCode != stats.courseCode || e.semester.empty()) continue;
+            enrolledBySemester[e.semester] = enrolledBySemester.value(e.semester, 0) + 1;
+        }
         json result = {
             {"courseCode", stats.courseCode}, {"count", stats.count},
             {"average", stats.average}, {"max", stats.max}, {"min", stats.min},
-            {"latestSemester", stats.latestSemester}, {"latestEnrolled", stats.latestEnrolled}
+            {"latestSemester", stats.latestSemester}, {"latestEnrolled", stats.latestEnrolled},
+            {"enrolledBySemester", enrolledBySemester}
         };
         res.set_content(result.dump(), "application/json; charset=utf-8");
     });

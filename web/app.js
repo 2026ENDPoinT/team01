@@ -476,8 +476,8 @@ const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 // 과목 목록 그리기 (myCourses: 교수는 담당 과목, 학생은 수강신청한 과목만)
 // 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
 // 한 줄에 과목 정보(왼쪽)와 최근 학기 수강 인원·평균(오른쪽). 성적이 없으면 평균은 '-'
-//   최근 학기 = 교수·관리자는 수강신청이 1건 이상 있는 가장 늦은 학기 (신청 기록이 없으면 학기 없이 "수강 0"),
-//     학생은 본인 수강신청 중 이 과목의 현재 학기 이후 가장 최근 학기 (과목 페이지에서 처음 보이는 학기와 같음)
+//   학기 = 교수·관리자는 수강신청이 있는 학기 중 볼 수 있는 가장 최근 학기 (없으면 현재 학기, staffSemesterOf),
+//     학생은 본인 수강신청 중 이 과목의 현재 학기 이후 가장 최근 학기 (둘 다 과목 페이지에서 처음 보이는 학기와 같음)
 async function renderCourses() {
     const list = $('course-list');
     const courses = myCourses();
@@ -513,10 +513,19 @@ async function renderCourses() {
 const mySemesterOf = (code) => sortSemesters(state.myEnrollments
     .filter((e) => e.courseCode === code && !isPastSemester(e.semester, state.currentSem))
     .map((e) => e.semester))[0] ?? '';
+// 교수·관리자 카드·과목 정보·과목 페이지 처음 학기: 이 과목에 수강신청이 있는 학기 중
+//   볼 수 있는(관리자 외에는 지난 학기 제외) 가장 최근 학기. 없으면 현재 학기
+//   semesters: 수강신청이 있는 학기 목록 (통계의 enrolledBySemester 키, 또는 과목 페이지가 받은 수강신청 목록)
+const staffSemesterOf = (semesters) => sortSemesters(semesters).find((s) => !isLockedSemester(s)) ?? state.currentSem;
 // 카드·과목 정보에 보일 {학기, 수강 인원}. 학생은 위 학기 기준이라 그 학기의 과목별 신청 인원(/api/enrollments/counts)을 씀
-//   cache: 학기 → 인원 요청 (학기당 한 번만 부르려고 호출하는 쪽이 공유). 교수·관리자는 통계의 최근 학기 그대로
+//   cache: 학기 → 인원 요청 (학기당 한 번만 부르려고 호출하는 쪽이 공유)
+//   교수·관리자는 staffSemesterOf 학기와 그 학기 인원 (통계의 enrolledBySemester)
 async function courseLatest(code, st, cache = new Map()) {
-    if (state.me.role !== 'student') return { sem: st?.latestSemester ?? '', enrolled: st?.latestEnrolled ?? 0 };
+    if (state.me.role !== 'student') {
+        const bySem = st?.enrolledBySemester ?? {};
+        const sem = staffSemesterOf(Object.keys(bySem));
+        return { sem, enrolled: bySem[sem] ?? 0 };
+    }
     const sem = mySemesterOf(code);
     if (!sem) return { sem: '', enrolled: 0 };
     if (!cache.has(sem)) cache.set(sem, api('GET', '/api/enrollments/counts?semester=' + encodeURIComponent(sem)));
@@ -629,8 +638,8 @@ function isExpired(due) {
 // 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
 //   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
 //     (visibleSemesters: 현재 학기는 항상 있고, 관리자 외에는 지난 학기가 없음)
-//   처음 보이는 학기: 학생은 수강과목 카드에 보인 학기 (본인 수강신청 중 현재 학기 이후 가장 최근 학기), 관리자·교수는
-//     이전 선택 → 게시물이 있는 가장 최근 학기 → 신청 학기(지난 학기면 제외) → 가장 최근 학기 (학생도 이전 선택이 목록에 있으면 그대로)
+//   처음 보이는 학기: 이전 선택(목록에 있으면) → 수강과목 카드에 보인 학기 (학생: mySemesterOf, 관리자·교수: staffSemesterOf)
+//     → 신청 학기(지난 학기면 제외) → 가장 최근 학기
 //   관리자·담당 교수는 아래 '평가 기준'·'출결' 영역도 그림 (같은 학기 목록, 평가 기준 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기,
 //   출결 처음 학기: 이전 선택 → 평가 기준 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
 async function renderCoursePage() {
@@ -663,8 +672,10 @@ async function renderCoursePage() {
         sems = visibleSemesters(state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester));
         fallback = sems[0] || '';
     }
-    // 학생은 수강과목 카드에 보인 학기(본인 수강신청 중 현재 학기 이후 가장 최근 학기)로 시작. 교수·관리자는 게시물이 있는 가장 최근 학기
-    const firstSem = staff ? (sems.find((s) => posts.some((p) => p.semester === s)) ?? fallback) : (mySemesterOf(code) || fallback);
+    // 수강과목 카드에 보인 학기로 시작. 학생은 본인 수강신청 중 현재 학기 이후 가장 최근 학기,
+    // 교수·관리자는 이 과목 수강신청이 있는 학기 중 볼 수 있는 가장 최근 학기 (staffSemesterOf, 방금 받은 수강신청 목록으로 계산)
+    const mine = staff ? staffSemesterOf(staffInfo[0].map((e) => e.semester)) : mySemesterOf(code);
+    const firstSem = sems.includes(mine) ? mine : fallback;
     if (!sems.includes(state.courseSem)) state.courseSem = firstSem;
     fillSelect($('course-sem'), sems.map((s) => ({ value: s, label: s })), '', state.courseSem);
 
