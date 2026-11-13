@@ -508,6 +508,28 @@ input.score-cell:disabled { color: var(--muted); cursor: not-allowed; }
 /* 수강신청 겹침 */
 .badge.overlap { background: rgba(239, 68, 68, .18); color: #f87171; margin-left: 6px; white-space: nowrap; cursor: help; }
 
+
+/* 관리자 학생 성적표: 학기별 평점 행과 펼쳐진 과목 성적의 경계를 색으로 구분 */
+.report details.semester-grade-fold {
+    background: var(--card);
+    border-color: rgba(79, 179, 217, .42);
+}
+.report details.semester-grade-fold > summary {
+    background: rgba(79, 179, 217, .13);
+    font-weight: 700;
+}
+.report details.semester-grade-fold > summary:hover {
+    background: rgba(79, 179, 217, .22);
+}
+.report details.semester-grade-fold[open] > summary {
+    background: rgba(79, 179, 217, .18);
+    border-bottom-color: rgba(79, 179, 217, .42);
+}
+.report details.semester-grade-fold > .table-wrap {
+    background: var(--bg);
+    border-color: var(--line);
+}
+
 /* 내 성적 시뮬레이션·접기 */
 .fold-bar {
     display: flex;
