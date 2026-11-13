@@ -5,8 +5,11 @@
 #include "retake.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <cctype>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <map>
 #include <iostream>
@@ -429,6 +432,54 @@ bool rejectPastSemester(const GradeManager& gm, const Account& account,
     return true;
 }
 
+// 파일 전체를 읽는다 (없거나 읽기 실패면 false)
+bool readWholeFile(const std::string& path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    if (in.bad()) return false;
+    out = buf.str();
+    return true;
+}
+
+// 내용 해시 (FNV-1a 64bit, 16자리 헥사) — 정적 파일 URL 의 ?v= 값
+std::string contentHash(const std::string& data) {
+    std::uint64_t h = 14695981039346656037ULL;
+    for (unsigned char c : data) {
+        h ^= c;
+        h *= 1099511628211ULL;
+    }
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+    return buf;
+}
+
+// html 안의 `attr="file"` 을 `attr="file?v=<해시>"` 로 바꾼다 (파일을 못 읽으면 경고 후 원본 유지)
+void versionAsset(std::string& html, const std::string& webDir,
+                  const std::string& attr, const std::string& file) {
+    const std::string needle = attr + "=\"" + file + "\"";
+    const std::size_t pos = html.find(needle);
+    if (pos == std::string::npos) return;
+    std::string data;
+    if (!readWholeFile(webDir + "/" + file, data)) {
+        std::cerr << "[server] 정적 파일을 읽을 수 없어 버전을 붙이지 못했습니다: "
+                  << webDir << "/" << file << std::endl;
+        return;
+    }
+    html.replace(pos, needle.size(),
+                 attr + "=\"" + file + "?v=" + contentHash(data) + "\"");
+}
+
+// index.html 을 읽어 style.css / app.js 참조에 내용 해시를 붙인다.
+// 엣지(Cloudflare)·브라우저에 옛 파일이 캐시돼 있어도 파일이 바뀌면 URL 이 바뀌어 곧바로 새 파일을 받는다.
+bool renderIndexHtml(const std::string& webDir, std::string& html) {
+    if (!readWholeFile(webDir + "/index.html", html)) return false;
+    versionAsset(html, webDir, "href", "style.css");
+    versionAsset(html, webDir, "src", "app.js");
+    return true;
+}
+
 }  // namespace
 
 Server::Server(GradeManager& gm, AccountStore& accounts,
@@ -504,6 +555,31 @@ std::string Server::accountJson(const Account& account) const {
 void Server::run() {
     httplib::Server svr;
     svr.set_mount_point("/", webDir);
+
+    // 모든 응답(정적 파일·API 공통)에 Cache-Control: no-cache — 지정이 없으면 Cloudflare 가
+    // 정적 파일을 기본 4시간 엣지 캐시해서 배포 후에도 옛 app.js 가 나간다. (no-cache = 매번 재검증)
+    svr.set_post_routing_handler([](const httplib::Request&, httplib::Response& res) {
+        if (!res.has_header("Cache-Control")) res.set_header("Cache-Control", "no-cache");
+    });
+
+    // index.html 은 마운트 포인트가 먼저 처리하므로 라우팅 전에 가로채서 동적으로 서빙한다.
+    // style.css / app.js 참조에 내용 해시 (?v=) 를 붙여 파일이 바뀌면 캐시 키도 바뀌게 한다.
+    svr.set_pre_routing_handler(
+        [this](const httplib::Request& req, httplib::Response& res) {
+            if ((req.method != "GET" && req.method != "HEAD") ||
+                (req.path != "/" && req.path != "/index.html")) {
+                return httplib::Server::HandlerResponse::Unhandled;
+            }
+            std::string html;
+            if (!renderIndexHtml(webDir, html)) {
+                std::cerr << "[server] index.html 을 읽을 수 없습니다: " << webDir << std::endl;
+                res.status = 404;
+                res.set_content("index.html 을 찾을 수 없습니다", "text/plain; charset=utf-8");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            res.set_content(html, "text/html; charset=utf-8");
+            return httplib::Server::HandlerResponse::Handled;
+        });
 
     // 로그인: 유일하게 공개된 API
     svr.Post("/api/login", [this](const httplib::Request& req, httplib::Response& res) {
@@ -801,6 +877,7 @@ void Server::run() {
         const std::string requestedStudent = req.get_param_value("studentId");
         const std::string requestedCourse = req.get_param_value("courseCode");
         const std::string requestedSemester = req.get_param_value("semester");
+        const std::string current = currentSemester(gm);
         const auto grades = gm.getGrades();
         json arr = json::array();
 
@@ -809,6 +886,7 @@ void Server::run() {
             if (!requestedCourse.empty() && grade.courseCode != requestedCourse) continue;
             if (!requestedSemester.empty() && grade.semester != requestedSemester) continue;
             if (account->role == "student" && grade.studentId != account->studentId) continue;
+            if (account->role == "professor" && semester::isPast(grade.semester, current)) continue;
             if (account->role == "professor" &&
                 !isProfessorOf(*account, gm, grade.courseCode)) continue;
             arr.push_back(gradeJson(grade, grades));
@@ -1048,6 +1126,7 @@ void Server::run() {
         const std::string requestedStudent = req.get_param_value("studentId");
         const std::string requestedCourse = req.get_param_value("courseCode");
         const std::string requestedSemester = req.get_param_value("semester");
+        const std::string current = currentSemester(gm);
         const auto graded = gradedEnrollments(gm);
         json arr = json::array();
         for (const Enrollment& enrollment : gm.getEnrollments()) {
@@ -1055,6 +1134,8 @@ void Server::run() {
             if (!requestedCourse.empty() && enrollment.courseCode != requestedCourse) continue;
             if (!requestedSemester.empty() && enrollment.semester != requestedSemester) continue;
             if (account->role == "student" && enrollment.studentId != account->studentId) continue;
+            if (account->role == "professor" &&
+                semester::isPast(enrollment.semester, current)) continue;
             if (account->role == "professor" &&
                 !isProfessorOf(*account, gm, enrollment.courseCode)) continue;
             arr.push_back({
