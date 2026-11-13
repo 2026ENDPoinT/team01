@@ -141,5 +141,14 @@ bool Course::isValid() const {
     if (!contains(courseLanguages(), language)) return false;
     if (!isValidSchedule(schedule)) return false;
     if (capacity < 0 || capacity > 999) return false;      // 정원: 0(제한 없음)~999
+    if (!isValidGradeType(gradeType)) return false;        // 성적 방식: letter / pf
     return true;                                           // 담당 교수·교양영역은 비어 있어도 허용
+}
+
+bool isValidGradeType(const std::string& gradeType) {
+    return gradeType == kGradeTypeLetter || gradeType == kGradeTypePassFail;
+}
+
+bool isPassFailLetter(const std::string& letter) {
+    return letter == kLetterPass || letter == kLetterNonPass;
 }

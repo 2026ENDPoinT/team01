@@ -5,6 +5,16 @@
 #include <string>
 #include <vector>
 
+// 성적 방식 (Pass/Fail 과목)
+//   letter: 9개 등급(A+~F) + 평점 (기본), pf: P(합격)·NP(불합격) 만 남고 GPA 에 들어가지 않음
+inline constexpr const char* kGradeTypeLetter = "letter";
+inline constexpr const char* kGradeTypePassFail = "pf";
+// P/F 과목 성적의 등급 (Grade::assignedLetter 에 저장, 점수는 P = 100, NP = 0)
+inline constexpr const char* kLetterPass = "P";
+inline constexpr const char* kLetterNonPass = "NP";
+inline constexpr double kPassScore = 100.0;
+inline constexpr double kNonPassScore = 0.0;
+
 struct Course {
     std::string code;                      // 과목 코드: 숫자 6자리 (예: "109004")
     std::string name;                      // 과목명
@@ -16,10 +26,19 @@ struct Course {
     std::string language = "한국어전용";   // 강의언어 (courseLanguages() 중 하나)
     int capacity = 0;                      // 학기당 정원 (0 이면 제한 없음, 최대 999)
     bool remote = false;                   // 원격강좌 여부
+    std::string gradeType = kGradeTypeLetter;  // 성적 방식: kGradeTypeLetter 또는 kGradeTypePassFail. courses.csv 11번째 칸
 
-    // 과목코드 형식·과목명 필수, 학점 범위, 이수구분·강의언어 목록, 강의시간 형식, 정원 범위를 검사
+    // 과목코드 형식·과목명 필수, 학점 범위, 이수구분·강의언어 목록, 강의시간 형식, 정원 범위, 성적 방식을 검사
     bool isValid() const;
+    // P/F 과목이면 true
+    bool isPassFail() const { return gradeType == kGradeTypePassFail; }
 };
+
+// 성적 방식 검사: "letter" 또는 "pf"
+bool isValidGradeType(const std::string& gradeType);
+
+// P/F 과목 성적의 등급인지: "P" 또는 "NP"
+bool isPassFailLetter(const std::string& letter);
 
 // 과목코드 형식 검사: 숫자 6자리 (예: "100762", "109004"). Grade::isValid 도 같은 규칙을 씀
 bool isValidCourseCode(const std::string& code);

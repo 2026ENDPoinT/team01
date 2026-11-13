@@ -113,7 +113,9 @@
         <section id="tab-grades" class="tab">
             <div class="page-head">
                 <h2 class="page-title">성적</h2>
-                <button class="primary" id="grade-add">+ 성적 등록</button>
+                <div class="grade-actions">
+                    <button class="primary" id="grade-add">+ 성적 등록</button>
+                </div>
             </div>
             <div class="toolbar">
                 <select id="grade-f-student"></select>
@@ -178,7 +180,7 @@
                     <h3 class="sub-title">출결</h3>
                     <label for="attend-sem">학기</label><select id="attend-sem"></select>
                     <span class="spacer"></span>
-                    <span class="hint">칸을 누르면 없음 → 출석 → 지각 → 결석 → 공결 순으로 바뀌고 바로 저장 · 지각 3회 = 결석 1회 · 기록 없는 주차는 출석</span>
+                    <span class="hint">칸을 누르고 출/지/결/공 중 하나를 고르면 바로 저장됩니다 (X = 기록 지우기) · 지각 3회 = 결석 1회 · 기록 없는 주차는 출석</span>
                 </div>
                 <div id="attend-body"></div>
             </div>
