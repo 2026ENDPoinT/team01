@@ -1059,7 +1059,7 @@ void Server::run() {
             semesters.push_back({
                 {"semester", s.semester}, {"gpa", s.gpa}, {"credits", s.credits},
                 {"majorGpa", s.majorCredits > 0 ? json(s.majorGpa) : json(nullptr)},
-                {"majorCredits", s.majorCredits}
+                {"majorCredits", s.majorCredits}, {"earnedCredits", s.earnedCredits}
             });
         }
         setJson(res, 200, json{
@@ -1067,7 +1067,8 @@ void Server::run() {
             {"gpa", summary.credits > 0 ? json(summary.gpa) : json(nullptr)},
             {"credits", summary.credits},
             {"majorGpa", summary.majorCredits > 0 ? json(summary.majorGpa) : json(nullptr)},
-            {"majorCredits", summary.majorCredits}
+            {"majorCredits", summary.majorCredits},
+            {"earnedCredits", summary.earnedCredits}
         });
     });
 
@@ -1125,7 +1126,8 @@ void Server::run() {
                 {"gpa", s.credits > 0 ? json(s.gpa) : json(nullptr)},
                 {"credits", s.credits},
                 {"majorGpa", s.majorCredits > 0 ? json(s.majorGpa) : json(nullptr)},
-                {"majorCredits", s.majorCredits}
+                {"majorCredits", s.majorCredits},
+                {"earnedCredits", s.earnedCredits}
             };
         };
         json itemsJson = json::array();

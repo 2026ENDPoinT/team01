@@ -41,7 +41,8 @@
 //   GET    /api/stats/gpa/batch      전체 학생 GPA [{studentId,semester,gpa}] (admin, 개별 GPA 와 같은 계산 규칙)
 //   GET    /api/stats/gpa/:id         학생 GPA {studentId,semester,gpa} (?semester=) (admin, student 본인)
 //                                     평점 계산에 들어간 학점이 0 이면 "gpa": null
-//   GET    /api/stats/summary/:id     학기별·누적 평점 {"semesters":[{semester,gpa,credits}],"gpa","credits"}
+//   GET    /api/stats/summary/:id     학기별·누적 평점 {"semesters":[{semester,gpa,credits,earnedCredits,…}],"gpa","credits","earnedCredits",…}
+//                                     credits = 계산 학점, earnedCredits = 취득 학점 (statistics.h)
 //                                     (credits 0 이면 "gpa": null) (admin, student 본인)
 //   GET    /api/stats/course/batch   전체 과목 통계 배열 (로그인, 개별 과목 통계와 같은 필드)
 //   GET    /api/stats/course/:code    과목 평균/최고/최저 + latestSemester·latestEnrolled·enrolledBySemester (로그인)

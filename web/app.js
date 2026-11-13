@@ -2054,12 +2054,14 @@ function gpaChartSvg(points) {
         <svg class="gpa-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="학기별 GPA 변화 그래프">${grid}${limit}${line}${dots}</svg>`;
 }
 
-// 학생 한 명의 성적표 HTML: 요약(학번·전체 누적 GPA·전체 등록 학점·수강 건수) + 학기별 평점 표 + GPA 그래프
+// 학생 한 명의 성적표 HTML: 요약(학번·전체 누적 GPA·계산 학점·취득 학점·수강 건수) + 학기별 평점 표 + GPA 그래프
+//   학점 용어 (서버 statistics.h 와 같음): 계산 학점 = 평점 계산에 들어간 학점 (재수강으로 지워진 성적·P/F 제외),
+//   취득 학점 = 계산 학점 중 F 가 아닌 과목 + P/F 과목 중 P. '등록 학점' 이라는 말은 쓰지 않음
 //   + 학기별 성적 목록 + 학사경고 + CSV 내려받기
 // 성적표 창(관리자)과 내 성적 페이지(학생)가 같이 씀. s = {id, name}
 // 평점·학점은 서버 /api/stats/summary/:id (gpaSummary) 값을 그대로 씀
 //   summaryReq: 이미 보낸 summary 요청 (내 성적 화면이 같은 값을 시뮬레이션에도 써서 한 번만 받으려고 넘김, 없으면 여기서 받음)
-//   학기별 과목 성적은 학기마다 접었다 펼치는 <details class="fold"> (기본 접힘, summary = 학기 · 학기 GPA · 등록 학점)
+//   학기별 과목 성적은 학기마다 접었다 펼치는 <details class="fold"> (기본 접힘, summary = 학기 · 학기 GPA · 계산 학점 · 취득 학점)
 //   (재수강으로 지워진 성적·없는 과목은 서버가 이미 뺌, 계산 학점이 0 이면 gpa null = 등록된 성적 없음)
 async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(s.id))) {
     const id = encodeURIComponent(s.id);
@@ -2100,6 +2102,7 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
         : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
 
     const semItems = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
+        // 재수강으로 지워진(R) 성적만 있는 학기는 서버 요약에 없음 → 계산·취득 학점 0 (R 은 둘 다에서 빠짐), 평점 '-'
         const info = semInfo[sem];
                 const rows = grades.filter((g) => g.semester === sem).map((g) => {
             const pf = PF_LETTERS.includes(g.letter);
@@ -2110,7 +2113,7 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
         }).join('');
         return `
             <details class="fold" data-key="sem:${esc(sem)}">
-                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 계산 학점 ${esc(info?.credits ?? '-')} · 취득 학점 ${earnedText(info)}</summary>
+                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 계산 학점 ${esc(info?.credits ?? 0)} · 취득 학점 ${earnedText(info ?? { earnedCredits: 0 })}</summary>
                 <div class="table-wrap">
                     <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
                 </div>
@@ -2467,7 +2470,8 @@ function retakeResultHtml(r) {
             <table><thead><tr><th></th><th class="num">전 → 후</th></tr></thead><tbody>
                 <tr><td>전체 GPA</td><td class="num">${beforeAfter(r.before.gpa, r.after.gpa)}</td></tr>
                 <tr><td>전공 GPA</td><td class="num">${beforeAfter(r.before.majorGpa, r.after.majorGpa)}</td></tr>
-                <tr><td>등록 학점</td><td class="num">${beforeAfter(r.before.credits, r.after.credits, 0)}</td></tr>
+                <tr><td>계산 학점</td><td class="num">${beforeAfter(r.before.credits, r.after.credits, 0)}</td></tr>
+                <tr><td>취득 학점</td><td class="num">${beforeAfter(r.before.earnedCredits, r.after.earnedCredits, 0)}</td></tr>
             </tbody></table>
         </div>
         <p class="hint">A+ 는 A0 로 계산됩니다 (재수강 성적은 A0 까지만 반영, 이전 성적은 삭제된 성적으로 GPA 에서 빠집니다)</p>`;
