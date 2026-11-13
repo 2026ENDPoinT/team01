@@ -532,13 +532,13 @@ main:has(#tab-timetable.active) { max-width: 1280px; }
 .timetable-summary span { color:var(--muted); }
 .timetable-grid { display:grid; grid-template-columns:48px repeat(var(--day-count), minmax(0,1fr)); grid-template-rows:34px repeat(var(--period-count), minmax(54px,1fr)); position:relative; border-top:1px solid var(--line); border-left:1px solid var(--line); background:var(--card); }
 .timetable-corner,.timetable-day,.timetable-period,.timetable-cell { border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
-.timetable-day { display:flex; align-items:center; justify-content:center; font-weight:700; background:var(--hover); }
+.timetable-day { display:flex; align-items:center; justify-content:center; font-weight:700; background:var(--hover); grid-row:1; }
 .timetable-period { grid-column:1; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; }
 .timetable-cell { min-width:0; }
 .timetable-block { z-index:1; min-width:0; margin:2px; padding:5px 7px; overflow:hidden; display:flex; flex-direction:column; gap:3px; border-radius:6px; background:var(--course-color); border:1px solid var(--course-color); color:#fff; font-size:12px; line-height:1.25; }
 .timetable-block strong,.timetable-block span { overflow:hidden; text-overflow:ellipsis; }
 .timetable-block span { opacity:.85; font-size:11px; }
-.timetable-block.candidate { background:color-mix(in srgb, var(--course-color) 16%, var(--card)); color:var(--text); border:2px dashed var(--course-color); }
+.timetable-block.candidate { background:var(--card); color:var(--text); border:2px dashed var(--course-color); }
 .timetable-unscheduled { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin:14px 0 24px; padding:12px 14px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
 .timetable-unscheduled strong { margin-right:8px; }
 .timetable-unscheduled span:not(.hint) { color:var(--muted); }

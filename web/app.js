@@ -433,7 +433,8 @@ function resetView() {
         'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-hero', 'course-filter', 'course-posts', 'course-sem',
-        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'grade-pagination'].forEach((id) => ($(id).innerHTML = ''));
+        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'grade-pagination', 'timetable-content'].forEach((id) => { const el = $(id); if (el) el.innerHTML = ''; });
+    if ($('timetable-content')) delete $('timetable-content').dataset.semester;
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
     delete $('attend-body').dataset.key;
@@ -1731,20 +1732,27 @@ function timetableConflict(a, b) {
 }
 function timetableColor(code) {
     let hash = 0;
-    for (const ch of String(code)) hash = ((hash * 31) + ch.charCodeAt(0)) | 0;
-    return `hsl(${Math.abs(hash) % 360} 48% 34%)`;
+    for (const ch of String(code ?? '')) hash = ((hash * 31) + ch.charCodeAt(0)) >>> 0;
+    return `hsl(${hash % 360} 48% 34%)`;
 }
 function timetableKey(semester) {
     return `grade-manager:timetable-candidates:${state.me?.studentId || state.me?.username}:${semester}`;
 }
 function getTimetableCandidates(semester) {
+    // 일부 브라우저/시크릿 환경에서는 localStorage 접근 자체가 예외를 던질 수 있다.
     try {
-        const value = JSON.parse(localStorage.getItem(timetableKey(semester)) || '[]');
+        const value = JSON.parse(window.localStorage.getItem(timetableKey(semester)) || '[]');
         return Array.isArray(value) ? value.filter(x => typeof x === 'string') : [];
     } catch { return []; }
 }
 function setTimetableCandidates(semester, codes) {
-    localStorage.setItem(timetableKey(semester), JSON.stringify([...new Set(codes)]));
+    try {
+        window.localStorage.setItem(timetableKey(semester), JSON.stringify([...new Set(codes)]));
+        return true;
+    } catch (e) {
+        toast('후보 과목을 브라우저에 저장하지 못했습니다. 브라우저 저장 공간 설정을 확인하세요.', true);
+        return false;
+    }
 }
 function timetableCourse(code) { return state.courses.find(c => c.code === code); }
 function timetableDays(courses) {
@@ -1758,7 +1766,9 @@ function timetableBlock(course, slot, candidate = false) {
 async function renderTimetable() {
     if (state.me?.role !== 'student') return;
     const root = $('timetable-content');
-    const enrolled = state.myEnrollments || [];
+    // HTML 탭이 아직 로드되지 않았거나 제거된 경우 렌더링 중단
+    if (!root) return;
+    const enrolled = Array.isArray(state.myEnrollments) ? state.myEnrollments : [];
     const semesters = sortSemesters([...enrolled.map(e => e.semester), state.currentSem]);
     const previous = root.dataset.semester || state.currentSem;
     const semester = semesters.includes(previous) ? previous : (semesters[0] || state.currentSem);
@@ -1805,11 +1815,12 @@ async function renderTimetable() {
         const existing = candidates.map(timetableCourse).filter(Boolean);
         const conflict = [...enrolledCourses, ...existing].find(x => timetableConflict(x.schedule, course.schedule));
         if (conflict) { toast(`${conflict.name} 과목과 강의시간이 겹칩니다`, true); return; }
-        setTimetableCandidates(semester, [...candidates, code]);
+        if (!setTimetableCandidates(semester, [...candidates, code])) return;
         renderTimetable();
     };
     root.querySelectorAll('[data-timetable-remove]').forEach(btn => btn.onclick = () => {
-        setTimetableCandidates(semester, candidates.filter(code => code !== btn.dataset.timetableRemove)); renderTimetable();
+        if (!setTimetableCandidates(semester, candidates.filter(code => code !== btn.dataset.timetableRemove))) return;
+        renderTimetable();
     });
     root.querySelectorAll('[data-timetable-enroll]').forEach(btn => btn.onclick = async () => {
         const courseCode = btn.dataset.timetableEnroll;
