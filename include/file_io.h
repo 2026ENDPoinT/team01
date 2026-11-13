@@ -23,6 +23,13 @@ struct Account;  // account.h 가 이 파일을 include 하므로 미리 선언�
 //   ReportExporter 도 같은 규칙으로 CSV 를 만들도록 공개
 std::string joinCsvLine(const std::vector<std::string>& fields);
 
+// relative_grade_ratios.csv: 과목·학기별 A+, A0, B+, B0, C+, C0, F 비율
+struct RelativeGradeRatio {
+    std::string courseCode;
+    std::string semester;
+    std::vector<int> ratios;
+};
+
 class FileIO {
 public:
     explicit FileIO(const std::string& dataDir);
@@ -76,6 +83,9 @@ public:
     //   형식이 틀린 줄(GradingMode::isValid)·같은 (과목, 학기) 중복 줄은 건너뜀
     bool saveGradingModes(const std::vector<GradingMode>& modes);
     bool loadGradingModes(std::vector<GradingMode>& modes);
+
+    bool saveRelativeGradeRatios(const std::vector<RelativeGradeRatio>& ratios);
+    bool loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios);
 
 private:
     std::string dataDir;

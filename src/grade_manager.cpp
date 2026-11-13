@@ -37,13 +37,14 @@ bool gradeFitsCourse(const Grade& grade, const Course& course) {
 // 생성자: CSV 파일이 있는 폴더 경로를 FileIO 에 넘겨 준다.
 GradeManager::GradeManager(const std::string& dataDir) : fileIO(dataDir) {}
 
-// CSV 10개(학생/과목/성적/수강신청/설정/게시물/평가 항목/항목 점수/출결/등급 방식)를 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
+// CSV 파일을 모두 읽어 멤버에 채운다. 하나라도 실패하면 false.
 bool GradeManager::load() {
     if (!(fileIO.loadStudents(students) && fileIO.loadCourses(courses) && fileIO.loadGrades(grades) &&
           fileIO.loadEnrollments(enrollments) && fileIO.loadSettings(enrollmentSemester) &&
           fileIO.loadPosts(posts) && fileIO.loadAssessments(assessments) &&
           fileIO.loadAssessmentScores(assessmentScores) && fileIO.loadAttendance(attendance) &&
-          fileIO.loadGradingModes(gradingModes))) {
+          fileIO.loadGradingModes(gradingModes) &&
+           fileIO.loadRelativeGradeRatios(relativeGradeRatios))) {
         return false;
     }
     // 신청 학기 값이 깨져 있으면 "신청 기간 아님" 으로 시작
@@ -52,16 +53,24 @@ bool GradeManager::load() {
                   << "\" 가 올바르지 않아 비웁니다." << std::endl;
         enrollmentSemester.clear();
     }
+
+    // 저장된 상대평가 등급도 현재 비율·산출 규칙으로 다시 계산한다.
+    for (const GradingMode& mode : gradingModes) {
+        if (mode.mode == kGradingRelative) {
+            applyGradingMode(mode.courseCode, mode.semester);
+        }
+    }
     return true;
 }
 
-// 메모리의 학생/과목/성적/수강신청/설정/게시물/평가 항목/항목 점수/출결/등급 방식을 CSV 10개에 모두 저장한다. 하나라도 실패하면 false.
+// 메모리의 데이터를 CSV 파일들에 저장한다. 하나라도 실패하면 false.
 bool GradeManager::save() {
     return fileIO.saveStudents(students) && fileIO.saveCourses(courses) && fileIO.saveGrades(grades) &&
            fileIO.saveEnrollments(enrollments) && fileIO.saveSettings(enrollmentSemester) &&
            fileIO.savePosts(posts) && fileIO.saveAssessments(assessments) &&
            fileIO.saveAssessmentScores(assessmentScores) && fileIO.saveAttendance(attendance) &&
-           fileIO.saveGradingModes(gradingModes);
+           fileIO.saveGradingModes(gradingModes) &&
+           fileIO.saveRelativeGradeRatios(relativeGradeRatios);
 }
 
 // ----- 학생 -----
@@ -247,6 +256,11 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
                 mode.courseCode = course.code;
             }
         }
+        for (RelativeGradeRatio& ratio : relativeGradeRatios) {
+            if (ratio.courseCode == code) {
+                ratio.courseCode = course.code;
+            }
+        }
     }
     // 모든 검사를 통과한 뒤에 마지막으로 덮어쓴다.
     *it = course;
@@ -285,6 +299,11 @@ bool GradeManager::removeCourse(const std::string& code) {
     gradingModes.erase(std::remove_if(gradingModes.begin(), gradingModes.end(),
                                       [&](const GradingMode& mode) { return mode.courseCode == code; }),
                        gradingModes.end());
+    relativeGradeRatios.erase(std::remove_if(relativeGradeRatios.begin(), relativeGradeRatios.end(),
+                                             [&](const RelativeGradeRatio& ratio) {
+                                                 return ratio.courseCode == code;
+                                             }),
+                              relativeGradeRatios.end());
     return true;
 }
 
@@ -896,11 +915,24 @@ std::string GradeManager::getGradingMode(const std::string& courseCode, const st
     return kGradingAbsolute;
 }
 
+
+std::vector<int> GradeManager::getRelativeGradeRatios(const std::string& courseCode,
+                                                       const std::string& semester) const {
+    for (const RelativeGradeRatio& ratio : relativeGradeRatios) {
+        if (ratio.courseCode == courseCode && ratio.semester == semester &&
+            RelativeGrading::validRatios(ratio.ratios)) {
+            return ratio.ratios;
+        }
+    }
+    return RelativeGrading::defaultRatios();
+}
+
 // 평가 기준 만들기·바꾸기: 6분류 비율(0 포함)과 등급 방식을 한 번에 저장한다.
 // false: 없는 과목·P/F 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
 //        처음 만드는데 그 과목·학기에 이미 성적(직접 입력)이 있음
 bool GradeManager::setGradingScheme(const std::string& courseCode, const std::string& semester,
-                                    const std::vector<int>& weights, const std::string& mode) {
+                                    const std::vector<int>& weights, const std::string& mode,
+                                    const std::vector<int>& gradeRatios) {
     // 인자가 멤버 원소를 가리킬 수도 있으므로 바꾸기 전에 복사해 둔다.
     const std::string code = courseCode;
     const std::string sem = semester;
@@ -919,7 +951,8 @@ bool GradeManager::setGradingScheme(const std::string& courseCode, const std::st
         }
         weightSum += weight;
     }
-    if (weightSum != 100 || (newMode != kGradingAbsolute && newMode != kGradingRelative)) {
+    if (weightSum != 100 || (newMode != kGradingAbsolute && newMode != kGradingRelative) ||
+        !RelativeGrading::validRatios(gradeRatios)) {
         return false;
     }
     // 직접 입력한 성적이 있는 과목·학기는 항목 계산 과목으로 바꿀 수 없음 (그 성적이 덮어써지거나 지워지므로)
@@ -958,6 +991,15 @@ bool GradeManager::setGradingScheme(const std::string& courseCode, const std::st
     } else {
         gradingModes.push_back({code, sem, newMode});
     }
+    auto ratioIt = std::find_if(relativeGradeRatios.begin(), relativeGradeRatios.end(),
+                                [&](const RelativeGradeRatio& current) {
+                                    return current.courseCode == code && current.semester == sem;
+                                });
+    if (ratioIt != relativeGradeRatios.end()) {
+        ratioIt->ratios = gradeRatios;
+    } else {
+        relativeGradeRatios.push_back({code, sem, gradeRatios});
+    }
     // 4) 수강생 전원 재계산. 수강생이 0명이어도 등급은 한 번 다시 정한다.
     syncCourse(code, sem);
     applyGradingMode(code, sem);
@@ -987,6 +1029,11 @@ bool GradeManager::removeGradingScheme(const std::string& courseCode, const std:
                                           return current.courseCode == code && current.semester == sem;
                                       }),
                        gradingModes.end());
+    relativeGradeRatios.erase(std::remove_if(relativeGradeRatios.begin(), relativeGradeRatios.end(),
+                                             [&](const RelativeGradeRatio& ratio) {
+                                                 return ratio.courseCode == code && ratio.semester == sem;
+                                             }),
+                              relativeGradeRatios.end());
     grades.erase(std::remove_if(grades.begin(), grades.end(), [&](const Grade& grade) {
         return grade.courseCode == code && grade.semester == sem;
     }), grades.end());
@@ -1044,7 +1091,8 @@ void GradeManager::applyGradingMode(const std::string& courseCode, const std::st
     for (const Grade* grade : targets) {
         scores.push_back(grade->score);
     }
-    const std::vector<std::string> letters = RelativeGrading::assignLetters(scores);
+    const std::vector<std::string> letters = RelativeGrading::assignLetters(
+        scores, getRelativeGradeRatios(courseCode, semester));
     for (size_t i = 0; i < targets.size() && i < letters.size(); i++) {
         targets[i]->assignedLetter = letters[i];
     }

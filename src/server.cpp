@@ -233,6 +233,20 @@ json gradingSchemeItemsJson(const GradeManager& gm, const std::string& courseCod
     return result;
 }
 
+const std::vector<std::string>& relativeGradeLetters() {
+    static const std::vector<std::string> letters = {"A+", "A0", "B+", "B0", "C+", "C0", "F"};
+    return letters;
+}
+
+json relativeGradeRatiosJson(const GradeManager& gm, const std::string& courseCode,
+                             const std::string& semester) {
+    const std::vector<int> ratios = gm.getRelativeGradeRatios(courseCode, semester);
+    json result = json::object();
+    const auto& letters = relativeGradeLetters();
+    for (size_t i = 0; i < letters.size(); ++i) result[letters[i]] = ratios[i];
+    return result;
+}
+
 // 본문의 문자열 칸: 없거나 문자열이 아니면 400 "<칸> 값이 올바르지 않습니다" 를 채우고 false
 bool readString(const json& body, const char* key, std::string& out, httplib::Response& res) {
     const auto it = body.find(key);
@@ -2067,7 +2081,8 @@ void Server::run() {
             {"courseCode", courseCode},
             {"semester", semester},
             {"mode", gm.getGradingMode(courseCode, semester)},
-            {"items", items}
+            {"items", items},
+            {"gradeRatios", relativeGradeRatiosJson(gm, courseCode, semester)}
         });
     });
 
@@ -2114,7 +2129,8 @@ void Server::run() {
                 {"courseCode", courseCode},
                 {"semester", semester},
                 {"mode", gm.getGradingMode(courseCode, semester)},
-                {"items", gradingSchemeItemsJson(gm, courseCode, semester)}
+                {"items", gradingSchemeItemsJson(gm, courseCode, semester)},
+                {"gradeRatios", relativeGradeRatiosJson(gm, courseCode, semester)}
             });
         }
         setJson(res, 200, arr);
@@ -2174,6 +2190,37 @@ void Server::run() {
             setError(res, 400, kGradingSchemeRules);
             return;
         }
+
+        std::vector<int> gradeRatios = gm.getRelativeGradeRatios(courseCode, semester);
+        const auto ratioIt = body.find("gradeRatios");
+        if (ratioIt != body.end()) {
+            if (!ratioIt->is_object()) {
+                setError(res, 400, "상대평가 등급 비율은 A+, A0, B+, B0, C+, C0, F의 정수 비율이어야 합니다");
+                return;
+            }
+            const auto& letters = relativeGradeLetters();
+            for (auto it = ratioIt->begin(); it != ratioIt->end(); ++it) {
+                const auto label = std::find(letters.begin(), letters.end(), it.key());
+                if (label == letters.end() || !it.value().is_number_integer()) {
+                    setError(res, 400, "상대평가 등급 비율은 A+, A0, B+, B0, C+, C0, F의 정수 비율이어야 합니다");
+                    return;
+                }
+                const long long value = it.value().get<long long>();
+                if (value < 0 || value > 100) {
+                    setError(res, 400, "상대평가 등급 비율은 0~100 정수여야 합니다");
+                    return;
+                }
+                gradeRatios[static_cast<size_t>(label - letters.begin())] = static_cast<int>(value);
+            }
+        }
+        int ratioTotal = 0;
+        for (int value : gradeRatios) ratioTotal += value;
+        if (ratioTotal != 100) {
+            setError(res, 400, "상대평가 등급 비율 합계가 100이어야 합니다 (현재 " +
+                                   std::to_string(ratioTotal) + "%)");
+            return;
+        }
+
         if (gm.getAssessments(courseCode, semester).empty()) {
             for (const Grade& grade : gm.getGrades()) {
                 if (grade.courseCode == courseCode && grade.semester == semester) {
@@ -2186,7 +2233,7 @@ void Server::run() {
         for (const std::string& category : assessmentCategories()) {
             weightsVector.push_back(weights.at(category));
         }
-        if (!gm.setGradingScheme(courseCode, semester, weightsVector, mode)) {
+        if (!gm.setGradingScheme(courseCode, semester, weightsVector, mode, gradeRatios)) {
             setError(res, 400, kGradingSchemeRules);
             return;
         }
@@ -2199,7 +2246,8 @@ void Server::run() {
             {"courseCode", courseCode},
             {"semester", semester},
             {"mode", gm.getGradingMode(courseCode, semester)},
-            {"items", items}
+            {"items", items},
+            {"gradeRatios", relativeGradeRatiosJson(gm, courseCode, semester)}
         });
     });
 

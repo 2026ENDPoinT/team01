@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <utility>
 
 #include "account.h"
 
@@ -662,6 +663,59 @@ bool FileIO::loadGradingModes(std::vector<GradingMode>& modes) {
             continue;
         }
         modes.push_back(m);
+    }
+    return true;
+}
+
+
+// relative_grade_ratios.csv : courseCode,semester,A+,A0,B+,B0,C+,C0,F
+const char* const kRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,C0,F";
+bool FileIO::saveRelativeGradeRatios(const std::vector<RelativeGradeRatio>& ratios) {
+    std::string content = std::string(kRelativeGradeRatiosHeader) + "\n";
+    for (const RelativeGradeRatio& item : ratios) {
+        if (item.ratios.size() != 7) continue;
+        std::vector<std::string> fields = {item.courseCode, item.semester};
+        int total = 0;
+        for (int value : item.ratios) {
+            fields.push_back(std::to_string(value));
+            total += value;
+        }
+        if (total == 100) content += joinCsvLine(fields);
+    }
+    return atomicWrite(dataDir + "/relative_grade_ratios.csv", content);
+}
+
+bool FileIO::loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios) {
+    const std::string path = dataDir + "/relative_grade_ratios.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kRelativeGradeRatiosHeader}, rows)) return false;
+
+    ratios.clear();
+    for (const CsvRow& row : rows) {
+        RelativeGradeRatio item;
+        item.courseCode = row.fields[0];
+        item.semester = row.fields[1];
+        int total = 0;
+        bool valid = true;
+        for (size_t i = 2; i < row.fields.size(); ++i) {
+            int value = 0;
+            if (!parseInt(row.fields[i], value) || value < 0 || value > 100) {
+                valid = false;
+                break;
+            }
+            item.ratios.push_back(value);
+            total += value;
+        }
+        if (item.ratios.size() != 7 || total != 100) valid = false;
+        const bool duplicate = std::any_of(ratios.begin(), ratios.end(), [&](const RelativeGradeRatio& other) {
+            return other.courseCode == item.courseCode && other.semester == item.semester;
+        });
+        if (!valid || item.courseCode.empty() || item.semester.empty() || duplicate) {
+            std::cerr << "경고: " << path << " " << row.lineNumber
+                      << "번째 줄 무시 (상대평가 등급 비율이 올바르지 않음)" << std::endl;
+            continue;
+        }
+        ratios.push_back(std::move(item));
     }
     return true;
 }
