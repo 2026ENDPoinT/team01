@@ -77,7 +77,7 @@ struct RetakeItemResult {
     std::string previousLetter;  // 지금 반영된 가장 늦은 학기 성적의 등급 (Retake::officialLetter)
     std::string appliedLetter;   // 가상 성적의 등급 (Retake::officialLetter, 재수강이면 A+ → A0)
 };
-enum class RetakeError { None, NoCourse, NoGrade, BadLetter, Duplicate, FutureGrade, PassFail };
+enum class RetakeError { None, NoCourse, NoGrade, BadLetter, Duplicate, FutureGrade, PassFail, NotEligible };
 struct RetakeSimulation {
     RetakeError error = RetakeError::None;
     std::string message;  // error 가 None 이 아닐 때 한 줄 문구
@@ -87,7 +87,7 @@ struct RetakeSimulation {
 };
 // 그 학생의 성적 복사본에 items 마다 currentSemester 의 가상 성적(letterToScore)을 넣고 (그 학기에 이미 성적이 있으면 대체),
 // 기존 gpaSummary 규칙으로 전/후를 계산. 현재 학기보다 늦은 학기 성적이 있는 과목은 FutureGrade 오류,
-// P/F 과목은 등급을 고르는 대상이 아니므로 PassFail 오류
+// P/F 과목은 PassFail 오류, 현재 반영 등급이 C+ 또는 F가 아니면 NotEligible 오류
 RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& studentId,
                                 const std::string& currentSemester,
                                 const std::vector<RetakeItem>& items);

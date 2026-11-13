@@ -84,6 +84,8 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const gpaOf = (r) => (typeof r === 'number' ? r : r?.gpa);
 // 직접 입력할 수 있는 등급 (서버 letterToScore 가 받는 값)
 const GRADE_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'C0', 'D+', 'D0', 'F'];
+// 재수강 시뮬레이션에서 선택할 수 있는 예상 등급 (최고 A0)
+const RETAKE_GRADE_LETTERS = ['A0', 'B+', 'B0', 'C+', 'C0', 'D+', 'D0', 'F'];
 // P/F 과목 (course.gradeType 'pf'): 성적은 P(합격)·NP(불합격) 만 (서버 kLetterPass·kLetterNonPass)
 const PF_LETTERS = ['P', 'NP'];
 const isPassFailCourse = (code) => state.courses.find((c) => c.code === code)?.gradeType === 'pf';
@@ -2478,12 +2480,12 @@ function targetGpaHtml(res, gpa, credit) {
 
 // 시뮬레이션 상자 입력값·펼침 상태 (화면을 다시 그려도 유지, 다른 학생으로 로그인하면 초기화)
 //   credits: null = 사용자가 건드리지 않음 (기본값 = 현재 학기 신청 학점 합)
-const mySim = { owner: '', target: '', credits: null, open: false, retakeCourse: '', retakeLetter: 'A+' };
+const mySim = { owner: '', target: '', credits: null, open: false, retakeCourse: '', retakeLetter: 'A0' };
 
 // 내 성적 화면 맨 위 '시뮬레이션' 상자 (접힘 기본). 안에 sim-section 을 하나씩 추가
 //   summary: 서버 /api/stats/summary/:id 응답 (gpa, credits)
 function simBoxHtml(summary) {
-    if (mySim.owner !== state.me.studentId) Object.assign(mySim, { owner: state.me.studentId, target: '', credits: null, open: false, retakeCourse: '', retakeLetter: 'A+' });
+    if (mySim.owner !== state.me.studentId) Object.assign(mySim, { owner: state.me.studentId, target: '', credits: null, open: false, retakeCourse: '', retakeLetter: 'A0' });
     const hasGpa = typeof summary.gpa === 'number' && summary.credits > 0;
     const planned = state.myEnrollments.filter((e) => e.semester === state.currentSem)
         .reduce((t, e) => t + (Number(state.courses.find((c) => c.code === e.courseCode)?.credit) || 0), 0);
@@ -2694,9 +2696,10 @@ async function renderRetakeSim() {
         sec.id = 'sim-retake';
         box.appendChild(sec);
     }
-    const courses = [...latest.values()].sort((a, b) => a.courseCode.localeCompare(b.courseCode));
+    const courses = [...latest.values()].filter((g) => ['C+', 'F'].includes(g.letter))
+        .sort((a, b) => a.courseCode.localeCompare(b.courseCode));
     if (!courses.length) {
-        sec.innerHTML = '<h4 class="assess-head">재수강 시뮬레이션</h4><p class="hint">성적이 있는 과목이 없습니다</p>';
+        sec.innerHTML = '<h4 class="assess-head">재수강 시뮬레이션</h4><p class="hint">재수강 가능한 과목(C+ 또는 F)이 없습니다</p>';
         return;
     }
     sec.innerHTML = `
@@ -2707,11 +2710,11 @@ async function renderRetakeSim() {
                 <option value="${esc(g.courseCode)}">${esc(courseName(g.courseCode) || g.courseCode)} (${esc(g.courseCode)}) · ${esc(g.semester)} ${esc(g.letter)}</option>`).join('')}
             </select></div>
         <div class="field"><label for="retake-letter">예상 등급</label>
-            <select id="retake-letter">${GRADE_LETTERS.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select></div>
+            <select id="retake-letter">${RETAKE_GRADE_LETTERS.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select></div>
         <button type="button" id="retake-run">계산</button>
         <div id="retake-result"></div>`;
-    if (latest.has(mySim.retakeCourse)) sec.querySelector('#retake-course').value = mySim.retakeCourse;
-    sec.querySelector('#retake-letter').value = mySim.retakeLetter;
+    if (courses.some((g) => g.courseCode === mySim.retakeCourse)) sec.querySelector('#retake-course').value = mySim.retakeCourse;
+    sec.querySelector('#retake-letter').value = RETAKE_GRADE_LETTERS.includes(mySim.retakeLetter) ? mySim.retakeLetter : 'A0';
     sec.onchange = () => {  // 고르는 값을 바꾸면 옛 결과는 지움
         mySim.retakeCourse = sec.querySelector('#retake-course').value;
         mySim.retakeLetter = sec.querySelector('#retake-letter').value;
