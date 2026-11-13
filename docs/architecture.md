@@ -81,7 +81,8 @@ flowchart LR
 | `include/retake.h`, `src/retake.cpp` | `Retake::isReplaced` · `isRetake` · `officialLetter`(R, 재수강 A+→A0) · `activeGrades` · `admittedSince2018` | h: `grade.h` |
 | `include/statistics.h`, `src/statistics.cpp` | `Statistics::calcGPA` · `gpaSummary` · `courseStats` · `academicWarnings`. 데이터를 바꾸지 않는 계산 전용 | h: `grade_manager.h`. cpp: `retake.h` |
 | `include/report_exporter.h`, `src/report_exporter.cpp` | `ReportExporter::studentReport` · `courseReport`: 성적표 CSV 문자열 (UTF-8 BOM, 수식 주입 방지 `safeCell`) | h: `grade_manager.h`. cpp: `retake.h`, `statistics.h` |
-| `include/server.h`, `src/server.cpp` | `Server`: 라우트 등록, 세션(`sessionToken` · `currentAccount`), 역할 확인 `requireRole`, JSON 변환, 오류 문구 | h: `account.h`, `grade_manager.h`. cpp: `statistics.h` `course_post.h` `retake.h` `report_exporter.h`, `httplib.h`, `json.hpp` |
+| `include/server.h`, `src/server.cpp` | `Server`: 라우트 등록, 세션(`sessionToken` · `currentAccount`), 역할 확인 `requireRole`, JSON 변환, 오류 문구 | h: `account.h`, `grade_manager.h`. cpp: `statistics.h` `course_post.h` `retake.h` `report_exporter.h` `request_validation.h`, `httplib.h`, `json.hpp` |
+| `include/request_validation.h`, `src/request_validation.cpp` | `RequestValidation::readCourse` · `courseError` · `accountError`: 과목·계정 요청 값 검사, 틀린 항목을 짚는 오류 문구 (서버가 `400` 으로 보냄) | h: `course.h`, `json.hpp`. cpp: `account.h` |
 | `src/main.cpp` | 데이터 폴더(`PROJECT_ROOT/data`)를 열고 `GradeManager`·`AccountStore`·`Server` 를 만들어 실행 | `account.h` `grade_manager.h` `server.h` |
 
 ### 화면·빌드·검증

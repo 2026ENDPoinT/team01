@@ -34,14 +34,18 @@ public:
 
     // ----- 과목 -----
     bool addCourse(const Course& course);                       // 과목코드 중복이면 false
+    //   성적 방식(gradeType)은 그 과목에 성적·평가 항목이 없을 때만 바꿀 수 있음 (있으면 false)
     bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물·평가 항목·항목 점수·출결 코드도 바꿈
     bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물·평가 항목·항목 점수·출결도 같이 삭제
     const Course* findCourse(const std::string& code) const;
+    // 그 과목(모든 학기)에 성적 또는 평가 항목이 있으면 true (있으면 성적 방식을 바꿀 수 없음)
+    bool courseHasGradesOrAssessments(const std::string& courseCode) const;
     const std::vector<Course>& getCourses() const;
 
     // ----- 성적 -----
     // 성적은 (학번, 과목코드, 학기) 세 개로 하나를 구분
     // 항목 계산 과목(hasAssessments)의 성적을 직접 추가·수정·삭제하지 못하게 막는 것은 서버가 함
+    //   P/F 과목은 assignedLetter 가 P(점수 100)·NP(점수 0) 인 성적만, 일반 과목은 P·NP 가 아닌 성적만 받음 (아니면 false)
     bool addGrade(const Grade& grade);                          // 없는 학생/과목이거나 중복이면 false (수강신청 검사는 서버가 함)
     bool updateGrade(const Grade& grade);                       // 같은 (학번, 과목, 학기) 의 점수 수정
     bool removeGrade(const std::string& studentId, const std::string& courseCode,
@@ -109,7 +113,7 @@ public:
     // 등급 산출 방식. 평가 기준이 없거나 기록이 없으면 kGradingAbsolute
     std::string getGradingMode(const std::string& courseCode, const std::string& semester) const;
     // 평가 기준 만들기·바꾸기. weights 는 assessmentCategories() 순서의 6개 정수
-    //   false: 없는 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
+    //   false: 없는 과목·P/F 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
     //          처음 만드는데 그 과목·학기에 이미 성적(직접 입력)이 있음
     //   성공: 6개 항목을 모두 저장(0 포함), 비율이 0 이 된 분류의 항목 점수 삭제, 수강생 전원 성적 재계산
     bool setGradingScheme(const std::string& courseCode, const std::string& semester,
@@ -151,5 +155,6 @@ private:
     void syncCourse(const std::string& courseCode, const std::string& semester);
     // 그 과목·학기 grades 전부의 assignedLetter 를 다시 정함
     //   relative 면 RelativeGrading::assignLetters(점수들, grades 순서), 아니면 ""
+    //   P/F 과목은 건드리지 않음 (P·NP 유지, 상대평가 대상 아님)
     void applyGradingMode(const std::string& courseCode, const std::string& semester);
 };

@@ -19,6 +19,19 @@ int categoryWeight(const std::vector<Assessment>& items, const std::string& cour
     return -1;
 }
 
+// 성적이 그 과목의 성적 방식에 맞는지
+//   P/F 과목: assignedLetter 가 P(점수 100) 또는 NP(점수 0). 일반 과목: P·NP 는 받지 않음
+//   나머지 형식(학번·과목코드·학기·점수 범위)은 Grade::isValid 로 검사 (P·NP 는 그 검사에서 빼고 여기서 봄)
+bool gradeFitsCourse(const Grade& grade, const Course& course) {
+    const bool pfLetter = isPassFailLetter(grade.assignedLetter);
+    Grade rest = grade;
+    if (pfLetter) rest.assignedLetter.clear();
+    if (!rest.isValid()) return false;
+    if (!course.isPassFail()) return !pfLetter;
+    if (!pfLetter) return false;
+    return grade.score == (grade.assignedLetter == kLetterPass ? kPassScore : kNonPassScore);
+}
+
 }  // namespace
 
 // 생성자: CSV 파일이 있는 폴더 경로를 FileIO 에 넘겨 준다.
@@ -185,6 +198,10 @@ bool GradeManager::updateCourse(const std::string& code, const Course& course) {
     if (it == courses.end() || !course.isValid()) {
         return false;
     }
+    // 성적 방식(등급 ↔ P/F)은 그 과목의 성적·평가 항목이 하나도 없을 때만 바꿀 수 있음 (있는 성적과 방식이 어긋나므로)
+    if (course.gradeType != it->gradeType && courseHasGradesOrAssessments(code)) {
+        return false;
+    }
 
     const bool duplicateCode = std::any_of(courses.begin(), courses.end(), [&](const Course& current) {
         return current.code == course.code && current.code != code;
@@ -286,8 +303,8 @@ const std::vector<Course>& GradeManager::getCourses() const { return courses; }
 // 성적 등록: 성적은 (학번, 과목코드, 학기) 조합으로 구분한다.
 // 값이 잘못됐거나, 없는 학생/과목이거나, 같은 조합이 이미 있으면 false.
 bool GradeManager::addGrade(const Grade& grade) {
-    if (!grade.isValid() || findStudent(grade.studentId) == nullptr ||
-        findCourse(grade.courseCode) == nullptr) {
+    const Course* course = findCourse(grade.courseCode);
+    if (course == nullptr || findStudent(grade.studentId) == nullptr || !gradeFitsCourse(grade, *course)) {
         return false;
     }
 
@@ -308,8 +325,8 @@ bool GradeManager::addGrade(const Grade& grade) {
 // 성적 수정: 같은 (학번, 과목코드, 학기) 조합을 찾아 내용을 덮어쓴다.
 // 값이 잘못됐거나, 없는 학생/과목이거나, 수정할 성적이 없으면 false.
 bool GradeManager::updateGrade(const Grade& grade) {
-    if (!grade.isValid() || findStudent(grade.studentId) == nullptr ||
-        findCourse(grade.courseCode) == nullptr) {
+    const Course* course = findCourse(grade.courseCode);
+    if (course == nullptr || findStudent(grade.studentId) == nullptr || !gradeFitsCourse(grade, *course)) {
         return false;
     }
 
@@ -857,6 +874,13 @@ void GradeManager::syncCourse(const std::string& courseCode, const std::string& 
     }
 }
 
+// 그 과목(모든 학기)에 성적 또는 평가 항목이 하나라도 있으면 true (성적 방식을 바꿀 수 있는지 판단)
+bool GradeManager::courseHasGradesOrAssessments(const std::string& courseCode) const {
+    return std::any_of(grades.begin(), grades.end(), [&](const Grade& g) { return g.courseCode == courseCode; }) ||
+           std::any_of(assessments.begin(), assessments.end(),
+                       [&](const Assessment& a) { return a.courseCode == courseCode; });
+}
+
 // ----- 평가 기준 -----
 // 그 과목·학기의 등급 산출 방식. 기록이 없으면 절대평가.
 std::string GradeManager::getGradingMode(const std::string& courseCode, const std::string& semester) const {
@@ -869,7 +893,7 @@ std::string GradeManager::getGradingMode(const std::string& courseCode, const st
 }
 
 // 평가 기준 만들기·바꾸기: 6분류 비율(0 포함)과 등급 방식을 한 번에 저장한다.
-// false: 없는 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
+// false: 없는 과목·P/F 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
 //        처음 만드는데 그 과목·학기에 이미 성적(직접 입력)이 있음
 bool GradeManager::setGradingScheme(const std::string& courseCode, const std::string& semester,
                                     const std::vector<int>& weights, const std::string& mode) {
@@ -879,7 +903,9 @@ bool GradeManager::setGradingScheme(const std::string& courseCode, const std::st
     const std::string newMode = mode;
     const std::vector<std::string>& categories = assessmentCategories();
 
-    if (findCourse(code) == nullptr || !isValidSemester(sem) || weights.size() != categories.size()) {
+    const Course* course = findCourse(code);
+    // P/F 과목에는 평가 기준을 만들지 않음 (성적은 P·NP 로 직접 입력)
+    if (course == nullptr || course->isPassFail() || !isValidSemester(sem) || weights.size() != categories.size()) {
         return false;
     }
     int weightSum = 0;
@@ -966,6 +992,11 @@ bool GradeManager::removeGradingScheme(const std::string& courseCode, const std:
 // 그 과목·학기 성적 전부의 등급을 다시 정한다.
 // 상대평가면 RelativeGrading::assignLetters 결과(grades 순서)를 assignedLetter 에 넣고, 아니면 비운다.
 void GradeManager::applyGradingMode(const std::string& courseCode, const std::string& semester) {
+    // P/F 과목은 assignedLetter 가 P·NP 그 자체라 건드리지 않음 (상대평가 대상도 아님)
+    const Course* course = findCourse(courseCode);
+    if (course != nullptr && course->isPassFail()) {
+        return;
+    }
     std::vector<Grade*> targets;
     for (Grade& grade : grades) {
         if (grade.courseCode == courseCode && grade.semester == semester) {

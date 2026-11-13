@@ -3,6 +3,7 @@
 #include "statistics.h"
 #include "course_post.h"
 #include "retake.h"
+#include "request_validation.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -14,7 +15,6 @@
 #include <map>
 #include <iostream>
 #include <random>
-#include <regex>
 #include <sstream>
 #include <tuple>
 #include <unordered_set>
@@ -36,6 +36,8 @@ constexpr const char* kGradeRules =
 constexpr const char* kSemesterRules =
     "학기 형식이 올바르지 않습니다 (예: 2026-1, 1·2 정규학기, 3 여름·4 겨울 계절학기)";
 
+constexpr const char* kAccountInvalid = "계정 정보가 올바르지 않습니다";
+// 위 검사를 통과했는데 AccountStore 가 거부한 경우 (남는 규칙 안내)
 constexpr const char* kAccountRules =
     "계정 정보가 올바르지 않습니다 (아이디 영문·숫자·_ 3~20자, 비밀번호 8~64자, 교수·관리자는 이름 필수, 학생은 학번 필수)";
 
@@ -44,7 +46,9 @@ constexpr const char* kSaveFailed = "저장에 실패했습니다";
 constexpr const char* kStudentRules =
     "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)";
 constexpr const char* kScoreRules = "점수는 0~100 사이 숫자여야 합니다";
-constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)";
+constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F, P/F 과목은 P NP)";
+constexpr const char* kPassFailOnly = "P/F 과목은 P(합격) 또는 NP(불합격)로 입력하세요";
+constexpr const char* kPassFailLetterOnly = "P·NP 는 P/F 과목에만 입력할 수 있습니다";
 constexpr const char* kAssessmentRules =
     "평가 항목이 올바르지 않습니다 (평가 항목 출석·중간고사·기말고사·과제·팀프로젝트·기타, 비율 0~100 정수)";
 constexpr const char* kGradingSchemeRules =
@@ -86,19 +90,8 @@ int thisYear() {
     return local ? local->tm_year + 1900 : 0;
 }
 
-bool validUsername(const std::string& username) {
-    static const std::regex pattern("^[A-Za-z0-9_]{3,20}$");
-    return std::regex_match(username, pattern);
-}
-
 bool validPassword(const std::string& password) {
     return password.size() >= 8 && password.size() <= 64;
-}
-
-bool nonWhitespace(const std::string& value) {
-    return std::any_of(value.begin(), value.end(), [](unsigned char c) {
-        return !std::isspace(c);
-    });
 }
 
 bool isAdmin(const Account& account) {
@@ -164,7 +157,7 @@ json courseJson(const Course& c) {
         {"code", c.code}, {"name", c.name}, {"credit", c.credit},
         {"professor", c.professor}, {"category", c.category}, {"area", c.area},
         {"schedule", c.schedule}, {"language", c.language},
-        {"capacity", c.capacity}, {"remote", c.remote}
+        {"capacity", c.capacity}, {"remote", c.remote}, {"gradeType", c.gradeType}
     };
 }
 
@@ -281,7 +274,14 @@ bool readGradeBody(const json& body, Grade& grade, httplib::Response& res) {
             return false;
         }
     } else if (letter != body.end() && !letter->is_null()) {
-        grade.score = letter->is_string() ? letterToScore(letter->get<std::string>()) : -1.0;
+        const std::string text = letter->is_string() ? letter->get<std::string>() : "";
+        if (isPassFailLetter(text)) {
+            // P/F 과목 성적: 등급은 assignedLetter 에, 점수는 P = 100 / NP = 0 (과목이 P/F 인지는 checkGradeType)
+            grade.assignedLetter = text;
+            grade.score = text == kLetterPass ? kPassScore : kNonPassScore;
+        } else {
+            grade.score = letter->is_string() ? letterToScore(text) : -1.0;
+        }
         if (grade.score < 0.0) {
             setError(res, 400, kLetterRules);
             return false;
@@ -294,8 +294,27 @@ bool readGradeBody(const json& body, Grade& grade, httplib::Response& res) {
         setError(res, 400, kSemesterRules);
         return false;
     }
-    if (!grade.isValid()) {
+    Grade rest = grade;  // P·NP 는 Grade::isValid 의 등급 검사에서 빼고 checkGradeType 에서 봄
+    if (isPassFailLetter(rest.assignedLetter)) rest.assignedLetter.clear();
+    if (!rest.isValid()) {
         setError(res, 400, kGradeRules);
+        return false;
+    }
+    return true;
+}
+
+// 성적이 과목의 성적 방식에 맞는지: P/F 과목은 P·NP 만, 일반 과목은 P·NP 를 받지 않음. 어긋나면 400 을 채우고 false
+//   과목이 없으면 통과 (없는 과목은 각 라우트가 404 로 처리)
+bool checkGradeType(const GradeManager& gm, const Grade& grade, httplib::Response& res) {
+    const Course* course = gm.findCourse(grade.courseCode);
+    if (!course) return true;
+    const bool pfLetter = isPassFailLetter(grade.assignedLetter);
+    if (course->isPassFail() && !pfLetter) {
+        setError(res, 400, kPassFailOnly);
+        return false;
+    }
+    if (!course->isPassFail() && pfLetter) {
+        setError(res, 400, kPassFailLetterOnly);
         return false;
     }
     return true;
@@ -341,22 +360,6 @@ bool parseJsonBody(const httplib::Request& req, json& body, httplib::Response& r
 }
 
 // 과목 값 검사: 문제가 있으면 사유 문구, 없으면 빈 문자열
-std::string courseInvalidReason(const Course& c) {
-    auto has = [](const std::vector<std::string>& v, const std::string& s) {
-        return std::find(v.begin(), v.end(), s) != v.end();
-    };
-    if (!isValidCourseCode(c.code)) return "과목코드는 숫자 6자리여야 합니다";
-    if (std::all_of(c.name.begin(), c.name.end(), [](unsigned char ch) { return std::isspace(ch) != 0; }))
-        return "과목명이 비어 있습니다";
-    if (c.credit < 1 || c.credit > 4) return "학점은 1~4 사이여야 합니다";
-    if (!has(courseCategories(), c.category)) return "이수구분이 올바르지 않습니다";
-    if (!has(courseLanguages(), c.language)) return "강의언어가 올바르지 않습니다";
-    if (!isValidSchedule(c.schedule)) return "강의시간 형식이 올바르지 않습니다 (예: 월(1~2) 수(3))";
-    if (c.capacity < 0 || c.capacity > 999) return "정원은 0~999 사이여야 합니다";
-    if (!c.isValid()) return "값을 확인해 주세요";
-    return "";
-}
-
 constexpr const char* kPostRules =
     "게시물 정보가 올바르지 않습니다 (분류, 학기, 주차 1~16, 제목 필수, "
     "링크는 http:// 또는 https://, 날짜 예: 2026-10-20 또는 2026-10-20 13:00)";
@@ -675,11 +678,11 @@ void Server::run() {
             !readOptString(body, "studentId", "", account.studentId, res) ||
             !readOptString(body, "password", "", password, res)) return;
 
-        if (!validUsername(account.username) || !isValidRole(account.role) ||
-            !validPassword(password) ||
-            (account.role != "student" && !nonWhitespace(account.name)) ||
-            (account.role == "student" && account.studentId.empty())) {
-            setError(res, 400, kAccountRules);
+        // 틀린 항목을 짚는 문구 (예: "비밀번호는 8~64자여야 합니다")
+        const std::string reason = RequestValidation::accountError(
+            account.username, true, account.role, account.name, account.studentId, password, true);
+        if (!reason.empty()) {
+            setError(res, 400, std::string(kAccountInvalid) + " (" + reason + ")");
             return;
         }
         if (accounts->find(account.username)) {
@@ -735,11 +738,10 @@ void Server::run() {
             setError(res, 400, "마지막 관리자 계정은 삭제하거나 바꿀 수 없습니다");
             return;
         }
-        if (!isValidRole(role) ||
-            (role != "student" && !nonWhitespace(name)) ||
-            (role == "student" && studentId.empty()) ||
-            (!password.empty() && !validPassword(password))) {
-            setError(res, 400, kAccountRules);
+        // 비밀번호는 "" 이면 바꾸지 않으므로 넣었을 때만 검사
+        const std::string reason = RequestValidation::accountError(username, false, role, name, studentId, password, false);
+        if (!reason.empty()) {
+            setError(res, 400, std::string(kAccountInvalid) + " (" + reason + ")");
             return;
         }
         if (role == "student") {
@@ -894,6 +896,25 @@ void Server::run() {
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
+    // 전체 학생 GPA 일괄 조회 (관리자 전용). 개별 GPA API 와 같은 값·null 규칙.
+    // 고정 경로를 /:id 보다 먼저 등록해 "batch" 가 학생 ID 로 해석되지 않게 한다.
+    svr.Get("/api/stats/gpa/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!requireRole(req, res, {"admin"})) return;
+
+        json arr = json::array();
+        for (const Student& student : gm.getStudents()) {
+            const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, student.id);
+            const json gpa = summary.credits > 0
+                ? json(Statistics::calcGPA(gm, student.id))
+                : json(nullptr);
+            arr.push_back({
+                {"studentId", student.id}, {"semester", ""}, {"gpa", gpa}
+            });
+        }
+        setJson(res, 200, arr);
+    });
+
     // GPA
     svr.Get("/api/stats/gpa/:id", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
@@ -1015,6 +1036,31 @@ void Server::run() {
         }
         setJson(res, 200, json{{"before", summaryJson(sim.before)}, {"after", summaryJson(sim.after)},
                                {"items", itemsJson}});
+    });
+
+    // 전체 과목 통계 일괄 조회. 개별 과목 통계와 같은 필드·계산 규칙.
+    // 고정 경로를 /:code 보다 먼저 등록한다.
+    svr.Get("/api/stats/course/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!requireRole(req, res, {"admin", "professor", "student"})) return;
+
+        json arr = json::array();
+        for (const Course& course : gm.getCourses()) {
+            const auto stats = Statistics::courseStats(gm, course.code);
+            json enrolledBySemester = json::object();
+            for (const Enrollment& enrollment : gm.getEnrollments()) {
+                if (enrollment.courseCode != stats.courseCode || enrollment.semester.empty()) continue;
+                enrolledBySemester[enrollment.semester] =
+                    enrolledBySemester.value(enrollment.semester, 0) + 1;
+            }
+            arr.push_back({
+                {"courseCode", stats.courseCode}, {"count", stats.count},
+                {"average", stats.average}, {"max", stats.max}, {"min", stats.min},
+                {"latestSemester", stats.latestSemester}, {"latestEnrolled", stats.latestEnrolled},
+                {"enrolledBySemester", enrolledBySemester}
+            });
+        }
+        setJson(res, 200, arr);
     });
 
     // 과목 통계
@@ -1142,8 +1188,14 @@ void Server::run() {
     svr.Get("/api/enrollment/settings", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         if (!requireRole(req, res, {"admin", "professor", "student"})) return;
-        res.set_content(json{{"semester", gm.getEnrollmentSemester()}}.dump(),
-                        "application/json; charset=utf-8");
+        std::string latestGradeSemester;
+        for (const Grade& grade : gm.getGrades()) {
+            if (grade.semester > latestGradeSemester) latestGradeSemester = grade.semester;
+        }
+        setJson(res, 200, json{
+            {"semester", gm.getEnrollmentSemester()},
+            {"latestGradeSemester", latestGradeSemester}
+        });
     });
 
     svr.Put("/api/enrollment/settings", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1462,22 +1514,8 @@ void Server::run() {
         json body;
         if (!parseJsonBody(req, body, res)) return;
         Course course;
-        try {
-            course.code = body.at("code").get<std::string>();
-            course.name = body.at("name").get<std::string>();
-            course.credit = body.at("credit").get<decltype(course.credit)>();
-            course.professor = body.at("professor").get<std::string>();
-            course.category = body.value("category", "전공선택");
-            course.area = body.value("area", "");
-            course.schedule = body.value("schedule", "");
-            course.language = body.value("language", "한국어전용");
-            course.capacity = body.value("capacity", 0);
-            course.remote = body.value("remote", false);
-        } catch (...) {
-            setError(res, 400, "과목 정보가 올바르지 않습니다");
-            return;
-        }
-        const std::string reason = courseInvalidReason(course);
+        // 틀린 항목을 짚는 문구 (예: 학점 "abc" → "학점은 숫자여야 합니다")
+        const std::string reason = RequestValidation::readCourse(body, "", course);
         if (!reason.empty()) {
             setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
             return;
@@ -1499,29 +1537,22 @@ void Server::run() {
         json body;
         if (!parseJsonBody(req, body, res)) return;
         Course course;
-        try {
-            course.code = body.value("code", req.path_params.at("code"));
-            course.name = body.at("name").get<std::string>();
-            course.credit = body.at("credit").get<decltype(course.credit)>();
-            course.professor = body.at("professor").get<std::string>();
-            course.category = body.value("category", "전공선택");
-            course.area = body.value("area", "");
-            course.schedule = body.value("schedule", "");
-            course.language = body.value("language", "한국어전용");
-            course.capacity = body.value("capacity", 0);
-            course.remote = body.value("remote", false);
-        } catch (...) {
-            setError(res, 400, "과목 정보가 올바르지 않습니다");
-            return;
-        }
-        const std::string reason = courseInvalidReason(course);
+        // 본문에 code 가 없으면 주소의 과목코드 그대로
+        const std::string reason = RequestValidation::readCourse(body, req.path_params.at("code"), course);
         if (!reason.empty()) {
             setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
             return;
         }
         const std::string oldCode = req.path_params.at("code");
-        if (gm.findCourse(oldCode) == nullptr) {
+        const Course* oldCourse = gm.findCourse(oldCode);
+        if (oldCourse == nullptr) {
             setError(res, 404, "수정할 과목을 찾을 수 없습니다.");
+            return;
+        }
+        // 성적 방식은 본문에 없으면 그대로 (예전 화면·API 로 수정해도 P/F 가 풀리지 않게)
+        if (!body.contains("gradeType") || body["gradeType"].is_null()) course.gradeType = oldCourse->gradeType;
+        if (course.gradeType != oldCourse->gradeType && gm.courseHasGradesOrAssessments(oldCode)) {
+            setError(res, 409, "성적이나 평가 기준이 있는 과목은 성적 방식을 바꿀 수 없습니다");
             return;
         }
         if (course.code != oldCode && gm.findCourse(course.code) != nullptr) {
@@ -1734,6 +1765,7 @@ void Server::run() {
 
         Grade grade;
         if (!readGradeBody(body, grade, res)) return;
+        if (!checkGradeType(gm, grade, res)) return;
         if (!gm.findStudent(grade.studentId)) {
             setError(res, 404, "없는 학생입니다: " + grade.studentId);
             return;
@@ -1796,6 +1828,7 @@ void Server::run() {
 
         Grade grade;
         if (!readGradeBody(body, grade, res)) return;
+        if (!checkGradeType(gm, grade, res)) return;
 
         // 3. 학생 및 과목 존재 여부 확인
         if (!gm.findStudent(grade.studentId)) {
@@ -1930,6 +1963,7 @@ void Server::run() {
         if (!parseJsonBody(req, body, res)) return;
         Grade grade;
         if (!readGradeBody(body, grade, res)) return;
+        if (!checkGradeType(gm, grade, res)) return;
         if (account->role == "professor" &&
             !isProfessorOf(*account, gm, grade.courseCode)) {
             setError(res, 403, "권한이 없습니다");
@@ -2010,6 +2044,54 @@ void Server::run() {
     });
 
     // 평가 기준 전체 등록·수정: {courseCode,semester,mode,weights:{출석:0,...}}. POST 는 사용하지 않는다.
+    // 여러 (과목, 학기)의 평가 기준 일괄 조회. 각 항목은 기존 GET /api/assessments 와 같은 모양.
+    // 본문: {"pairs":[{"courseCode":"109201","semester":"2026-2"}, ...]}
+    svr.Post("/api/assessments/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor", "student"});
+        if (!account) return;
+
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+        const auto pairsIt = body.find("pairs");
+        if (pairsIt == body.end() || !pairsIt->is_array()) {
+            setError(res, 400, "pairs 배열이 필요합니다");
+            return;
+        }
+
+        json arr = json::array();
+        std::unordered_set<std::string> seen;
+        for (const json& pair : *pairsIt) {
+            if (!pair.is_object() || !pair.contains("courseCode") ||
+                !pair["courseCode"].is_string() || !pair.contains("semester") ||
+                !pair["semester"].is_string()) {
+                setError(res, 400, "평가 기준 조회 항목이 올바르지 않습니다");
+                return;
+            }
+            const std::string courseCode = pair["courseCode"].get<std::string>();
+            const std::string semester = pair["semester"].get<std::string>();
+            if (courseCode.empty() || semester.empty() || !isValidSemester(semester)) {
+                setError(res, 400, kSemesterRules);
+                return;
+            }
+            if (account->role == "professor" && rejectPastSemester(gm, *account, semester, res)) return;
+            if (!gm.findCourse(courseCode)) {
+                setError(res, 404, "없는 과목입니다: " + courseCode);
+                return;
+            }
+
+            const std::string key = courseCode + "\n" + semester;
+            if (!seen.insert(key).second) continue;
+            arr.push_back({
+                {"courseCode", courseCode},
+                {"semester", semester},
+                {"mode", gm.getGradingMode(courseCode, semester)},
+                {"items", gradingSchemeItemsJson(gm, courseCode, semester)}
+            });
+        }
+        setJson(res, 200, arr);
+    });
+
     svr.Put("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         const Account* account = requireRole(req, res, {"admin", "professor"});
@@ -2032,6 +2114,10 @@ void Server::run() {
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
         if (rejectPastSemester(gm, *account, semester, res)) return;
+        if (gm.findCourse(courseCode)->isPassFail()) {
+            setError(res, 409, "P/F 과목에는 평가 기준을 만들 수 없습니다 (성적은 P·NP 로 입력)");
+            return;
+        }
 
         std::map<std::string, int> weights;
         for (auto it = weightsIt->begin(); it != weightsIt->end(); ++it) {

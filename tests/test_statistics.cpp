@@ -410,3 +410,20 @@ TEST_CASE(simulateRetake_rejects_bad_input) {
     CHECK(run({{"100003", "A0"}}) == RetakeError::FutureGrade);
     CHECK(run({{"100001", "A0"}}) == RetakeError::None);
 }
+
+// P/F 과목은 등급 시뮬레이션 대상이 아님 (평점에 들어가지 않으므로 등급을 고를 수 없음)
+TEST_CASE(simulateRetake_rejects_pass_fail_course) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    Course pf = makeCourse("100001", "P/F 과목", 1);
+    pf.gradeType = kGradeTypePassFail;
+    CHECK(gm.addCourse(pf));
+    Grade g = makeGrade("25103008", "100001", "2025-1", kPassScore);
+    g.assignedLetter = kLetterPass;
+    CHECK(gm.addGrade(g));
+
+    const Statistics::RetakeSimulation sim =
+        Statistics::simulateRetake(gm, "25103008", "2026-1", {{"100001", "A0"}});
+    CHECK(sim.error == Statistics::RetakeError::PassFail);
+}
