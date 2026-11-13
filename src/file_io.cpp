@@ -461,6 +461,96 @@ bool FileIO::loadPosts(std::vector<CoursePost>& posts) {
     return true;
 }
 
+// assessments.csv : courseCode,semester,name,weight
+
+const char* const kAssessmentsHeader = "courseCode,semester,name,weight";
+
+bool FileIO::saveAssessments(const std::vector<Assessment>& items) {
+    std::string content = std::string(kAssessmentsHeader) + "\n";
+    for (const Assessment& a : items) {
+        content += joinCsvLine({a.courseCode, a.semester, a.name, std::to_string(a.weight)});
+    }
+    return atomicWrite(dataDir + "/assessments.csv", content);
+}
+
+bool FileIO::loadAssessments(std::vector<Assessment>& items) {
+    const std::string path = dataDir + "/assessments.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kAssessmentsHeader}, rows)) {
+        return false;
+    }
+
+    items.clear();
+    for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
+        Assessment a;
+        a.courseCode = f[0];
+        a.semester = f[1];
+        a.name = f[2];
+        if (!parseInt(f[3], a.weight)) {
+            warnBadNumber(path, row.lineNumber, f[3]);
+            continue;
+        }
+
+        const bool duplicate = std::any_of(items.begin(), items.end(), [&](const Assessment& other) {
+            return other.courseCode == a.courseCode && other.semester == a.semester && other.name == a.name;
+        });
+        if (!a.isValid() || duplicate) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (평가 항목 값이 올바르지 않음)"
+                      << std::endl;
+            continue;
+        }
+        items.push_back(a);
+    }
+    return true;
+}
+
+// assessment_scores.csv : studentId,courseCode,semester,name,score
+
+const char* const kAssessmentScoresHeader = "studentId,courseCode,semester,name,score";
+
+bool FileIO::saveAssessmentScores(const std::vector<AssessmentScore>& scores) {
+    std::string content = std::string(kAssessmentScoresHeader) + "\n";
+    for (const AssessmentScore& s : scores) {
+        content += joinCsvLine({s.studentId, s.courseCode, s.semester, s.name, doubleToString(s.score)});
+    }
+    return atomicWrite(dataDir + "/assessment_scores.csv", content);
+}
+
+bool FileIO::loadAssessmentScores(std::vector<AssessmentScore>& scores) {
+    const std::string path = dataDir + "/assessment_scores.csv";
+    std::vector<CsvRow> rows;
+    if (!readCsv(path, {kAssessmentScoresHeader}, rows)) {
+        return false;
+    }
+
+    scores.clear();
+    for (const CsvRow& row : rows) {
+        const std::vector<std::string>& f = row.fields;
+        AssessmentScore s;
+        s.studentId = f[0];
+        s.courseCode = f[1];
+        s.semester = f[2];
+        s.name = f[3];
+        if (!parseDouble(f[4], s.score)) {
+            warnBadNumber(path, row.lineNumber, f[4]);
+            continue;
+        }
+
+        const bool duplicate = std::any_of(scores.begin(), scores.end(), [&](const AssessmentScore& other) {
+            return other.studentId == s.studentId && other.courseCode == s.courseCode &&
+                   other.semester == s.semester && other.name == s.name;
+        });
+        if (!s.isValid() || duplicate) {
+            std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (항목 점수 값이 올바르지 않음)"
+                      << std::endl;
+            continue;
+        }
+        scores.push_back(s);
+    }
+    return true;
+}
+
 // 저장 순서: 백업 → path.tmp 에 쓰기 → path.tmp 를 path 로 이름 바꾸기
 //   쓰는 도중에 프로그램이 꺼져도 원래 path 는 그대로 남아 있음
 bool FileIO::atomicWrite(const std::string& path, const std::string& content) {

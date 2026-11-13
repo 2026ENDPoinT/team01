@@ -18,6 +18,22 @@ namespace Statistics {
 double calcGPA(const GradeManager& gm, const std::string& studentId,
                const std::string& semester = "");
 
+// 학기 하나의 평점 요약
+struct SemesterSummary {
+    std::string semester;
+    double gpa = 0.0;   // 그 학기 GPA (calcGPA(gm, id, semester) 와 같음)
+    int credits = 0;    // 평점 계산에 들어간 과목의 학점 합
+};
+// 학생 한 명의 학기별·전체 평점 요약
+struct GpaSummary {
+    std::vector<SemesterSummary> semesters;  // 성적이 있는 학기만, 학기 오름차순
+    double gpa = 0.0;                        // 전체 GPA (calcGPA(gm, id) 와 같음)
+    int credits = 0;                         // 평점 계산에 들어간 전체 학점 합
+};
+// calcGPA 와 같은 규칙으로 계산: 삭제된 성적 제외, 재수강 성적은 A0 제한, 없는 과목의 성적 제외
+// 성적이 없으면 semesters 는 빈 목록, gpa 0.0, credits 0
+GpaSummary gpaSummary(const GradeManager& gm, const std::string& studentId);
+
 // 과목 하나의 점수 통계 (삭제된 성적 제외). 성적이 없으면 count = 0, 나머지 0
 //   latestSemester: 이 과목에 수강신청이 1건 이상 있는 가장 늦은 학기 (없으면 ""), latestEnrolled: 그 학기 신청 인원
 struct CourseStats {

@@ -347,6 +347,38 @@ dialog table { min-width: 420px; font-size: 13px; }
 .post-actions { flex: none; white-space: nowrap; }
 .tag.expired { background: rgba(239, 68, 68, .15); color: var(--danger); }
 
+/* 과목 페이지 평가 항목: 항목 표 + 비율 합계(100 이 아니면 경고색) + 항목 점수 입력표 */
+.assess-section { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--line); }
+.assess-section .toolbar .sub-title { margin: 0 8px 0 0; }
+#assess-body .table-wrap { margin-bottom: 16px; }
+.assess-head { font-size: 14px; font-weight: 600; margin: 16px 0 8px; }
+td.weight-sum { color: var(--text); }
+td.weight-sum.warn { color: var(--danger); }
+input.score-cell { width: 76px; padding: 5px 8px; text-align: right; }
+#assess-body td.final { white-space: nowrap; }
+/* 내 성적: 평가 항목 과목의 현재까지 환산 줄 */
+td.estimate { color: var(--text); }
+
+/* 성적표: 학기별 GPA 꺾은선 그래프 (인라인 SVG) */
+.gpa-chart {
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    height: auto;
+    margin-bottom: 20px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+.gpa-chart .grid { stroke: var(--line); }
+.gpa-chart .axis { fill: var(--muted); font-size: 11px; }
+.gpa-chart .limit { stroke: var(--danger); stroke-dasharray: 5 4; }
+.gpa-chart .limit-label { fill: var(--danger); font-size: 11px; }
+.gpa-chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.gpa-chart .dot { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.gpa-chart .dot.warn { fill: var(--danger); }
+.gpa-chart .value { fill: var(--text); font-size: 11px; font-weight: 600; }
+
 /* 토스트 */
 #toast {
     position: fixed;

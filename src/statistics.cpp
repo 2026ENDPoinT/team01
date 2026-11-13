@@ -1,36 +1,70 @@
 #include "statistics.h"
 #include "retake.h"
 #include <algorithm>
+#include <map>
 #include <utility>
 
 namespace Statistics {
 
 // TODO(C): 아래 전부 구현
 
+namespace {
+
+// 학점 가중 합 (평점×학점 합, 학점 합)
+struct GpaSum {
+    double points = 0.0;
+    double credits = 0.0;
+};
+
+// 삭제된 성적을 뺀 grades 를 학기별로 묶어 평점·학점 합을 구함 (calcGPA 와 gpaSummary 가 공유)
+//   등급은 Retake::officialLetter, 없는 과목의 성적은 제외 → 계산에 들어간 성적이 있는 학기만 담김
+std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm, const std::string& studentId) {
+    const std::vector<Grade> grades = Retake::activeGrades(gm.getGradesByStudent(studentId));
+    const auto& allGrades = gm.getGrades();
+    std::map<std::string, GpaSum> sums;
+    for (const Grade& g : grades) {
+        const Course* course = gm.findCourse(g.courseCode);
+        if (course == nullptr) continue;
+        GpaSum& sum = sums[g.semester];
+        sum.points += letterToPoint(Retake::officialLetter(g, allGrades)) * course->credit;
+        sum.credits += course->credit;
+    }
+    return sums;
+}
+
+double toGpa(const GpaSum& sum) {
+    return sum.credits == 0 ? 0.0 : sum.points / sum.credits;
+}
+
+}  // namespace
+
 double calcGPA(const GradeManager& gm, const std::string& studentId, const std::string& semester) {
-    auto grades = Retake::activeGrades(gm.getGradesByStudent(studentId));
-    double sum1=0, sum2=0;
-    const Course* course;
-
-    //학점 계산, Course 못 찾은 경우 해당 과목 제외하고 계산
-    for(int i=0; i<grades.size(); ++i){
-        if(semester.empty() || grades[i].semester == semester){
-            course = gm.findCourse(grades[i].courseCode);
-            if(course != nullptr){
-                sum1+=letterToPoint(Retake::officialLetter(grades[i], gm.getGrades())) * course->credit;
-                sum2+=course->credit;
-            }
-
+    const std::map<std::string, GpaSum> sums = sumBySemester(gm, studentId);
+    GpaSum total;
+    for (const auto& [sem, sum] : sums) {
+        if (semester.empty() || sem == semester) {
+            total.points += sum.points;
+            total.credits += sum.credits;
         }
     }
+    return toGpa(total);
+}
 
-    if(sum2==0){
-        return 0.0;
+GpaSummary gpaSummary(const GradeManager& gm, const std::string& studentId) {
+    GpaSummary summary;
+    GpaSum total;
+    for (const auto& [sem, sum] : sumBySemester(gm, studentId)) {  // map 이라 학기 오름차순
+        SemesterSummary s;
+        s.semester = sem;
+        s.gpa = toGpa(sum);
+        s.credits = static_cast<int>(sum.credits);
+        summary.semesters.push_back(s);
+        total.points += sum.points;
+        total.credits += sum.credits;
     }
-    else{
-        return sum1/sum2;
-    }
-
+    summary.gpa = toGpa(total);
+    summary.credits = static_cast<int>(total.credits);
+    return summary;
 }
 
 CourseStats courseStats(const GradeManager& gm, const std::string& courseCode) {

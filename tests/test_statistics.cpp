@@ -202,3 +202,75 @@ TEST_CASE(academicWarnings_without_enrollment_is_empty) {
     CHECK(Statistics::academicWarnings(gm, "24000001").empty());
     CHECK(Statistics::academicWarnings(gm, "99999999").empty());  // 없는 학생
 }
+
+// ----- #32 학기별 GPA 요약 -----
+
+TEST_CASE(gpaSummary_without_grades_is_empty) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("24000001", "가")));
+
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "24000001");
+    CHECK(summary.semesters.empty());
+    CHECK_NEAR(summary.gpa, 0.0, 1e-9);
+    CHECK_EQ(summary.credits, 0);
+
+    const Statistics::GpaSummary unknown = Statistics::gpaSummary(gm, "99999999");  // 없는 학생
+    CHECK(unknown.semesters.empty());
+    CHECK_EQ(unknown.credits, 0);
+}
+
+// 재수강으로 삭제된 성적만 있던 학기(2025-2)는 요약에서 빠짐
+TEST_CASE(gpaSummary_drops_replaced_semester_and_limits_retake) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(gm.addCourse(makeCourse("100001", "미적분학", 3)));
+    CHECK(gm.addCourse(makeCourse("100002", "과목2", 2)));
+    CHECK(gm.addCourse(makeCourse("100003", "과목3", 3)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2025-1", 87)));  // B+ 3.5, 2학점
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2025-1", 82)));  // B0 3.0, 3학점
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-2", 40)));  // F → 재수강으로 삭제
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2026-1", 98)));  // 재수강 A+ → A0 4.0, 3학점
+
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "25103008");
+    CHECK_EQ(summary.semesters.size(), static_cast<size_t>(2));
+    if (summary.semesters.size() == 2) {
+        CHECK_EQ(summary.semesters[0].semester, std::string("2025-1"));
+        CHECK_NEAR(summary.semesters[0].gpa, (3.5 * 2 + 3.0 * 3) / 5, 1e-9);  // 3.2
+        CHECK_EQ(summary.semesters[0].credits, 5);
+        CHECK_EQ(summary.semesters[1].semester, std::string("2026-1"));
+        CHECK_NEAR(summary.semesters[1].gpa, 4.0, 1e-9);
+        CHECK_EQ(summary.semesters[1].credits, 3);
+    }
+    CHECK_NEAR(summary.gpa, (3.5 * 2 + 3.0 * 3 + 4.0 * 3) / 8, 1e-9);  // 3.5
+    CHECK_EQ(summary.credits, 8);
+}
+
+TEST_CASE(gpaSummary_matches_calcGPA) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("25103008", "윤지아")));
+    CHECK(gm.addCourse(makeCourse("100001", "미적분학", 3)));
+    CHECK(gm.addCourse(makeCourse("100002", "과목2", 2)));
+    CHECK(gm.addCourse(makeCourse("100003", "과목3", 3)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100002", "2026-1", 87)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100003", "2025-2", 91)));  // 일부러 학기 순서를 섞어 추가
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2025-1", 40)));
+    CHECK(gm.addGrade(makeGrade("25103008", "100001", "2026-2", 77)));  // 재수강 C+
+
+    const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, "25103008");
+    CHECK_EQ(summary.semesters.size(), static_cast<size_t>(3));
+    CHECK_NEAR(summary.gpa, Statistics::calcGPA(gm, "25103008"), 1e-12);
+    int creditSum = 0;
+    for (size_t i = 0; i < summary.semesters.size(); i++) {
+        const Statistics::SemesterSummary& s = summary.semesters[i];
+        CHECK_NEAR(s.gpa, Statistics::calcGPA(gm, "25103008", s.semester), 1e-12);
+        creditSum += s.credits;
+        if (i > 0) {
+            CHECK(summary.semesters[i - 1].semester < s.semester);  // 학기 오름차순
+        }
+    }
+    CHECK_EQ(summary.credits, creditSum);
+    CHECK_EQ(summary.credits, 8);
+}

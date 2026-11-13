@@ -31,14 +31,25 @@ constexpr const char* kSemesterRules =
 constexpr const char* kAccountRules =
     "계정 정보가 올바르지 않습니다 (아이디 영문·숫자·_ 3~20자, 비밀번호 8~64자, 교수·관리자는 이름 필수, 학생은 학번 필수)";
 
+constexpr const char* kBadBody = "요청 본문이 올바르지 않습니다";
+constexpr const char* kSaveFailed = "저장에 실패했습니다";
+constexpr const char* kStudentRules =
+    "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)";
+constexpr const char* kScoreRules = "점수는 0~100 사이 숫자여야 합니다";
+constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)";
+constexpr const char* kAssessmentRules = "평가 항목이 올바르지 않습니다 (이름 필수, 비율 1~100 정수)";
+constexpr const char* kAssessedCourse =
+    "평가 항목으로 성적을 계산하는 과목입니다 (평가 항목 화면에서 점수를 입력하세요)";
+constexpr const char* kNotEnrolled = "수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)";
+
 void setError(httplib::Response& res, int status, const std::string& message) {
     res.status = status;
     res.set_content(json{{"error", message}}.dump(), "application/json; charset=utf-8");
 }
 
-void setText(httplib::Response& res, int status, const std::string& message) {
+void setJson(httplib::Response& res, int status, const json& body) {
     res.status = status;
-    res.set_content(message, "text/plain; charset=utf-8");
+    res.set_content(body.dump(), "application/json; charset=utf-8");
 }
 
 bool hasRole(const Account& account, const char* role) {
@@ -99,14 +110,179 @@ std::unordered_set<std::string> studentsForProfessor(const Account& account,
     return ids;
 }
 
-bool hasGrade(const GradeManager& gm, const std::string& studentId,
-              const std::string& courseCode, const std::string& semester) {
-    const auto& grades = gm.getGrades();
-    return std::any_of(grades.begin(), grades.end(), [&](const Grade& grade) {
-        return grade.studentId == studentId &&
-               grade.courseCode == courseCode &&
-               grade.semester == semester;
-    });
+const Grade* findGrade(const GradeManager& gm, const std::string& studentId,
+                       const std::string& courseCode, const std::string& semester) {
+    for (const Grade& grade : gm.getGrades()) {
+        if (grade.studentId == studentId && grade.courseCode == courseCode &&
+            grade.semester == semester) {
+            return &grade;
+        }
+    }
+    return nullptr;
+}
+
+std::string enrollmentKey(const std::string& studentId, const std::string& courseCode,
+                          const std::string& semester) {
+    return studentId + '\n' + courseCode + '\n' + semester;
+}
+
+// 성적 또는 항목 점수가 있는 (학번, 과목, 학기) 의 enrollmentKey 집합
+//   여기 든 수강은 취소할 수 없고, 수강신청 응답의 hasGrade 가 true
+std::unordered_set<std::string> gradedEnrollments(const GradeManager& gm) {
+    std::unordered_set<std::string> keys;
+    for (const Grade& grade : gm.getGrades()) {
+        keys.insert(enrollmentKey(grade.studentId, grade.courseCode, grade.semester));
+    }
+    std::unordered_set<std::string> assessed;  // 항목이 있는 (과목, 학기)
+    for (const Assessment& item : gm.getAllAssessments()) {
+        if (!assessed.insert(item.courseCode + '\n' + item.semester).second) continue;
+        for (const AssessmentScore& score : gm.getAssessmentScores(item.courseCode, item.semester)) {
+            keys.insert(enrollmentKey(score.studentId, score.courseCode, score.semester));
+        }
+    }
+    return keys;
+}
+
+json studentJson(const Student& s) {
+    return {{"id", s.id}, {"name", s.name}, {"major", s.major}, {"year", s.year}};
+}
+
+json courseJson(const Course& c) {
+    return {
+        {"code", c.code}, {"name", c.name}, {"credit", c.credit},
+        {"professor", c.professor}, {"category", c.category}, {"area", c.area},
+        {"schedule", c.schedule}, {"language", c.language},
+        {"capacity", c.capacity}, {"remote", c.remote}
+    };
+}
+
+// letter 는 재수강 규칙을 적용한 등급 (grades 에는 gm.getGrades() 를 넘김)
+json gradeJson(const Grade& grade, const std::vector<Grade>& grades) {
+    return {
+        {"studentId", grade.studentId}, {"courseCode", grade.courseCode},
+        {"semester", grade.semester}, {"score", grade.score},
+        {"letter", Retake::officialLetter(grade, grades)}
+    };
+}
+
+json assessmentJson(const Assessment& item) {
+    return {
+        {"courseCode", item.courseCode}, {"semester", item.semester},
+        {"name", item.name}, {"weight", item.weight}
+    };
+}
+
+json assessmentScoreJson(const AssessmentScore& score) {
+    return {
+        {"studentId", score.studentId}, {"courseCode", score.courseCode},
+        {"semester", score.semester}, {"name", score.name}, {"score", score.score}
+    };
+}
+
+int weightSum(const std::vector<Assessment>& items) {
+    int sum = 0;
+    for (const Assessment& item : items) sum += item.weight;
+    return sum;
+}
+
+// 본문의 문자열 칸: 없거나 문자열이 아니면 400 "<칸> 값이 올바르지 않습니다" 를 채우고 false
+bool readString(const json& body, const char* key, std::string& out, httplib::Response& res) {
+    const auto it = body.find(key);
+    if (it == body.end() || !it->is_string()) {
+        setError(res, 400, std::string(key) + " 값이 올바르지 않습니다");
+        return false;
+    }
+    out = it->get<std::string>();
+    return true;
+}
+
+// 생략할 수 있는 문자열 칸: 없거나 null 이면 fallback, 문자열이 아니면 400 "<칸> 값이 올바르지 않습니다" 를 채우고 false
+bool readOptString(const json& body, const char* key, const std::string& fallback,
+                   std::string& out, httplib::Response& res) {
+    const auto it = body.find(key);
+    if (it == body.end() || it->is_null()) {
+        out = fallback;
+        return true;
+    }
+    return readString(body, key, out, res);
+}
+
+// 평가 항목 본문: nameKey 칸의 이름과 weight(정수 1~100) 를 item 에 넣음. 형식이 틀리면 400 을 채우고 false
+bool readAssessmentFields(const json& body, const char* nameKey, Assessment& item,
+                          httplib::Response& res) {
+    const auto name = body.find(nameKey);
+    const auto weight = body.find("weight");
+    if (name == body.end() || !name->is_string() ||
+        weight == body.end() || !weight->is_number_integer()) {
+        setError(res, 400, kAssessmentRules);
+        return false;
+    }
+    const double value = weight->get<double>();  // 아주 큰 정수도 넘치지 않게 double 로 범위 확인
+    if (value < 1.0 || value > 100.0) {
+        setError(res, 400, kAssessmentRules);
+        return false;
+    }
+    item.name = name->get<std::string>();
+    item.weight = static_cast<int>(value);
+    return true;
+}
+
+// 점수 값: 숫자이고 0~100 이면 out 에 넣고 true
+bool readScore(const json& value, double& out) {
+    if (!value.is_number()) return false;
+    out = value.get<double>();
+    return out >= 0.0 && out <= 100.0;
+}
+
+// 성적 본문: studentId·courseCode·semester 와 score 또는 letter (둘 다 있으면 score, null 은 없는 것으로 봄)
+//   letter 는 letterToScore 로 점수로 바꿈. 문제가 있으면 400 을 채우고 false
+bool readGradeBody(const json& body, Grade& grade, httplib::Response& res) {
+    if (!readString(body, "studentId", grade.studentId, res) ||
+        !readString(body, "courseCode", grade.courseCode, res) ||
+        !readString(body, "semester", grade.semester, res)) {
+        return false;
+    }
+    const auto score = body.find("score");
+    const auto letter = body.find("letter");
+    if (score != body.end() && !score->is_null()) {
+        if (!readScore(*score, grade.score)) {
+            setError(res, 400, kScoreRules);
+            return false;
+        }
+    } else if (letter != body.end() && !letter->is_null()) {
+        grade.score = letter->is_string() ? letterToScore(letter->get<std::string>()) : -1.0;
+        if (grade.score < 0.0) {
+            setError(res, 400, kLetterRules);
+            return false;
+        }
+    } else {
+        setError(res, 400, "점수(score) 또는 등급(letter)을 입력하세요");
+        return false;
+    }
+    if (!isValidSemester(grade.semester)) {
+        setError(res, 400, kSemesterRules);
+        return false;
+    }
+    if (!grade.isValid()) {
+        setError(res, 400, kGradeRules);
+        return false;
+    }
+    return true;
+}
+
+// 평가 항목·항목 점수 라우트: 과목이 없으면 404, 담당 과목이 아닌 교수면 403 을 채우고 false
+bool checkCourseAccess(const Account& account, const GradeManager& gm,
+                       const std::string& courseCode, httplib::Response& res) {
+    const Course* course = gm.findCourse(courseCode);
+    if (!course) {
+        setError(res, 404, "없는 과목입니다: " + courseCode);
+        return false;
+    }
+    if (account.role == "professor" && !teaches(account, *course)) {
+        setError(res, 403, "권한이 없습니다");
+        return false;
+    }
+    return true;
 }
 
 std::string escapeCSV(const std::string& value) {
@@ -123,12 +299,12 @@ bool parseJsonBody(const httplib::Request& req, json& body, httplib::Response& r
     try {
         body = json::parse(req.body);
         if (!body.is_object()) {
-            setError(res, 400, "요청 본문이 올바르지 않습니다");
+            setError(res, 400, kBadBody);
             return false;
         }
         return true;
     } catch (...) {
-        setError(res, 400, "요청 본문이 올바르지 않습니다");
+        setError(res, 400, kBadBody);
         return false;
     }
 }
@@ -287,8 +463,9 @@ void Server::run() {
         std::lock_guard<std::mutex> lock(mtx);
         json body;
         if (!parseJsonBody(req, body, res)) return;
-        const std::string username = body.value("username", "");
-        const std::string password = body.value("password", "");
+        std::string username, password;
+        if (!readOptString(body, "username", "", username, res) ||
+            !readOptString(body, "password", "", password, res)) return;
         if (!accounts || !accounts->verify(username, password)) {
             setError(res, 401, "아이디 또는 비밀번호가 올바르지 않습니다");
             return;
@@ -332,8 +509,9 @@ void Server::run() {
 
         json body;
         if (!parseJsonBody(req, body, res)) return;
-        const std::string currentPassword = body.value("currentPassword", "");
-        const std::string newPassword = body.value("newPassword", "");
+        std::string currentPassword, newPassword;
+        if (!readOptString(body, "currentPassword", "", currentPassword, res) ||
+            !readOptString(body, "newPassword", "", newPassword, res)) return;
         if (!accounts->verify(account->username, currentPassword)) {
             setError(res, 400, "현재 비밀번호가 올바르지 않습니다");
             return;
@@ -367,11 +545,12 @@ void Server::run() {
         if (!parseJsonBody(req, body, res)) return;
 
         Account account;
-        account.username = body.value("username", "");
-        account.role = body.value("role", "");
-        account.name = body.value("name", "");
-        account.studentId = body.value("studentId", "");
-        const std::string password = body.value("password", "");
+        std::string password;
+        if (!readOptString(body, "username", "", account.username, res) ||
+            !readOptString(body, "role", "", account.role, res) ||
+            !readOptString(body, "name", "", account.name, res) ||
+            !readOptString(body, "studentId", "", account.studentId, res) ||
+            !readOptString(body, "password", "", password, res)) return;
 
         if (!validUsername(account.username) || !isValidRole(account.role) ||
             !validPassword(password) ||
@@ -421,10 +600,11 @@ void Server::run() {
 
         json body;
         if (!parseJsonBody(req, body, res)) return;
-        const std::string role = body.value("role", oldAccount->role);
-        std::string name = body.value("name", oldAccount->name);
-        std::string studentId = body.value("studentId", oldAccount->studentId);
-        const std::string password = body.value("password", "");
+        std::string role, name, studentId, password;
+        if (!readOptString(body, "role", oldAccount->role, role, res) ||
+            !readOptString(body, "name", oldAccount->name, name, res) ||
+            !readOptString(body, "studentId", oldAccount->studentId, studentId, res) ||
+            !readOptString(body, "password", "", password, res)) return;
 
         int adminCount = 0;
         for (const Account& a : accounts->getAccounts()) if (a.role == "admin") ++adminCount;
@@ -536,10 +716,7 @@ void Server::run() {
             bool include = account->role == "admin" ||
                 (account->role == "student" && student.id == account->studentId) ||
                 (account->role == "professor" && allowed.count(student.id));
-            if (include) arr.push_back({
-                {"id", student.id}, {"name", student.name},
-                {"major", student.major}, {"year", student.year}
-            });
+            if (include) arr.push_back(studentJson(student));
         }
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
@@ -555,10 +732,7 @@ void Server::run() {
             bool include = account->role == "admin" ||
                 (account->role == "student" && student.id == account->studentId) ||
                 (account->role == "professor" && allowed.count(student.id));
-            if (include) arr.push_back({
-                {"id", student.id}, {"name", student.name},
-                {"major", student.major}, {"year", student.year}
-            });
+            if (include) arr.push_back(studentJson(student));
         }
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
@@ -568,14 +742,7 @@ void Server::run() {
         std::lock_guard<std::mutex> lock(mtx);
         if (!requireRole(req, res, {"admin", "professor", "student"})) return;
         json arr = json::array();
-        for (const Course& c : gm.getCourses()) {
-            arr.push_back({
-                {"code", c.code}, {"name", c.name}, {"credit", c.credit},
-                {"professor", c.professor}, {"category", c.category}, {"area", c.area},
-                {"schedule", c.schedule}, {"language", c.language},
-                {"capacity", c.capacity}, {"remote", c.remote}
-            });
-        }
+        for (const Course& c : gm.getCourses()) arr.push_back(courseJson(c));
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
@@ -597,11 +764,7 @@ void Server::run() {
             if (account->role == "student" && grade.studentId != account->studentId) continue;
             if (account->role == "professor" &&
                 !isProfessorOf(*account, gm, grade.courseCode)) continue;
-            arr.push_back({
-                {"studentId", grade.studentId}, {"courseCode", grade.courseCode},
-                {"semester", grade.semester}, {"score", grade.score},
-                {"letter", Retake::officialLetter(grade, grades)}
-            });
+            arr.push_back(gradeJson(grade, grades));
         }
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
@@ -620,11 +783,41 @@ void Server::run() {
             setError(res, 404, "학생을 찾을 수 없습니다");
             return;
         }
-        const double gpa = Statistics::calcGPA(gm, id, req.get_param_value("semester"));
-        res.set_content(json{{"studentId", id},
-                             {"semester", req.get_param_value("semester")},
-                             {"gpa", gpa}}.dump(),
-                        "application/json; charset=utf-8");
+        // 평점 계산에 들어간 학점이 0 이면 gpa 는 null (?semester= 가 있으면 그 학기 기준)
+        const std::string semester = req.get_param_value("semester");
+        const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, id);
+        int credits = semester.empty() ? summary.credits : 0;
+        for (const Statistics::SemesterSummary& s : summary.semesters) {
+            if (!semester.empty() && s.semester == semester) credits = s.credits;
+        }
+        const json gpa = credits > 0 ? json(Statistics::calcGPA(gm, id, semester)) : json(nullptr);
+        setJson(res, 200, json{{"studentId", id}, {"semester", semester}, {"gpa", gpa}});
+    });
+
+    // 학기별·누적 평점과 학점 (누적 학점이 0 이면 gpa 는 null)
+    svr.Get("/api/stats/summary/:id", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "student"});
+        if (!account) return;
+        const std::string id = req.path_params.at("id");
+        if (account->role == "student" && id != account->studentId) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+        if (!gm.findStudent(id)) {
+            setError(res, 404, "없는 학생입니다: " + id);
+            return;
+        }
+        const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, id);
+        json semesters = json::array();
+        for (const Statistics::SemesterSummary& s : summary.semesters) {
+            semesters.push_back({{"semester", s.semester}, {"gpa", s.gpa}, {"credits", s.credits}});
+        }
+        setJson(res, 200, json{
+            {"semesters", semesters},
+            {"gpa", summary.credits > 0 ? json(summary.gpa) : json(nullptr)},
+            {"credits", summary.credits}
+        });
     });
 
     // 과목 통계
@@ -768,7 +961,8 @@ void Server::run() {
         if (!requireRole(req, res, {"admin"})) return;
         json body;
         if (!parseJsonBody(req, body, res)) return;
-        const std::string semester = body.value("semester", "");
+        std::string semester;
+        if (!readOptString(body, "semester", "", semester, res)) return;
         if (!semester.empty() && !isValidSemester(semester)) {
             setError(res, 400, std::string(kSemesterRules) + ", 비우면 신청 마감");
             return;
@@ -808,6 +1002,7 @@ void Server::run() {
         const std::string requestedStudent = req.get_param_value("studentId");
         const std::string requestedCourse = req.get_param_value("courseCode");
         const std::string requestedSemester = req.get_param_value("semester");
+        const auto graded = gradedEnrollments(gm);
         json arr = json::array();
         for (const Enrollment& enrollment : gm.getEnrollments()) {
             if (!requestedStudent.empty() && enrollment.studentId != requestedStudent) continue;
@@ -819,7 +1014,8 @@ void Server::run() {
             arr.push_back({
                 {"studentId", enrollment.studentId}, {"courseCode", enrollment.courseCode},
                 {"semester", enrollment.semester},
-                {"hasGrade", hasGrade(gm, enrollment.studentId, enrollment.courseCode, enrollment.semester)}
+                {"hasGrade", graded.count(enrollmentKey(enrollment.studentId, enrollment.courseCode,
+                                                        enrollment.semester)) > 0}
             });
         }
         res.set_content(arr.dump(), "application/json; charset=utf-8");
@@ -833,9 +1029,9 @@ void Server::run() {
         if (!parseJsonBody(req, body, res)) return;
 
         Enrollment enrollment;
-        enrollment.studentId = body.value("studentId", "");
-        enrollment.courseCode = body.value("courseCode", "");
-        enrollment.semester = body.value("semester", "");
+        if (!readOptString(body, "studentId", "", enrollment.studentId, res) ||
+            !readOptString(body, "courseCode", "", enrollment.courseCode, res) ||
+            !readOptString(body, "semester", "", enrollment.semester, res)) return;
 
         if (account->role == "student" && enrollment.studentId != account->studentId) {
             setError(res, 403, "권한이 없습니다");
@@ -909,7 +1105,9 @@ void Server::run() {
         res.status = 201;
         res.set_content(json{
             {"studentId", enrollment.studentId}, {"courseCode", enrollment.courseCode},
-            {"semester", enrollment.semester}, {"hasGrade", false}
+            {"semester", enrollment.semester},
+            {"hasGrade", gradedEnrollments(gm).count(enrollmentKey(
+                enrollment.studentId, enrollment.courseCode, enrollment.semester)) > 0}
         }.dump(), "application/json; charset=utf-8");
     });
 
@@ -943,7 +1141,7 @@ void Server::run() {
             setError(res, 404, "수강신청 기록이 없습니다");
             return;
         }
-        if (hasGrade(gm, studentId, courseCode, semester)) {
+        if (gradedEnrollments(gm).count(enrollmentKey(studentId, courseCode, semester))) {
             setError(res, 409, "성적이 있는 수강은 취소할 수 없습니다");
             return;
         }
@@ -967,7 +1165,11 @@ void Server::run() {
             student.major = body.at("major").get<std::string>();
             student.year = body.at("year").get<decltype(student.year)>();
         } catch (...) {
-            setError(res, 400, "학생 정보가 올바르지 않습니다");
+            setError(res, 400, kStudentRules);
+            return;
+        }
+        if (!student.isValid()) {
+            setError(res, 400, kStudentRules);
             return;
         }
         if (!gm.addStudent(student)) {
@@ -978,7 +1180,7 @@ void Server::run() {
             setError(res, 500, "학생 정보 저장에 실패했습니다");
             return;
         }
-        setText(res, 201, "학생 정보가 등록되었습니다");
+        setJson(res, 201, studentJson(*gm.findStudent(student.id)));
     });
 
     svr.Put("/api/students/:id", [this](const httplib::Request& req, httplib::Response& res) {
@@ -994,11 +1196,23 @@ void Server::run() {
             student.major = body.at("major").get<std::string>();
             student.year = body.at("year").get<decltype(student.year)>();
         } catch (...) {
-            setError(res, 400, "학생 정보가 올바르지 않습니다");
+            setError(res, 400, kStudentRules);
+            return;
+        }
+        if (!gm.findStudent(oldId)) {
+            setError(res, 404, "수정할 학생을 찾을 수 없습니다.");
+            return;
+        }
+        if (!student.isValid()) {
+            setError(res, 400, kStudentRules);
+            return;
+        }
+        if (student.id != oldId && gm.findStudent(student.id)) {
+            setError(res, 409, "이미 등록된 학번입니다: " + student.id);
             return;
         }
         if (!gm.updateStudent(oldId, student)) {
-            setError(res, 404, "수정할 학생을 찾을 수 없습니다.");
+            setError(res, 400, kStudentRules);
             return;
         }
         if (oldId != student.id) {
@@ -1012,7 +1226,7 @@ void Server::run() {
             setError(res, 500, "학생 정보 저장에 실패했습니다");
             return;
         }
-        setText(res, 200, "학생 정보가 수정되었습니다");
+        setJson(res, 200, studentJson(*gm.findStudent(student.id)));
     });
 
     svr.Delete("/api/students/:id", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1036,7 +1250,7 @@ void Server::run() {
             setError(res, 500, "학생 정보 저장에 실패했습니다");
             return;
         }
-        setText(res, 200, "학생 정보가 삭제되었습니다.");
+        setJson(res, 200, json{{"deleted", true}});
     });
 
     // 과목 등록 / 수정 / 삭제
@@ -1074,7 +1288,7 @@ void Server::run() {
             setError(res, 500, "과목 정보 저장에 실패했습니다");
             return;
         }
-        setText(res, 201, "과목 정보가 등록되었습니다");
+        setJson(res, 201, courseJson(*gm.findCourse(course.code)));
     });
 
     svr.Put("/api/courses/:code", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1120,7 +1334,7 @@ void Server::run() {
             setError(res, 500, "과목 정보 저장에 실패했습니다");
             return;
         }
-        setText(res, 200, "과목 정보가 수정되었습니다");
+        setJson(res, 200, courseJson(*gm.findCourse(course.code)));
     });
 
     svr.Delete("/api/courses/:code", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1134,7 +1348,7 @@ void Server::run() {
             setError(res, 500, "과목 정보 저장에 실패했습니다");
             return;
         }
-        setText(res, 200, "과목 정보가 삭제되었습니다.");
+        setJson(res, 200, json{{"deleted", true}});
     });
 
     // 과목 게시물 (수업자료·중간고사·기말고사·과제)
@@ -1303,6 +1517,7 @@ void Server::run() {
     });
 
     // 성적 등록: 수강신청 여부 확인, 과목 정원은 여기서 검사하지 않음
+    //   본문 {studentId, courseCode, semester, score} 또는 score 대신 letter (둘 다 있으면 score)
     svr.Post("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         const Account* account = requireRole(req, res, {"admin", "professor"});
@@ -1311,19 +1526,7 @@ void Server::run() {
         if (!parseJsonBody(req, body, res)) return;
 
         Grade grade;
-        try {
-            grade.studentId = body.at("studentId").get<std::string>();
-            grade.courseCode = body.at("courseCode").get<std::string>();
-            grade.semester = body.at("semester").get<std::string>();
-            grade.score = body.at("score").get<double>();
-        } catch (...) {
-            setError(res, 400, kGradeRules);
-            return;
-        }
-        if (!grade.isValid()) {
-            setError(res, 400, kGradeRules);
-            return;
-        }
+        if (!readGradeBody(body, grade, res)) return;
         if (!gm.findStudent(grade.studentId)) {
             setError(res, 404, "없는 학생입니다: " + grade.studentId);
             return;
@@ -1345,23 +1548,28 @@ void Server::run() {
                 "-4 학기만 가능)");
             return;
         }
-        for (const Grade& existing : gm.getGrades()) {
-            if (existing.studentId == grade.studentId &&
-                existing.courseCode == grade.courseCode &&
-                existing.semester == grade.semester) {
-                setError(res, 409, "이미 등록된 성적입니다");
-                return;
-            }
+        if (gm.hasAssessments(grade.courseCode, grade.semester)) {
+            setError(res, 409, kAssessedCourse);
+            return;
+        }
+        if (findGrade(gm, grade.studentId, grade.courseCode, grade.semester)) {
+            setError(res, 409, "이미 등록된 성적입니다");
+            return;
         }
         if (!gm.findEnrollment(grade.studentId, grade.courseCode, grade.semester)) {
-            setError(res, 409, "수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)");
+            setError(res, 409, kNotEnrolled);
             return;
         }
-        if (!gm.addGrade(grade) || !gm.save()) {
-            setError(res, 500, "성적 등록에 실패했습니다");
+        if (!gm.addGrade(grade)) {
+            setError(res, 400, kGradeRules);
             return;
         }
-        res.set_content("성적 정보가 등록되었습니다", "text/plain; charset=utf-8");
+        if (!gm.save()) {
+            setError(res, 500, "성적 저장에 실패했습니다");
+            return;
+        }
+        setJson(res, 201, gradeJson(*findGrade(gm, grade.studentId, grade.courseCode, grade.semester),
+                                    gm.getGrades()));
     });
 
     svr.Put("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1371,22 +1579,14 @@ void Server::run() {
         json body;
         if (!parseJsonBody(req, body, res)) return;
         Grade grade;
-        try {
-            grade.studentId = body.at("studentId").get<std::string>();
-            grade.courseCode = body.at("courseCode").get<std::string>();
-            grade.semester = body.at("semester").get<std::string>();
-            grade.score = body.at("score").get<double>();
-        } catch (...) {
-            setError(res, 400, kGradeRules);
-            return;
-        }
+        if (!readGradeBody(body, grade, res)) return;
         if (account->role == "professor" &&
             !isProfessorOf(*account, gm, grade.courseCode)) {
             setError(res, 403, "권한이 없습니다");
             return;
         }
-        if (!grade.isValid()) {
-            setError(res, 400, kGradeRules);
+        if (gm.hasAssessments(grade.courseCode, grade.semester)) {
+            setError(res, 409, kAssessedCourse);
             return;
         }
         if (!gm.updateGrade(grade)) {
@@ -1397,7 +1597,8 @@ void Server::run() {
             setError(res, 500, "성적 저장에 실패했습니다");
             return;
         }
-        setText(res, 200, "성적 정보가 수정되었습니다");
+        setJson(res, 200, gradeJson(*findGrade(gm, grade.studentId, grade.courseCode, grade.semester),
+                                    gm.getGrades()));
     });
 
     svr.Delete("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1412,6 +1613,10 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
+        if (gm.hasAssessments(courseCode, semester)) {
+            setError(res, 409, kAssessedCourse);
+            return;
+        }
         if (!gm.removeGrade(studentId, courseCode, semester)) {
             setError(res, 404, "삭제할 성적을 찾을 수 없습니다.");
             return;
@@ -1420,7 +1625,274 @@ void Server::run() {
             setError(res, 500, "성적 삭제 저장에 실패했습니다");
             return;
         }
-        setText(res, 200, "성적 정보가 삭제되었습니다.");
+        setJson(res, 200, json{{"deleted", true}});
+    });
+
+    // 평가 항목 (과목·학기별 중간·기말·과제·출석 등과 반영 비율)
+    svr.Get("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!requireRole(req, res, {"admin", "professor", "student"})) return;
+        const std::string courseCode = req.get_param_value("courseCode");
+        const std::string semester = req.get_param_value("semester");
+        if (courseCode.empty() || semester.empty()) {
+            setError(res, 400, "courseCode, semester 를 모두 지정해야 합니다");
+            return;
+        }
+        if (!isValidSemester(semester)) {
+            setError(res, 400, kSemesterRules);
+            return;
+        }
+        if (!gm.findCourse(courseCode)) {
+            setError(res, 404, "없는 과목입니다: " + courseCode);
+            return;
+        }
+        json arr = json::array();
+        for (const Assessment& item : gm.getAssessments(courseCode, semester)) {
+            arr.push_back(assessmentJson(item));
+        }
+        setJson(res, 200, arr);
+    });
+
+    svr.Post("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        Assessment item;
+        if (!readString(body, "courseCode", item.courseCode, res) ||
+            !readString(body, "semester", item.semester, res)) return;
+        if (!readAssessmentFields(body, "name", item, res)) return;
+        if (!isValidSemester(item.semester)) {
+            setError(res, 400, kSemesterRules);
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, item.courseCode, res)) return;
+        if (!item.isValid()) {
+            setError(res, 400, kAssessmentRules);
+            return;
+        }
+        const std::vector<Assessment> items = gm.getAssessments(item.courseCode, item.semester);
+        for (const Assessment& current : items) {
+            if (current.name == item.name) {
+                setError(res, 409, "이미 있는 평가 항목입니다: " + item.name);
+                return;
+            }
+        }
+        const int total = weightSum(items);
+        if (total + item.weight > 100) {
+            setError(res, 409, "비율 합계가 100을 넘습니다 (지금 " + std::to_string(total) + "%)");
+            return;
+        }
+        if (items.empty()) {
+            for (const Grade& grade : gm.getGrades()) {
+                if (grade.courseCode == item.courseCode && grade.semester == item.semester) {
+                    setError(res, 409, "직접 입력한 성적이 있는 과목·학기에는 평가 항목을 만들 수 없습니다");
+                    return;
+                }
+            }
+        }
+        if (!gm.addAssessment(item)) {
+            setError(res, 400, kAssessmentRules);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 201, assessmentJson(item));
+    });
+
+    // 본문 {courseCode, semester, name, newName, weight}: name 항목을 newName(없으면 name)·weight 로 바꿈
+    svr.Put("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        std::string name;
+        Assessment item;
+        if (!readString(body, "courseCode", item.courseCode, res) ||
+            !readString(body, "semester", item.semester, res) ||
+            !readString(body, "name", name, res)) return;
+        const auto newName = body.find("newName");
+        const bool renamed = newName != body.end() && !newName->is_null();
+        if (!readAssessmentFields(body, renamed ? "newName" : "name", item, res)) return;
+        if (!isValidSemester(item.semester)) {
+            setError(res, 400, kSemesterRules);
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, item.courseCode, res)) return;
+        const std::vector<Assessment> items = gm.getAssessments(item.courseCode, item.semester);
+        const auto old = std::find_if(items.begin(), items.end(), [&](const Assessment& current) {
+            return current.name == name;
+        });
+        if (old == items.end()) {
+            setError(res, 404, "없는 평가 항목입니다: " + name);
+            return;
+        }
+        if (!item.isValid()) {
+            setError(res, 400, kAssessmentRules);
+            return;
+        }
+        if (item.name != name) {
+            for (const Assessment& current : items) {
+                if (current.name == item.name) {
+                    setError(res, 409, "이미 있는 평가 항목입니다: " + item.name);
+                    return;
+                }
+            }
+        }
+        const int total = weightSum(items);
+        if (total - old->weight + item.weight > 100) {
+            setError(res, 409, "비율 합계가 100을 넘습니다 (지금 " + std::to_string(total) + "%)");
+            return;
+        }
+        if (!gm.updateAssessment(item.courseCode, item.semester, name, item)) {
+            setError(res, 400, kAssessmentRules);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 200, assessmentJson(item));
+    });
+
+    // 항목과 그 항목 점수를 지우고 성적을 다시 계산 (마지막 항목이면 그 과목·학기 성적도 지워짐)
+    svr.Delete("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        const std::string courseCode = req.get_param_value("courseCode");
+        const std::string semester = req.get_param_value("semester");
+        const std::string name = req.get_param_value("name");
+        if (courseCode.empty() || semester.empty() || name.empty()) {
+            setError(res, 400, "courseCode, semester, name 을 모두 지정해야 합니다");
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (!gm.removeAssessment(courseCode, semester, name)) {
+            setError(res, 404, "없는 평가 항목입니다: " + name);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 200, json{{"deleted", true}});
+    });
+
+    // 항목 점수: student 는 쿼리와 상관없이 자기 것 전부, admin·담당 교수는 courseCode·semester 필수
+    svr.Get("/api/assessment-scores", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor", "student"});
+        if (!account) return;
+        json arr = json::array();
+        if (account->role == "student") {
+            for (const AssessmentScore& score : gm.getAssessmentScoresByStudent(account->studentId)) {
+                arr.push_back(assessmentScoreJson(score));
+            }
+            setJson(res, 200, arr);
+            return;
+        }
+        const std::string courseCode = req.get_param_value("courseCode");
+        const std::string semester = req.get_param_value("semester");
+        if (courseCode.empty() || semester.empty()) {
+            setError(res, 400, "courseCode, semester 를 모두 지정해야 합니다");
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        for (const AssessmentScore& score : gm.getAssessmentScores(courseCode, semester)) {
+            arr.push_back(assessmentScoreJson(score));
+        }
+        setJson(res, 200, arr);
+    });
+
+    // 본문 {studentId, courseCode, semester, name, score}: 있으면 수정, 없으면 추가 (성적 다시 계산)
+    svr.Put("/api/assessment-scores", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        AssessmentScore score;
+        if (!readString(body, "studentId", score.studentId, res) ||
+            !readString(body, "courseCode", score.courseCode, res) ||
+            !readString(body, "semester", score.semester, res) ||
+            !readString(body, "name", score.name, res)) return;
+        const auto value = body.find("score");
+        if (value == body.end() || !readScore(*value, score.score)) {
+            setError(res, 400, kScoreRules);
+            return;
+        }
+        if (!isValidSemester(score.semester)) {
+            setError(res, 400, kSemesterRules);
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, score.courseCode, res)) return;
+        if (!gm.findStudent(score.studentId)) {
+            setError(res, 404, "없는 학생입니다: " + score.studentId);
+            return;
+        }
+        const std::vector<Assessment> items = gm.getAssessments(score.courseCode, score.semester);
+        if (std::none_of(items.begin(), items.end(), [&](const Assessment& item) {
+                return item.name == score.name;
+            })) {
+            setError(res, 404, "없는 평가 항목입니다: " + score.name);
+            return;
+        }
+        if (!gm.findEnrollment(score.studentId, score.courseCode, score.semester)) {
+            setError(res, 409, kNotEnrolled);
+            return;
+        }
+        if (!gm.setAssessmentScore(score)) {
+            setError(res, 400, kScoreRules);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 200, assessmentScoreJson(score));
+    });
+
+    svr.Delete("/api/assessment-scores", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        const std::string studentId = req.get_param_value("studentId");
+        const std::string courseCode = req.get_param_value("courseCode");
+        const std::string semester = req.get_param_value("semester");
+        const std::string name = req.get_param_value("name");
+        if (studentId.empty() || courseCode.empty() || semester.empty() || name.empty()) {
+            setError(res, 400, "studentId, courseCode, semester, name 을 모두 지정해야 합니다");
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (!gm.findStudent(studentId)) {
+            setError(res, 404, "없는 학생입니다: " + studentId);
+            return;
+        }
+        const std::vector<Assessment> items = gm.getAssessments(courseCode, semester);
+        if (std::none_of(items.begin(), items.end(), [&](const Assessment& item) {
+                return item.name == name;
+            })) {
+            setError(res, 404, "없는 평가 항목입니다: " + name);
+            return;
+        }
+        if (!gm.removeAssessmentScore(studentId, courseCode, semester, name)) {
+            setError(res, 404, "입력된 항목 점수가 없습니다: " + studentId + " " + name);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 200, json{{"deleted", true}});
     });
 
     std::cout << "http://localhost:" << port

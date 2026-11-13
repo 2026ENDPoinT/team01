@@ -17,11 +17,11 @@
 //
 //   GET    /api/students              학생 목록 (admin 전체, professor 담당 과목 수강생만, student 본인만)
 //   GET    /api/students/search?q=    학번·이름 검색 (위와 같은 범위)
-//   POST   /api/students              학생 등록        (admin)
-//   PUT    /api/students/:id          학생 수정        DELETE /api/students/:id  학생 삭제 (admin)
+//   POST   /api/students              학생 등록 → 201 학생 {id,name,major,year}        (admin)
+//   PUT    /api/students/:id          학생 수정 → 200 학생    DELETE /api/students/:id  학생 삭제 → {"deleted":true} (admin)
 //   GET    /api/courses               과목 목록 (로그인)
-//   POST   /api/courses               과목 등록        (admin)
-//   PUT    /api/courses/:code         과목 수정        DELETE /api/courses/:code 과목 삭제 (admin)
+//   POST   /api/courses               과목 등록 → 201 과목 (목록과 같은 필드)        (admin)
+//   PUT    /api/courses/:code         과목 수정 → 200 과목    DELETE /api/courses/:code 과목 삭제 → {"deleted":true} (admin)
 //   GET    /api/courses/:code/posts   과목 게시물 목록 (semester·week·id 순)
 //                                     (admin 전체, professor 담당 과목만, student 는 수강신청한 과목의 수강신청 학기 게시물만)
 //   POST   /api/courses/:code/posts   게시물 추가 {semester,category,week,title,body,link,dueDate}
@@ -29,10 +29,16 @@
 //                                     (admin, professor 는 담당 과목만. 작성자·작성시각은 서버가 채움)
 //   GET    /api/grades                성적 목록 (?studentId= ?courseCode= ?semester= 로 거르기)
 //                                     (admin 전체, professor 담당 과목만, student 본인 것만)
-//   POST   /api/grades                성적 등록        PUT /api/grades           성적 수정
-//   DELETE /api/grades?studentId=&courseCode=&semester=   성적 삭제
-//                                     (admin, professor 는 담당 과목만. 등록은 수강신청이 있어야 함)
-//   GET    /api/stats/gpa/:id         학생 GPA (?semester=) (admin, student 본인)
+//   POST   /api/grades                성적 등록 → 201      PUT /api/grades           성적 수정 → 200
+//                                     본문 {studentId,courseCode,semester,score} 또는 score 대신 letter (A+ A0 B+ B0 C+ C0 D+ D0 F
+//                                     → letterToScore 점수로 저장, 둘 다 있으면 score). 응답 {studentId,courseCode,semester,score,letter}
+//   DELETE /api/grades?studentId=&courseCode=&semester=   성적 삭제 → {"deleted":true}
+//                                     (admin, professor 는 담당 과목만. 등록은 수강신청이 있어야 함.
+//                                      평가 항목이 있는 과목·학기는 등록·수정·삭제 모두 409)
+//   GET    /api/stats/gpa/:id         학생 GPA {studentId,semester,gpa} (?semester=) (admin, student 본인)
+//                                     평점 계산에 들어간 학점이 0 이면 "gpa": null
+//   GET    /api/stats/summary/:id     학기별·누적 평점 {"semesters":[{semester,gpa,credits}],"gpa","credits"}
+//                                     (credits 0 이면 "gpa": null) (admin, student 본인)
 //   GET    /api/stats/course/:code    과목 평균/최고/최저 + latestSemester·latestEnrolled (로그인)
 //   GET    /api/stats/ranking         석차표 (?semester=) (admin)
 //   GET    /api/stats/warnings        학사경고 전체 (admin)
@@ -42,18 +48,33 @@
 //
 //   GET    /api/enrollment/settings   수강신청 학기 {"semester"} (로그인)
 //   PUT    /api/enrollment/settings   수강신청 학기 설정 (admin, ""이면 신청 마감)
-//   GET    /api/enrollments           수강신청 목록 (?studentId= ?courseCode= ?semester=)
+//   GET    /api/enrollments           수강신청 목록 [{studentId,courseCode,semester,hasGrade}] (?studentId= ?courseCode= ?semester=)
 //                                     (admin 전체, professor 담당 과목만, student 본인 것만)
+//                                     hasGrade: 성적 또는 항목 점수가 있으면 true
 //   GET    /api/enrollments/counts?semester=   과목별 신청 인원 (로그인)
 //   POST   /api/enrollments           수강신청 {studentId,courseCode,semester} (admin, student 본인)
 //   DELETE /api/enrollments?studentId=&courseCode=&semester=   수강신청 취소 (admin, student 본인)
+//                                     성적 또는 항목 점수가 있으면 409
+//
+//   GET    /api/assessments?courseCode=&semester=   평가 항목 [{courseCode,semester,name,weight}] (로그인, 두 쿼리 필수)
+//   POST   /api/assessments           항목 추가 {courseCode,semester,name,weight} → 201 항목
+//   PUT    /api/assessments           항목 수정 {courseCode,semester,name,newName,weight} → 200 항목 (newName 없으면 이름 유지)
+//   DELETE /api/assessments?courseCode=&semester=&name=   항목 삭제 (그 항목 점수도 삭제) → {"deleted":true}
+//                                     (위 셋: admin, professor 는 담당 과목만)
+//   GET    /api/assessment-scores?courseCode=&semester=   항목 점수 [{studentId,courseCode,semester,name,score}]
+//                                     (admin·담당 교수는 두 쿼리 필수, student 는 쿼리 무시하고 본인 것 전부)
+//   PUT    /api/assessment-scores     항목 점수 입력 {studentId,courseCode,semester,name,score} (있으면 수정) → 200 항목 점수
+//   DELETE /api/assessment-scores?studentId=&courseCode=&semester=&name=   항목 점수 삭제 → {"deleted":true}
+//                                     (위 둘: admin, professor 는 담당 과목만. 항목 점수가 바뀌면 성적을 다시 계산)
 //   GET    /                          web/ 정적 파일 (공개)
 //
 // 세션: 로그인하면 쿠키 sid=<토큰 hex 64자> (HttpOnly, SameSite=Strict, 8시간) 를 줌.
 //       세션은 메모리에만 있어서 서버를 다시 켜면 모두 로그아웃됨
 //
-// 실패 시: 400 (잘못된 값) / 401 (로그인 안 함) / 403 (권한 없음) / 404 (없음) /
-//          409 (중복, 정원 초과, 수강신청 규칙 위반) + {"error": "메시지"}
+// 실패 시: 400 (잘못된 값, 깨진 JSON, 칸이 빠졌거나 타입이 틀림) / 401 (로그인 안 함) / 403 (권한 없음) /
+//          404 (없음) / 409 (중복, 정원 초과, 수강신청 규칙 위반, 평가 항목 규칙 위반) /
+//          500 (파일 저장 실패) + {"error": "메시지"}
+// 저장: 데이터를 바꾸는 라우트는 성공한 뒤 gm.save() (계정은 accounts->save()) 로 바로 CSV 에 씀
 //
 // 동시 접근: cpp-httplib 은 요청을 여러 스레드에서 동시에 처리함
 //   → gm, accounts, sessions 를 쓰는 모든 라우트는 첫 줄에 std::lock_guard<std::mutex> lock(mtx); (server.cpp 예시 라우트 참고)
