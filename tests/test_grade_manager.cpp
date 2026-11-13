@@ -370,7 +370,8 @@ TEST_CASE(gradingMode_relative_assigns_letters) {
 
     // 89점 학생만 완성: 그 한 명으로 등급을 정함
     fillScores(gm);
-    CHECK_EQ(assignedOf(gm, "24000001"), RelativeGrading::assignLetters({89.0})[0]);
+    const std::string expectedFirst = RelativeGrading::assignLetters({89.0})[0];
+    CHECK_EQ(assignedOf(gm, "24000001"), expectedFirst);
     CHECK(!assignedOf(gm, "24000001").empty());
     CHECK_EQ(letterOf(gm, "24000001"), assignedOf(gm, "24000001"));
 
@@ -455,7 +456,8 @@ TEST_CASE(gradingScheme_cascade_course_code_and_student_changes) {
     CHECK(gm.removeStudent("24000009"));
     CHECK(gm.getAssessmentScoresByStudent("24000009").empty());
     CHECK_EQ(gm.getGrades().size(), static_cast<size_t>(1));
-    CHECK_EQ(assignedOf(gm, "24000002", "109009"), RelativeGrading::assignLetters({79.35})[0]);
+    const std::string expectedSecond = RelativeGrading::assignLetters({79.35})[0];
+    CHECK_EQ(assignedOf(gm, "24000002", "109009"), expectedSecond);
     CHECK_EQ(gm.getAssessments("109009", kSemester).size(), static_cast<size_t>(6));
 
     // 과목 삭제 → 항목·항목 점수·등급 방식 모두 삭제
