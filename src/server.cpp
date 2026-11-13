@@ -7,6 +7,7 @@
 #include <cctype>
 #include <ctime>
 #include <iomanip>
+#include <map>
 #include <iostream>
 #include <random>
 #include <regex>
@@ -37,7 +38,14 @@ constexpr const char* kStudentRules =
     "학생 정보가 올바르지 않습니다 (학번 숫자 8자리, 이름 필수, 학년 1~4)";
 constexpr const char* kScoreRules = "점수는 0~100 사이 숫자여야 합니다";
 constexpr const char* kLetterRules = "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)";
-constexpr const char* kAssessmentRules = "평가 항목이 올바르지 않습니다 (이름 필수, 비율 1~100 정수)";
+constexpr const char* kAssessmentRules =
+    "평가 항목이 올바르지 않습니다 (평가 항목 출석·중간고사·기말고사·과제·팀프로젝트·기타, 비율 0~100 정수)";
+constexpr const char* kGradingSchemeRules =
+    "평가 기준이 올바르지 않습니다 (분류별 비율 0~100 정수, 합계 100, 방식 absolute·relative)";
+constexpr const char* kAttendanceCategory = "출석";
+const std::vector<std::string> kAssessmentCategories = {
+    "출석", "중간고사", "기말고사", "과제", "팀프로젝트", "기타"
+};
 constexpr const char* kAssessedCourse =
     "평가 항목으로 성적을 계산하는 과목입니다 (평가 항목 화면에서 점수를 입력하세요)";
 constexpr const char* kNotEnrolled = "수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)";
@@ -137,6 +145,7 @@ std::unordered_set<std::string> gradedEnrollments(const GradeManager& gm) {
     for (const Assessment& item : gm.getAllAssessments()) {
         if (!assessed.insert(item.courseCode + '\n' + item.semester).second) continue;
         for (const AssessmentScore& score : gm.getAssessmentScores(item.courseCode, item.semester)) {
+            if (score.name == kAttendanceCategory) continue;
             keys.insert(enrollmentKey(score.studentId, score.courseCode, score.semester));
         }
     }
@@ -183,6 +192,25 @@ int weightSum(const std::vector<Assessment>& items) {
     int sum = 0;
     for (const Assessment& item : items) sum += item.weight;
     return sum;
+}
+
+json gradingSchemeItemsJson(const GradeManager& gm, const std::string& courseCode,
+                            const std::string& semester) {
+    const std::vector<Assessment> current = gm.getAssessments(courseCode, semester);
+    if (current.empty()) return json::array();
+    json result = json::array();
+    for (const std::string& category : kAssessmentCategories) {
+        int weight = 0;
+        for (const Assessment& item : current) {
+            if (item.name == category) {
+                weight = item.weight;
+                break;
+            }
+        }
+        result.push_back({{"courseCode", courseCode}, {"semester", semester},
+                          {"name", category}, {"weight", weight}});
+    }
+    return result;
 }
 
 // 본문의 문자열 칸: 없거나 문자열이 아니면 400 "<칸> 값이 올바르지 않습니다" 를 채우고 false
@@ -1769,7 +1797,7 @@ void Server::run() {
         setJson(res, 200, json{{"deleted", true}});
     });
 
-    // 평가 항목 (과목·학기별 중간·기말·과제·출석 등과 반영 비율)
+    // 평가 기준 조회 (과목·학기별 6개 분류 비율과 평가 방식)
     svr.Get("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         if (!requireRole(req, res, {"admin", "professor", "student"})) return;
@@ -1787,65 +1815,16 @@ void Server::run() {
             setError(res, 404, "없는 과목입니다: " + courseCode);
             return;
         }
-        json arr = json::array();
-        for (const Assessment& item : gm.getAssessments(courseCode, semester)) {
-            arr.push_back(assessmentJson(item));
-        }
-        setJson(res, 200, arr);
+        const json items = gradingSchemeItemsJson(gm, courseCode, semester);
+        setJson(res, 200, json{
+            {"courseCode", courseCode},
+            {"semester", semester},
+            {"mode", gm.getGradingMode(courseCode, semester)},
+            {"items", items}
+        });
     });
 
-    svr.Post("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        const Account* account = requireRole(req, res, {"admin", "professor"});
-        if (!account) return;
-        json body;
-        if (!parseJsonBody(req, body, res)) return;
-
-        Assessment item;
-        if (!readString(body, "courseCode", item.courseCode, res) ||
-            !readString(body, "semester", item.semester, res)) return;
-        if (!readAssessmentFields(body, "name", item, res)) return;
-        if (!isValidSemester(item.semester)) {
-            setError(res, 400, kSemesterRules);
-            return;
-        }
-        if (!checkCourseAccess(*account, gm, item.courseCode, res)) return;
-        if (!item.isValid()) {
-            setError(res, 400, kAssessmentRules);
-            return;
-        }
-        const std::vector<Assessment> items = gm.getAssessments(item.courseCode, item.semester);
-        for (const Assessment& current : items) {
-            if (current.name == item.name) {
-                setError(res, 409, "이미 있는 평가 항목입니다: " + item.name);
-                return;
-            }
-        }
-        const int total = weightSum(items);
-        if (total + item.weight > 100) {
-            setError(res, 409, "비율 합계가 100을 넘습니다 (지금 " + std::to_string(total) + "%)");
-            return;
-        }
-        if (items.empty()) {
-            for (const Grade& grade : gm.getGrades()) {
-                if (grade.courseCode == item.courseCode && grade.semester == item.semester) {
-                    setError(res, 409, "직접 입력한 성적이 있는 과목·학기에는 평가 항목을 만들 수 없습니다");
-                    return;
-                }
-            }
-        }
-        if (!gm.addAssessment(item)) {
-            setError(res, 400, kAssessmentRules);
-            return;
-        }
-        if (!gm.save()) {
-            setError(res, 500, kSaveFailed);
-            return;
-        }
-        setJson(res, 201, assessmentJson(item));
-    });
-
-    // 본문 {courseCode, semester, name, newName, weight}: name 항목을 newName(없으면 name)·weight 로 바꿈
+    // 평가 기준 전체 등록·수정: {courseCode,semester,mode,weights:{출석:0,...}}. POST 는 사용하지 않는다.
     svr.Put("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         const Account* account = requireRole(req, res, {"admin", "professor"});
@@ -1853,70 +1832,91 @@ void Server::run() {
         json body;
         if (!parseJsonBody(req, body, res)) return;
 
-        std::string name;
-        Assessment item;
-        if (!readString(body, "courseCode", item.courseCode, res) ||
-            !readString(body, "semester", item.semester, res) ||
-            !readString(body, "name", name, res)) return;
-        const auto newName = body.find("newName");
-        const bool renamed = newName != body.end() && !newName->is_null();
-        if (!readAssessmentFields(body, renamed ? "newName" : "name", item, res)) return;
-        if (!isValidSemester(item.semester)) {
+        std::string courseCode, semester, mode;
+        if (!readString(body, "courseCode", courseCode, res) ||
+            !readString(body, "semester", semester, res) ||
+            !readString(body, "mode", mode, res)) return;
+        const auto weightsIt = body.find("weights");
+        if (weightsIt == body.end() || !weightsIt->is_object()) {
+            setError(res, 400, kGradingSchemeRules);
+            return;
+        }
+        if (!isValidSemester(semester)) {
             setError(res, 400, kSemesterRules);
             return;
         }
-        if (!checkCourseAccess(*account, gm, item.courseCode, res)) return;
-        const std::vector<Assessment> items = gm.getAssessments(item.courseCode, item.semester);
-        const auto old = std::find_if(items.begin(), items.end(), [&](const Assessment& current) {
-            return current.name == name;
-        });
-        if (old == items.end()) {
-            setError(res, 404, "없는 평가 항목입니다: " + name);
+        if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+
+        std::map<std::string, int> weights;
+        for (auto it = weightsIt->begin(); it != weightsIt->end(); ++it) {
+            if (std::find(kAssessmentCategories.begin(), kAssessmentCategories.end(), it.key()) ==
+                    kAssessmentCategories.end() || !it.value().is_number_integer()) {
+                setError(res, 400, kGradingSchemeRules);
+                return;
+            }
+            const long long value = it.value().get<long long>();
+            if (value < 0 || value > 100) {
+                setError(res, 400, kGradingSchemeRules);
+                return;
+            }
+            weights[it.key()] = static_cast<int>(value);
+        }
+        for (const std::string& category : kAssessmentCategories) {
+            if (weights.find(category) == weights.end()) weights[category] = 0;
+        }
+        int total = 0;
+        for (const auto& entry : weights) total += entry.second;
+        if (total != 100) {
+            setError(res, 400, "비율 합계가 100이어야 합니다 (지금 " + std::to_string(total) + "%)");
             return;
         }
-        if (!item.isValid()) {
-            setError(res, 400, kAssessmentRules);
+        if (mode != "absolute" && mode != "relative") {
+            setError(res, 400, kGradingSchemeRules);
             return;
         }
-        if (item.name != name) {
-            for (const Assessment& current : items) {
-                if (current.name == item.name) {
-                    setError(res, 409, "이미 있는 평가 항목입니다: " + item.name);
+        if (gm.getAssessments(courseCode, semester).empty()) {
+            for (const Grade& grade : gm.getGrades()) {
+                if (grade.courseCode == courseCode && grade.semester == semester) {
+                    setError(res, 409, "직접 입력한 성적이 있는 과목·학기에는 평가 기준을 만들 수 없습니다");
                     return;
                 }
             }
         }
-        const int total = weightSum(items);
-        if (total - old->weight + item.weight > 100) {
-            setError(res, 409, "비율 합계가 100을 넘습니다 (지금 " + std::to_string(total) + "%)");
-            return;
-        }
-        if (!gm.updateAssessment(item.courseCode, item.semester, name, item)) {
-            setError(res, 400, kAssessmentRules);
+        if (!gm.setGradingScheme(courseCode, semester, mode, weights)) {
+            setError(res, 400, kGradingSchemeRules);
             return;
         }
         if (!gm.save()) {
             setError(res, 500, kSaveFailed);
             return;
         }
-        setJson(res, 200, assessmentJson(item));
+        const json items = gradingSchemeItemsJson(gm, courseCode, semester);
+        setJson(res, 200, json{
+            {"courseCode", courseCode},
+            {"semester", semester},
+            {"mode", gm.getGradingMode(courseCode, semester)},
+            {"items", items}
+        });
     });
 
-    // 항목과 그 항목 점수를 지우고 성적을 다시 계산 (마지막 항목이면 그 과목·학기 성적도 지워짐)
+    // 평가 기준 전체 삭제
     svr.Delete("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         const Account* account = requireRole(req, res, {"admin", "professor"});
         if (!account) return;
         const std::string courseCode = req.get_param_value("courseCode");
         const std::string semester = req.get_param_value("semester");
-        const std::string name = req.get_param_value("name");
-        if (courseCode.empty() || semester.empty() || name.empty()) {
-            setError(res, 400, "courseCode, semester, name 을 모두 지정해야 합니다");
+        if (courseCode.empty() || semester.empty()) {
+            setError(res, 400, "courseCode, semester 를 모두 지정해야 합니다");
+            return;
+        }
+        if (!isValidSemester(semester)) {
+            setError(res, 400, kSemesterRules);
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
-        if (!gm.removeAssessment(courseCode, semester, name)) {
-            setError(res, 404, "없는 평가 항목입니다: " + name);
+        if (!gm.removeGradingScheme(courseCode, semester)) {
+            setError(res, 404, "평가 기준이 없습니다");
             return;
         }
         if (!gm.save()) {
@@ -1979,11 +1979,21 @@ void Server::run() {
             setError(res, 404, "없는 학생입니다: " + score.studentId);
             return;
         }
+        if (std::find(kAssessmentCategories.begin(), kAssessmentCategories.end(), score.name) ==
+            kAssessmentCategories.end()) {
+            setError(res, 400, kAssessmentRules);
+            return;
+        }
+        if (score.name == kAttendanceCategory) {
+            setError(res, 409, "출석 점수는 출석부에서 자동 계산됩니다");
+            return;
+        }
         const std::vector<Assessment> items = gm.getAssessments(score.courseCode, score.semester);
-        if (std::none_of(items.begin(), items.end(), [&](const Assessment& item) {
-                return item.name == score.name;
-            })) {
-            setError(res, 404, "없는 평가 항목입니다: " + score.name);
+        const auto item = std::find_if(items.begin(), items.end(), [&](const Assessment& current) {
+            return current.name == score.name;
+        });
+        if (item == items.end()) {
+            setError(res, 409, "비율이 0%인 항목에는 점수를 입력할 수 없습니다");
             return;
         }
         if (!gm.findEnrollment(score.studentId, score.courseCode, score.semester)) {
@@ -2018,11 +2028,20 @@ void Server::run() {
             setError(res, 404, "없는 학생입니다: " + studentId);
             return;
         }
+        if (std::find(kAssessmentCategories.begin(), kAssessmentCategories.end(), name) ==
+            kAssessmentCategories.end()) {
+            setError(res, 400, kAssessmentRules);
+            return;
+        }
+        if (name == kAttendanceCategory) {
+            setError(res, 409, "출석 점수는 출석부에서 자동 계산됩니다");
+            return;
+        }
         const std::vector<Assessment> items = gm.getAssessments(courseCode, semester);
         if (std::none_of(items.begin(), items.end(), [&](const Assessment& item) {
                 return item.name == name;
             })) {
-            setError(res, 404, "없는 평가 항목입니다: " + name);
+            setError(res, 409, "비율이 0%인 항목에는 점수를 입력할 수 없습니다");
             return;
         }
         if (!gm.removeAssessmentScore(studentId, courseCode, semester, name)) {
