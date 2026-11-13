@@ -2284,7 +2284,7 @@ function gpaChartSvg(points) {
 //   summaryReq: 이미 보낸 summary 요청 (내 성적 화면이 같은 값을 시뮬레이션에도 써서 한 번만 받으려고 넘김, 없으면 여기서 받음)
 //   학기별 과목 성적은 학기마다 접었다 펼치는 <details class="fold"> (기본 접힘, summary = 학기 · 학기 GPA · 계산 학점 · 취득 학점)
 //   (재수강으로 지워진 성적·없는 과목은 서버가 이미 뺌, 계산 학점이 0 이면 gpa null = 등록된 성적 없음)
-async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(s.id))) {
+async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(s.id)), { combineSemesterGrades = false } = {}) {
     const id = encodeURIComponent(s.id);
     const [grades, summary, warnings] = await Promise.all([
         api('GET', '/api/grades?studentId=' + id),
@@ -2304,7 +2304,7 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
     const majorGpaText = (x) => (x && x.majorCredits > 0 ? fmt(x.majorGpa) : '-');
     const majorCreditText = (x) => (x && x.majorCredits > 0 ? esc(x.majorCredits) : '-');
 
-        const summaryHtml = hasSemesters ? `
+    const summaryHtml = combineSemesterGrades ? '' : hasSemesters ? `
         <h3 class="sub-title">학기별 평점</h3>
         <div class="table-wrap">
             <table><thead><tr><th>학기</th><th class="num">평점평균</th><th class="num">계산 학점</th><th class="num">취득 학점</th>
@@ -2322,25 +2322,35 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
         ${gpaChartSvg(summary.semesters.filter((x) => x.credits > 0))}`
         : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
 
-    const semItems = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
-        // 재수강으로 지워진(R) 성적만 있는 학기는 서버 요약에 없음 → 계산·취득 학점 0 (R 은 둘 다에서 빠짐), 평점 '-'
+    // 관리자 성적표에서는 GPA 요약에 등장하는 학기도 함께 표시한다.
+    // 성적 행이 없는 학기(P/F만 있거나 요약 데이터만 있는 경우)도 펼쳐서 확인할 수 있다.
+    const semestersToShow = combineSemesterGrades
+        ? sortSemesters([...grades.map((g) => g.semester), ...summary.semesters.map((x) => x.semester)])
+        : sortSemesters(grades.map((g) => g.semester));
+    const semItems = semestersToShow.map((sem) => {
+        // 재수강으로 지워진(R) 성적만 있는 학기는 서버 요약에 없음 → 평점 '-'
         const info = semInfo[sem];
-                const rows = grades.filter((g) => g.semester === sem).map((g) => {
+        const semesterGrades = grades.filter((g) => g.semester === sem);
+        const rows = semesterGrades.map((g) => {
             const pf = PF_LETTERS.includes(g.letter);
             return `
             <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}${pf ? ' <span class="tag">P/F</span>' : ''}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
             <td class="num">${pf ? '-' : esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`;
-        }).join('');
+        }).join('') || emptyRow(4, '해당 학기의 과목 성적이 없습니다');
+        const summaryLabel = combineSemesterGrades
+            ? `${esc(sem)} · 학기 평점 ${semGpa(info)}`
+            : `${esc(sem)} · 학기 GPA ${semGpa(info)} · 계산 학점 ${esc(info?.credits ?? 0)} · 취득 학점 ${earnedText(info ?? { earnedCredits: 0 })}`;
         return `
-            <details class="fold" data-key="sem:${esc(sem)}">
-                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 계산 학점 ${esc(info?.credits ?? 0)} · 취득 학점 ${earnedText(info ?? { earnedCredits: 0 })}</summary>
+            <details class="fold${combineSemesterGrades ? ' semester-grade-fold' : ''}" data-key="sem:${esc(sem)}">
+                <summary>${summaryLabel}</summary>
                 <div class="table-wrap">
                     <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
                 </div>
             </details>`;
     }).join('');
-    const semHtml = semItems ? `<h3 class="sub-title">학기별 과목 성적</h3>${semItems}` : '';
+    const semTitle = combineSemesterGrades ? '학기별 평점 및 과목 성적' : '학기별 과목 성적';
+    const semHtml = semItems ? `<h3 class="sub-title">${semTitle}</h3>${semItems}` : '';
     const warnHtml = warnings.length ? `
         <div class="table-wrap">
             <table><thead><tr><th>학기</th><th>사유</th><th class="num">평점</th><th class="num">신청 학점</th></tr></thead>
@@ -2379,7 +2389,7 @@ async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/
 
 // 학생 성적표 창 (보기 전용)
 async function showStudentReport(s) {
-    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: foldBarHtml() + await studentReportHtml(s) });
+    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: foldBarHtml() + await studentReportHtml(s, undefined, { combineSemesterGrades: true }) });
     syncFoldButton($('dlg-body'));
 }
 
