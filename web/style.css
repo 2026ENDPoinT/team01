@@ -395,10 +395,8 @@ td.weight-sum .mode-label { margin-left: 12px; color: var(--muted); }
 input.score-cell { width: 76px; padding: 5px 8px; text-align: right; }
 #assess-body td.final { white-space: nowrap; }
 .relative-line { margin: 0 0 16px; line-height: 1.6; }
-/* 내 성적: 평가 기준 과목의 요약 줄 (현재까지 환산·예상 최종) + 예상 점수 입력칸 (0~100 밖이면 invalid 빨간 테두리) */
+/* 내 성적: 평가 기준 과목의 요약 줄 (현재까지 환산·예상 최종) */
 td.estimate { color: var(--text); }
-input.sim-input { width: 76px; padding: 4px 8px; text-align: right; }
-input.sim-input.invalid { border-color: var(--danger); outline-color: rgba(239, 68, 68, .3); }
 /* 과목 페이지 출결: 수강생 × 16주 표 (넘치면 .table-wrap 안에서 가로 스크롤, 이름 칸은 왼쪽에 고정), 칸 = 상태 버튼
    상태 색은 등급 배지와 같은 색: 출석 = A(초록), 지각 = C(노랑), 결석 = F(빨강), 공결 = B(파랑) */
 #attend-body .table-wrap { margin-bottom: 16px; }
