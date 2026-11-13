@@ -1984,7 +1984,7 @@ async function renderMyReport() {
 // '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 현재 학기 이후이고 평가 기준이 있는 것마다
 //   분류별 비율·내 점수 표(비율 0인 분류는 뺌)와 한 줄 요약
 //     최종 성적이 있으면 그 점수·등급
-//     없으면 estimateLine (점수가 없는 분류 중 출석이 아닌 칸에 예상 점수 입력칸, 입력하면 simLine 으로 다시 계산, 서버로 보내지 않음)
+//     없으면 estimateLine (점수가 없는 분류는 '-', 절대평가 과목만 예상 등급)
 //   평가 기준이 있는 과목이 없으면 빈 문자열
 //   출결 기록이 있는 과목은 내 출결 요약 줄도 보임 (평가 기준이 없어도 그 과목을 보임, 기록이 없는 과목은 줄 없음)
 //   출결을 못 받으면 이 영역 안에 한 줄 오류만 보이고 나머지는 그대로
@@ -2010,7 +2010,7 @@ async function myAssessmentsHtml() {
 
     const cards = shown.map(({ code, sem, mode, items }) => {
         const att = attend.summaries.get(JSON.stringify([code, sem]));
-        // 한 과목 = 접었다 펼치는 카드. summary = 과목명 + 한 줄 요약(fold-line, 예상 점수를 입력하면 갱신)
+        // 한 과목 = 접었다 펼치는 카드. summary = 과목명 + 한 줄 요약(fold-line)
         const card = (line, bodyHtml) => `
             <details class="fold" data-key="c:${esc(code)}|${esc(sem)}">
                 <summary>${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span> · <span class="fold-line">${line}</span></summary>
@@ -2020,24 +2020,20 @@ async function myAssessmentsHtml() {
         const cols = items.filter((a) => a.weight > 0);
         const mine = (name) => scores.find((s) => s.courseCode === code && s.semester === sem && s.name === name);
         const final = grades.find((g) => g.courseCode === code && g.semester === sem);
-        const simulate = (a) => !final && !mine(a.name) && a.name !== ATTEND_ITEM;
         const parts = cols.map((a) => ({ weight: a.weight, score: mine(a.name)?.score ?? null }));
         const finalLine = final ? `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}` : '';
-        const line = finalLine || estimateLine(parts, mode, cols.some(simulate));
-        const shortLine = finalLine || estimateLine(parts, mode, false, true);
+        const line = finalLine || estimateLine(parts, mode);
+        const shortLine = finalLine || estimateLine(parts, mode, true);
         const rows = cols.map((a) => {
             const s = mine(a.name);
-            const cell = s ? esc(s.score)
-                : simulate(a) ? '<input type="number" class="sim-input" min="0" max="100" step="any" placeholder="예상">' : '-';
             return `
-            <tr data-w="${esc(a.weight)}"${s ? ` data-score="${esc(s.score)}"` : ''}>
-                <td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${cell}</td></tr>`;
+            <tr><td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${s ? esc(s.score) : '-'}</td></tr>`;
         }).join('');
         return card(shortLine, `
             <div class="table-wrap">
-                <table data-mode="${esc(mode)}"><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
+                <table><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr><td colspan="3" class="estimate sim-line">${line}</td></tr>
+                <tfoot><tr><td colspan="3" class="estimate">${line}</td></tr>
                 ${att ? `<tr><td colspan="3" class="estimate">${attendSummaryLine(att)}</td></tr>` : ''}</tfoot></table>
             </div>`);
     }).join('');
@@ -2045,12 +2041,14 @@ async function myAssessmentsHtml() {
 }
 
 // 최종 성적이 없는 과목의 요약 줄 (미확정)
-//   parts: 비율이 0보다 큰 분류마다 {weight, score} (score = 받은 점수 또는 유효한 예상 점수, 없으면 null)
-//   모두 차면 예상 최종 = Σ(점수×비율) / 100 (소수 둘째 자리 반올림), 점수 기준 등급 (scoreToLetter 경계)
-//   빈칸이 남으면 현재까지 환산 = Σ(점수×비율) / Σ(점수가 있는 분류의 비율), canSimulate(예상 점수 칸이 있음)면 빈칸 안내를 붙임
+//   parts: 비율이 0보다 큰 분류마다 {weight, score} (score = 받은 점수, 없으면 null)
+//   모두 차면 예상 최종 = Σ(점수×비율) / 100 (소수 둘째 자리 반올림)
+//   빈칸이 남으면 현재까지 환산 = Σ(점수×비율) / Σ(점수가 있는 분류의 비율)
+//   절대평가(absolute) 과목만 점수 기준 예상 등급(scoreToLetter 경계)을 보임. 상대평가 등은 점수만 보이고,
 //   상대평가 과목이면 실제 등급은 순위로 정해진다는 안내를 덧붙임
-//   short: 접힌 카드 머리글(summary)용 짧은 줄 (안내 문구 없이 환산·예상 최종과 등급만)
-function estimateLine(parts, mode, canSimulate, short = false) {
+//   short: 접힌 카드 머리글(summary)용 짧은 줄 (안내 문구·비율 힌트 없이 환산·예상 최종만)
+function estimateLine(parts, mode, short = false) {
+    const absolute = mode === 'absolute';
     const done = parts.filter((p) => p.score !== null);
     const total = parts.reduce((t, p) => t + p.weight, 0);
     const doneWeight = done.reduce((t, p) => t + p.weight, 0);
@@ -2058,48 +2056,19 @@ function estimateLine(parts, mode, canSimulate, short = false) {
     let line;
     if (parts.length && done.length === parts.length) {
         const est = round2(sum / 100);
-        line = short ? `예상 최종 <b>${est.toFixed(2)}점</b> (${letterBadge(scoreToLetter(est))})`
-            : `예상 최종 <b>${est.toFixed(2)}점</b> (점수 기준 등급 ${letterBadge(scoreToLetter(est))}, 미확정)`;
+        line = short ? `예상 최종 <b>${est.toFixed(2)}점</b>${absolute ? ` (${letterBadge(scoreToLetter(est))})` : ''}`
+            : `예상 최종 <b>${est.toFixed(2)}점</b> (${absolute ? `점수 기준 등급 ${letterBadge(scoreToLetter(est))}, ` : ''}미확정)`;
+    } else if (doneWeight > 0) {
+        const est = round2(sum / doneWeight);
+        line = short ? `현재까지 환산 <b>${est}점</b>${absolute ? ` (${letterBadge(scoreToLetter(est))})` : ''}`
+            : `현재까지 환산 <b>${est}점</b> (${absolute ? `예상 등급 ${letterBadge(scoreToLetter(est))}, ` : ''}미확정)
+            <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
     } else {
-        if (doneWeight > 0) {
-            const est = round2(sum / doneWeight);
-            line = short ? `현재까지 환산 <b>${est}점</b> (${letterBadge(scoreToLetter(est))})`
-                : `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
-                <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
-        } else {
-            line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
-        }
-        if (canSimulate && !short) line += ' <span class="hint">· 빈칸에 예상 점수를 넣으면 최종 점수를 계산합니다</span>';
+        line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
     }
     if (mode === 'relative' && !short) line += ` <span class="hint">· 상대평가 과목이라 실제 등급은 수강생 순위로 정해집니다 (${RELATIVE_RULES})</span>`;
     return line;
 }
-
-// 예상 점수 칸이 있는 과목 표 하나의 요약 줄을 화면 값으로 다시 계산 (받은 점수 = 행의 data-score, 예상 점수 = 입력칸)
-//   0~100 밖이거나 숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스. short 는 estimateLine 의 short
-function simLine(table, short = false) {
-    const parts = [...table.querySelectorAll('tbody tr[data-w]')].map((tr) => {
-        const weight = Number(tr.dataset.w);
-        const input = tr.querySelector('input.sim-input');
-        if (!input) return { weight, score: tr.dataset.score === undefined ? null : Number(tr.dataset.score) };
-        const raw = input.value.trim();
-        const n = Number(raw);
-        const ok = raw !== '' && Number.isFinite(n) && n >= 0 && n <= 100;
-        input.classList.toggle('invalid', !ok && (raw !== '' || input.validity.badInput));
-        return { weight, score: ok ? n : null };
-    });
-    return estimateLine(parts, table.dataset.mode, true, short);
-}
-// 예상 점수를 입력할 때마다 그 과목 요약 줄(표 아래 줄 + 카드 머리글)만 다시 그림
-//   (서버로 보내지 않고, 화면을 다시 그리면 사라짐. 카드를 다시 만들지 않으므로 펼침 상태는 그대로)
-$('tab-myreport').addEventListener('input', (e) => {
-    const input = e.target.closest('input.sim-input');
-    if (!input) return;
-    const table = input.closest('table');
-    table.querySelector('td.sim-line').innerHTML = simLine(table);
-    const fold = table.closest('details');
-    if (fold) fold.querySelector('.fold-line').innerHTML = simLine(table, true);
-});
 
 // 내 출결 요약 (학생, 서버가 쿼리 없이 본인 기록 전체를 줌): {summaries: (과목, 학기) → 서버 요약, error}
 //   score 가 null(기록 없음)인 요약은 뺌. 실패하면 빈 목록과 오류 문구 (던지지 않음)
