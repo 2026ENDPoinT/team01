@@ -1572,6 +1572,147 @@ void Server::run() {
                                     gm.getGrades()));
     });
 
+
+    // 빠른 성적 등록: 수강신청이 없으면 자동으로 생성
+    // 본문: {studentId, courseCode, semester, score} 또는 letter
+    svr.Post("/api/grades/quick", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+
+        // 1. 관리자 또는 담당 교수 권한 확인
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+
+        // 2. 요청 본문 파싱 (score 또는 letter 모두 지원)
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        Grade grade;
+        if (!readGradeBody(body, grade, res)) return;
+
+        // 3. 학생 및 과목 존재 여부 확인
+        if (!gm.findStudent(grade.studentId)) {
+            setError(res, 404, "없는 학생입니다: " + grade.studentId);
+            return;
+        }
+
+        const Course* course = gm.findCourse(grade.courseCode);
+        if (!course) {
+            setError(res, 404, "없는 과목입니다: " + grade.courseCode);
+            return;
+        }
+
+        // 4. 교수는 본인이 담당하는 과목에만 성적을 등록할 수 있음
+        if (account->role == "professor" &&
+            !isProfessorOf(*account, gm, grade.courseCode)) {
+            setError(res, 403, "권한이 없습니다");
+            return;
+        }
+
+        // 5. 학생의 입학년도에 맞는 학기인지 확인
+        const int year = thisYear();
+        if (!isSemesterInRange(grade.studentId, grade.semester, year)) {
+            const int admission = admissionYear(grade.studentId);
+            setError(res, 400,
+                grade.semester + " 학기는 등록할 수 없습니다 (이 학생은 " +
+                std::to_string(admission) + "-1 ~ " +
+                std::to_string(year + 1) + "-4 학기만 가능)");
+            return;
+        }
+
+        // 6. 평가 항목으로 성적을 계산하는 과목인지 확인
+        if (gm.hasAssessments(grade.courseCode, grade.semester)) {
+            setError(res, 409, kAssessedCourse);
+            return;
+        }
+
+        // 7. 동일 학생·과목·학기의 중복 성적 확인
+        if (findGrade(gm, grade.studentId, grade.courseCode, grade.semester) != nullptr) {
+            setError(res, 409, "이미 등록된 성적입니다");
+            return;
+        }
+
+        // 8. 수강신청이 없으면 정원·시간표를 검사한 뒤 자동 생성
+        bool createdEnrollment = false;
+        if (!gm.findEnrollment(grade.studentId, grade.courseCode, grade.semester)) {
+            Enrollment enrollment;
+            enrollment.studentId = grade.studentId;
+            enrollment.courseCode = grade.courseCode;
+            enrollment.semester = grade.semester;
+
+            // 과목 정원 검사 (capacity가 0이면 정원 제한 없음)
+            if (course->capacity > 0) {
+                int count = 0;
+                for (const Enrollment& existing : gm.getEnrollments()) {
+                    if (existing.courseCode == enrollment.courseCode &&
+                        existing.semester == enrollment.semester) {
+                        ++count;
+                    }
+                }
+
+                if (count >= course->capacity) {
+                    setError(res, 409,
+                        enrollment.semester + " " + course->name +
+                        " 과목의 정원(" + std::to_string(course->capacity) +
+                        "명)이 가득 찼습니다");
+                    return;
+                }
+            }
+
+            // 같은 학생·학기의 기존 수강 과목과 시간표가 겹치는지 검사
+            for (const Enrollment& existing : gm.getEnrollments()) {
+                if (existing.studentId != enrollment.studentId ||
+                    existing.semester != enrollment.semester) {
+                    continue;
+                }
+
+                const Course* other = gm.findCourse(existing.courseCode);
+                if (other && schedulesOverlap(course->schedule, other->schedule)) {
+                    setError(res, 409, other->name + " 과목과 강의시간이 겹칩니다");
+                    return;
+                }
+            }
+
+            if (!gm.addEnrollment(enrollment)) {
+                setError(res, 409, "수강신청 생성에 실패했습니다");
+                return;
+            }
+            createdEnrollment = true;
+        }
+
+        // 9. 성적 등록
+        if (!gm.addGrade(grade)) {
+            if (createdEnrollment) {
+                gm.removeEnrollment(grade.studentId, grade.courseCode, grade.semester);
+            }
+            setError(res, 409, "성적 등록에 실패했습니다");
+            return;
+        }
+
+        // 10. 저장 실패 시 이번 요청에서 추가한 데이터 되돌리기
+        if (!gm.save()) {
+            gm.removeGrade(grade.studentId, grade.courseCode, grade.semester);
+            if (createdEnrollment) {
+                gm.removeEnrollment(grade.studentId, grade.courseCode, grade.semester);
+            }
+            setError(res, 500, "성적 저장에 실패했습니다");
+            return;
+        }
+
+        // 11. 성공 응답
+        const auto grades = gm.getGrades();
+        const Grade* savedGrade = findGrade(gm, grade.studentId, grade.courseCode, grade.semester);
+        if (!savedGrade) {
+            setError(res, 500, "성적 등록 결과를 확인할 수 없습니다");
+            return;
+        }
+
+        json response = gradeJson(*savedGrade, grades);
+        response["message"] = "성적이 등록되었습니다";
+        response["enrollmentCreated"] = createdEnrollment;
+        setJson(res, 201, response);
+    });
+
+
     svr.Put("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         const Account* account = requireRole(req, res, {"admin", "professor"});
