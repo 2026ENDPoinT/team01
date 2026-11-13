@@ -36,10 +36,12 @@
 //   DELETE /api/grades?studentId=&courseCode=&semester=   성적 삭제 → {"deleted":true}
 //                                     (admin, professor 는 담당 과목만. 등록은 수강신청이 있어야 함.
 //                                      평가 항목이 있는 과목·학기는 등록·수정·삭제 모두 409)
+//   GET    /api/stats/gpa/batch      전체 학생 GPA [{studentId,semester,gpa}] (admin, 개별 GPA 와 같은 계산 규칙)
 //   GET    /api/stats/gpa/:id         학생 GPA {studentId,semester,gpa} (?semester=) (admin, student 본인)
 //                                     평점 계산에 들어간 학점이 0 이면 "gpa": null
 //   GET    /api/stats/summary/:id     학기별·누적 평점 {"semesters":[{semester,gpa,credits}],"gpa","credits"}
 //                                     (credits 0 이면 "gpa": null) (admin, student 본인)
+//   GET    /api/stats/course/batch   전체 과목 통계 배열 (로그인, 개별 과목 통계와 같은 필드)
 //   GET    /api/stats/course/:code    과목 평균/최고/최저 + latestSemester·latestEnrolled·enrolledBySemester (로그인)
 //   GET    /api/stats/warnings        학사경고 전체 (admin)
 //   GET    /api/stats/warnings/:id    학생 학사경고 (admin, student 본인)
@@ -53,7 +55,7 @@
 //     성적·통계·내보내기·수강신청 조회와 학생 본인의 항목 점수·출결·평가 항목 조회는 지난 학기도 허용.
 //     검사 순서: 인증·권한 -> 지난 학기(403) -> 기존 검증(400/404/409)
 //
-//   GET    /api/enrollment/settings   수강신청 학기 {"semester"} (로그인)
+//   GET    /api/enrollment/settings   수강신청 학기 {"semester","latestGradeSemester"} (로그인, latestGradeSemester 는 전체 성적의 최신 학기)
 //   PUT    /api/enrollment/settings   수강신청 학기 설정 (admin, ""이면 신청 마감)
 //   GET    /api/enrollments           수강신청 목록 [{studentId,courseCode,semester,hasGrade}] (?studentId= ?courseCode= ?semester=)
 //                                     (admin 전체, professor 담당 과목만, student 본인 것만.
@@ -65,6 +67,7 @@
 //                                     성적 또는 항목 점수가 있으면 409
 //
 //   GET    /api/assessments?courseCode=&semester=   평가 항목 [{courseCode,semester,name,weight}] (로그인, 두 쿼리 필수)
+//   POST   /api/assessments/batch    여러 평가 기준 조회 {pairs:[{courseCode,semester},...]} → [{courseCode,semester,mode,items}] (로그인)
 //   POST   /api/assessments           항목 추가 {courseCode,semester,name,weight} → 201 항목
 //   PUT    /api/assessments           항목 수정 {courseCode,semester,name,newName,weight} → 200 항목 (newName 없으면 이름 유지)
 //   DELETE /api/assessments?courseCode=&semester=&name=   항목 삭제 (그 항목 점수도 삭제) → {"deleted":true}
