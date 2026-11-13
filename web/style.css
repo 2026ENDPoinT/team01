@@ -414,6 +414,15 @@ button.att.late { background: rgba(234, 179, 8, .18); color: #facc15; }
 button.att.absent { background: rgba(239, 68, 68, .18); color: #f87171; }
 button.att.excused { background: rgba(59, 130, 246, .18); color: #60a5fa; }
 button.att[data-busy] { opacity: .6; cursor: progress; }
+button.att[aria-expanded="true"] { border-color: var(--accent); }
+/* 출결 칸 선택 상자 (출/지/결/공/X): document.body 에 position: fixed 로 두고 app.js 가 칸 아래 (자리가 없으면 위)에 맞춤.
+   버튼은 칸과 같은 button.att 색을 재사용하고 지금 상태는 .current 로 강조, X (기록 지우기)는 중립색 */
+.att-picker { position: fixed; z-index: 10; display: flex; gap: 4px; width: max-content; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+.att-picker button.att { width: 34px; height: 34px; font-size: 13px; }
+.att-picker button.att.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.att-picker button.att.clear { color: var(--text); }
+.att-picker button.att.clear:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+.att-picker button.att:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .attend-error { color: var(--danger); margin: 0 0 12px; }
 .attend-line { margin: 0 0 20px; }
 /* 평가 기준 점수표의 '출석' 칸: 출석부에서 자동 계산이라 늘 읽기 전용 */

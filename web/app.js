@@ -294,6 +294,7 @@ function clearCoursePage() {
     state.coursePosts = [];
     state.assess = null;
     state.attend = null;
+    closeAttendPicker();
     ['course-hero', 'course-filter', 'course-posts', 'course-sem',
         'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
     delete $('attend-body').dataset.key;
@@ -305,6 +306,7 @@ function clearCoursePage() {
 //   등록·수정·삭제(refreshAll) 뒤에는 지금 탭만 다시 그리므로, 나머지 탭은 dirtyTabs 에 넣어 다음에 열 때 옛 값을 비우고 새로 받음
 //   code: 과목 페이지면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌리고 화면도 비움
 function showTab(name, code, assessSemester = null) {
+    closeAttendPicker();
     if (code && code !== state.courseCode) {
         state.courseCode = code;
         state.courseSem = null;
@@ -430,6 +432,7 @@ function resetView() {
     state.assess = null;
     state.attendSem = null;
     state.attend = null;
+    closeAttendPicker();
     ['course-list', 'student-body', 'grade-body', 'enroll-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
@@ -767,7 +770,7 @@ async function renderCoursePage() {
     state.coursePosts = posts;
     drawPosts();
 
-    if (!manage) { state.assess = null; state.attend = null; return; }
+    if (!manage) { closeAttendPicker(); state.assess = null; state.attend = null; return; }
     if (state.assessSem && !sems.includes(state.assessSem) && !isLockedSemester(state.assessSem)) {
         sems.push(state.assessSem);
         sems.sort().reverse();
@@ -1103,9 +1106,7 @@ $('assess-body').addEventListener('change', async (e) => {
 
 // ───────── 출결 (과목 페이지, 관리자·담당 교수) ─────────
 
-// 출결 상태 (서버 Attendance 와 같은 값). 칸을 누를 때마다 없음('') → 출석 → 지각 → 결석 → 공결 → 없음 순으로 바뀜
-const ATTEND_STATUSES = ['출석', '지각', '결석', '공결'];
-const nextAttendStatus = (s) => ATTEND_STATUSES[ATTEND_STATUSES.indexOf(s) + 1] ?? '';
+// 출결 상태 값은 서버 Attendance 와 같은 출석·지각·결석·공결 ('' = 기록 없음). 칸을 누르면 칸 옆 선택 상자(openAttendPicker)에서 고름
 // 상태 → 칸 색 클래스 (style.css 의 button.att.*)
 const ATTEND_CLASS = { 출석: 'present', 지각: 'late', 결석: 'absent', 공결: 'excused' };
 // 수업 주차 수 (서버 출결 주차 1~16, 게시물 주차와 같음)
@@ -1130,6 +1131,7 @@ async function renderAttend() {
     const sem = state.attendSem ?? '';
     const box = $('attend-body');
     const stale = () => seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code || state.attendSem !== sem;
+    closeAttendPicker();
     state.attend = null;
     if (!sem) {
         box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
@@ -1153,7 +1155,7 @@ async function renderAttend() {
         const rows = ids.map((sid) => `
             <tr data-sid="${esc(sid)}" data-name="${esc(studentName(sid))}">
                 <td class="att-name"><b>${esc(studentName(sid))}</b> <span class="hint">${esc(sid)}</span></td>
-                ${weeks.map((w) => `<td class="att-td"><button type="button" class="att" data-w="${w}"></button></td>`).join('')}
+                ${weeks.map((w) => `<td class="att-td"><button type="button" class="att" data-w="${w}" aria-haspopup="menu" aria-expanded="false"></button></td>`).join('')}
                 <td class="num att-eq"></td>
                 <td class="num att-score"></td>
             </tr>`).join('');
@@ -1202,9 +1204,72 @@ function lockAttendColumn() {
     });
 }
 
-// 칸을 누르면 다음 상태로 바꾸고 바로 저장 (상태는 PUT, 없음은 DELETE). 저장 중인 칸은 다시 눌러도 무시
-//   실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 기준 점수표를 다시 그림
-async function toggleAttend(btn) {
+// 선택 상자 버튼: status 는 서버 상태값 ('' = 기록 지우기), text = 상자에 보이는 글자, title = 전체 뜻
+const ATTEND_CHOICES = [
+    { status: '출석', text: '출', title: '출석' },
+    { status: '지각', text: '지', title: '지각' },
+    { status: '결석', text: '결', title: '결석' },
+    { status: '공결', text: '공', title: '공결' },
+    { status: '', text: 'X', title: '기록 지우기' },
+];
+// 지금 열려 있는 선택 상자 {box, btn, ctx} (없으면 null). 상자는 document.body 에 position: fixed 로 두고
+//   스크롤·창 크기 변경 때 닫으므로 칸을 따라가지 않고, 한 번에 하나만 열림
+let attendPicker = null;
+
+// 선택 상자 닫기. focusCell 이면 원래 칸으로 포커스를 돌려줌 (Esc·선택·Tab). 열려 있지 않으면 아무것도 하지 않음
+function closeAttendPicker(focusCell = false) {
+    if (!attendPicker) return;
+    const { box, btn } = attendPicker;
+    attendPicker = null;
+    box.remove();
+    btn.setAttribute('aria-expanded', 'false');
+    if (focusCell && btn.isConnected) btn.focus({ preventScroll: true });
+}
+
+// 칸 btn 바로 아래 (화면 아래에 자리가 없으면 위)에 출/지/결/공/X 선택 상자를 열고 첫 버튼에 포커스를 줌
+//   지금 상태 버튼은 강조, 기록이 없는 칸(빈칸)은 X 를 비활성으로 둠. 버튼을 누르면 닫고 저장 (setAttend)
+function openAttendPicker(btn, ctx) {
+    const tr = btn.closest('tr');
+    const cur = ctx.records.get(attendKey(tr.dataset.sid, btn.dataset.w)) ?? '';
+    const box = document.createElement('div');
+    box.className = 'att-picker';
+    box.setAttribute('role', 'menu');
+    box.setAttribute('aria-orientation', 'horizontal');
+    box.setAttribute('aria-label', `${tr.dataset.name} ${btn.dataset.w}주 출결 선택`);
+    box.innerHTML = ATTEND_CHOICES.map((c) => {
+        const radio = c.status !== '';
+        const on = radio && c.status === cur;
+        return `<button type="button" role="${radio ? 'menuitemradio' : 'menuitem'}" ${radio ? `aria-checked="${on}"` : ''}
+            class="att ${ATTEND_CLASS[c.status] ?? 'clear'}${on ? ' current' : ''}" data-status="${c.status}"
+            title="${c.title}" aria-label="${c.title}" ${!radio && cur === '' ? 'disabled' : ''}>${c.text}</button>`;
+    }).join('');
+    box.onclick = (e) => {
+        const pick = e.target.closest('button[data-status]');
+        if (!pick || attendPicker?.box !== box) return;
+        closeAttendPicker(true);
+        setAttend(btn, pick.dataset.status);
+    };
+    document.body.appendChild(box);
+    // 칸 가운데 아래에 붙이고 화면 밖으로 나가지 않게 보정 (아래에 자리가 없고 위에는 있으면 칸 위)
+    const r = btn.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const w = box.offsetWidth;
+    const h = box.offsetHeight;
+    const gap = 4;
+    const edge = 8;
+    let top = r.bottom + gap;
+    if (top + h > vh - edge && r.top - gap - h >= edge) top = r.top - gap - h;
+    box.style.top = Math.max(edge, Math.min(top, vh - h - edge)) + 'px';
+    box.style.left = Math.max(edge, Math.min(r.left + (r.width - w) / 2, vw - w - edge)) + 'px';
+    attendPicker = { box, btn, ctx };
+    btn.setAttribute('aria-expanded', 'true');
+    box.querySelector('button:not(:disabled)').focus({ preventScroll: true });
+}
+
+// 칸 btn 의 출결을 next ('출석'|'지각'|'결석'|'공결', '' = 기록 지우기) 로 바꾸고 바로 저장 (상태는 PUT, 지우기는 DELETE)
+//   저장 중인 칸과 이미 같은 값은 무시. 실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 기준 점수표를 다시 그림
+async function setAttend(btn, next) {
     const ctx = state.attend;
     if (!ctx || btn.dataset.busy) return;
     const tr = btn.closest('tr');
@@ -1212,7 +1277,7 @@ async function toggleAttend(btn) {
     const week = Number(btn.dataset.w);
     const key = attendKey(sid, week);
     const prev = ctx.records.get(key) ?? '';
-    const next = nextAttendStatus(prev);
+    if (next === prev) return;
     const show = (s) => {
         if (s) ctx.records.set(key, s); else ctx.records.delete(key);
         paintAttendCell(btn, s);
@@ -1273,10 +1338,35 @@ async function refreshAssessAttend(ctx, sid, latest) {
 }
 
 $('attend-sem').onchange = () => { state.attendSem = $('attend-sem').value; renderAttend(); };
+// 칸을 누르면 그 칸 옆에 선택 상자를 열고, 같은 칸을 다시 누르면 닫음 (다른 칸을 누르면 이전 상자는 닫힘)
 $('attend-body').onclick = (e) => {
     const b = e.target.closest('button.att');
-    if (b) toggleAttend(b);
+    if (!b) return;
+    const same = attendPicker?.btn === b;
+    closeAttendPicker();
+    if (same || !state.attend || b.dataset.busy) return;
+    openAttendPicker(b, state.attend);
 };
+// 상자 밖을 누르거나 (칸 자신은 위 onclick 이 열고 닫음), Esc·스크롤·창 크기 변경이면 닫음
+document.addEventListener('pointerdown', (e) => {
+    if (attendPicker && !attendPicker.box.contains(e.target) && !attendPicker.btn.contains(e.target)) closeAttendPicker();
+});
+window.addEventListener('scroll', (e) => {
+    if (attendPicker && !attendPicker.box.contains(e.target)) closeAttendPicker();
+}, true);
+window.addEventListener('resize', () => closeAttendPicker());
+// 키보드: 좌우 방향키로 버튼 이동, Esc 는 닫고 원래 칸으로 포커스, Tab 은 원래 칸에서 이어서 이동
+document.addEventListener('keydown', (e) => {
+    if (!attendPicker) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeAttendPicker(true); return; }
+    if (e.key === 'Tab') { closeAttendPicker(true); return; }
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    const items = [...attendPicker.box.querySelectorAll('button:not(:disabled)')];
+    const i = items.indexOf(document.activeElement);
+    items[i < 0 ? 0 : (i + step + items.length) % items.length].focus({ preventScroll: true });
+});
 
 // ───── 강의시간 ─────
 
