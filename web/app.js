@@ -219,14 +219,17 @@ $('dlg-form').addEventListener('submit', async (e) => {
 //     options 가 있으면 선택 상자, type 이 'textarea' 면 여러 줄 입력칸, 그 외는 입력칸
 //     readonly 는 수정할 때 키(학번 등)를 못 바꾸게 할 때 사용
 //     optional 이면 빈칸으로 저장할 수 있음 (그 외 입력칸은 필수)
+//     autocomplete 를 주지 않으면 "off": 브라우저 자동완성이 저장된 이름·주소 등으로 칸을 덮어쓰지 않게 함
+//       (예: 학생 수정의 name="name" 칸을 브라우저가 다른 이름으로 채우는 경우). 비밀번호 칸은 'new-password' 처럼 직접 지정
 //   values: 처음 채워둘 값, onSubmit: 저장할 때 실행할 함수 (폼 값 객체를 받음)
 //   validate: 저장 전에 폼 값을 검사하는 함수 (잘못되면 이유 문자열을 돌려줌, 서버 호출 전에 막음)
 function openForm({ title, fields, values = {}, onSubmit, validate }) {
     const html = fields.map((f) => {
         const v = esc(values[f.name] ?? '');
+        const ac = `autocomplete="${esc(f.autocomplete || 'off')}"`;
         let input;
         if (f.options) {
-            input = `<select name="${f.name}" ${f.readonly ? 'disabled' : ''}>` +
+            input = `<select name="${f.name}" ${ac} ${f.readonly ? 'disabled' : ''}>` +
                 f.options.map((o) =>
                     `<option value="${esc(o.value)}" ${String(o.value) === String(values[f.name]) ? 'selected' : ''}>${esc(o.label)}</option>`
                 ).join('') + '</select>';
@@ -234,14 +237,14 @@ function openForm({ title, fields, values = {}, onSubmit, validate }) {
             if (f.readonly) input += `<input type="hidden" name="${f.name}" value="${v}">`;
         } else if (f.type === 'textarea') {
             // 시작 태그 바로 뒤 줄바꿈 하나는 HTML 이 버리므로, 값이 줄바꿈으로 시작해도 남도록 하나를 먼저 넣음
-            input = `<textarea name="${f.name}" rows="6" ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
+            input = `<textarea name="${f.name}" rows="6" ${ac} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
                 ${f.optional ? '' : 'required'}>\n${v}</textarea>`;
         } else {
             input = `<input name="${f.name}" type="${f.type || 'text'}" value="${v}" ${f.step ? `step="${f.step}"` : ''}
                 ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}
                 ${f.pattern ? `pattern="${esc(f.pattern)}"` : ''} ${f.hint ? `title="${esc(f.hint)}"` : ''}
                 ${f.readonly ? 'readonly' : ''} ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}
-                ${f.autocomplete ? `autocomplete="${f.autocomplete}"` : ''} ${f.optional ? '' : 'required'}>`;
+                ${ac} ${f.optional ? '' : 'required'}>`;
         }
         return `<div class="field"><label>${f.label}</label>${input}</div>`;
     }).join('') + '<div class="form-error"></div>';

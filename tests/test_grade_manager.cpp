@@ -107,6 +107,61 @@ TEST_CASE(addGrade_rejects_unknown_and_duplicate) {
     CHECK_EQ(gm.getGrades().size(), static_cast<size_t>(5));
 }
 
+// ----- 학생 수정: 이름·학과·학년이 입력값 그대로 저장되는지 (학생 수정 후 이름이 바뀐다는 보고의 회귀 테스트) -----
+
+namespace {
+
+Student studentOf(const std::string& id, const std::string& name, const std::string& major, int year) {
+    Student s = makeStudent(id, name, year);
+    s.major = major;
+    return s;
+}
+
+bool sameStudentValues(const Student* s, const std::string& id, const std::string& name, const std::string& major,
+                       int year) {
+    return s != nullptr && s->id == id && s->name == name && s->major == major && s->year == year;
+}
+
+}  // namespace
+
+TEST_CASE(updateStudent_keeps_each_field_as_entered) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fill(gm);  // 24000001 가, 24000002 나
+
+    // 칸을 하나씩 바꿈: 바꾼 칸만 바뀌고 나머지는 그대로, 다른 학생도 그대로
+    CHECK(gm.updateStudent("24000001", studentOf("24000001", "가나다", "컴퓨터공학", 1)));
+    CHECK(sameStudentValues(gm.findStudent("24000001"), "24000001", "가나다", "컴퓨터공학", 1));
+    CHECK(gm.updateStudent("24000001", studentOf("24000001", "가나다", "소프트웨어학", 1)));
+    CHECK(sameStudentValues(gm.findStudent("24000001"), "24000001", "가나다", "소프트웨어학", 1));
+    CHECK(gm.updateStudent("24000001", studentOf("24000001", "가나다", "소프트웨어학", 3)));
+    CHECK(sameStudentValues(gm.findStudent("24000001"), "24000001", "가나다", "소프트웨어학", 3));
+    CHECK(sameStudentValues(gm.findStudent("24000002"), "24000002", "나", "컴퓨터공학", 1));
+    CHECK_EQ(gm.getStudents().size(), static_cast<size_t>(2));
+}
+
+TEST_CASE(updateStudent_id_change_keeps_values_and_survives_reload) {
+    TempDir dir;
+    {
+        GradeManager gm(dir.str());
+        CHECK(gm.load());
+        fill(gm);
+        // 학번과 이름·학과·학년을 같이 바꿈 → 새 학번으로 입력값 그대로, 성적도 따라감
+        CHECK(gm.updateStudent("24000001", studentOf("24000009", "새이름", "전자공학", 2)));
+        CHECK(gm.findStudent("24000001") == nullptr);
+        CHECK(sameStudentValues(gm.findStudent("24000009"), "24000009", "새이름", "전자공학", 2));
+        CHECK_EQ(gm.getGradesByStudent("24000009").size(), static_cast<size_t>(2));
+        CHECK(sameStudentValues(gm.findStudent("24000002"), "24000002", "나", "컴퓨터공학", 1));
+        CHECK(gm.save());
+    }
+    // 재시작(다시 불러오기) 후에도 그대로
+    GradeManager loaded(dir.str());
+    CHECK(loaded.load());
+    CHECK(sameStudentValues(loaded.findStudent("24000009"), "24000009", "새이름", "전자공학", 2));
+    CHECK(sameStudentValues(loaded.findStudent("24000002"), "24000002", "나", "컴퓨터공학", 1));
+    CHECK(loaded.findStudent("24000001") == nullptr);
+}
+
 // ----- 평가 기준 (#66): 6분류 비율 → 최종 성적 자동 계산, 출석 자동, 등급 방식 -----
 
 namespace {
