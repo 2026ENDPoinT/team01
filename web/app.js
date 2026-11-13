@@ -313,6 +313,7 @@ function showLogin() {
     $('login-view').hidden = false;
     $('login-error').textContent = '';
     $('login-password').value = '';
+    document.querySelectorAll('.demo-account').forEach((b) => b.classList.remove('selected'));
     $('login-username').focus();
 }
 
@@ -329,6 +330,17 @@ function startApp(me) {
     $('app').hidden = false;
     showTab('courses');
 }
+
+// 시연 계정 버튼: 아이디·비밀번호를 채우고 로그인 버튼에 포커스 (Enter 나 클릭 한 번으로 로그인)
+document.querySelectorAll('.demo-account').forEach((b) => {
+    b.addEventListener('click', () => {
+        $('login-username').value = b.dataset.username;
+        $('login-password').value = b.dataset.password;
+        $('login-error').textContent = '';
+        document.querySelectorAll('.demo-account').forEach((other) => other.classList.toggle('selected', other === b));
+        $('login-form').querySelector('button[type="submit"]').focus();
+    });
+});
 
 // 로그인 폼 (Enter 로도 제출). 실패하면 폼 안에 서버 메시지 표시
 $('login-form').addEventListener('submit', async (e) => {
