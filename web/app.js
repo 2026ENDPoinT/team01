@@ -1582,14 +1582,6 @@ async function renderTimetable() {
         </div>
         <div class="tt-legend"><span class="tt-legend-applied">신청 과목</span><span class="tt-legend-candidate">후보 과목</span></div>
         ${renderTimetableGrid(preferred, applied, candidates)}
-        <section class="tt-unscheduled">
-            <h3 class="sub-title">시간 미정</h3>
-            ${unscheduledApplied.length || unscheduledCandidates.length ? `
-                <div class="tt-unscheduled-list">
-                    ${unscheduledApplied.map((c) => `<span class="tt-unscheduled-item">${esc(c.name)} <small>신청</small></span>`).join('')}
-                    ${unscheduledCandidates.map((c) => `<span class="tt-unscheduled-item candidate">${esc(c.name)} <small>후보</small></span>`).join('')}
-                </div>` : '<p class="hint">시간이 정해지지 않은 과목이 없습니다</p>'}
-        </section>
         <section class="tt-candidate-section">
             <h3 class="sub-title">후보 과목 추가</h3>
             <div class="toolbar">
