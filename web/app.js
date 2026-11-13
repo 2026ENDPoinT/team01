@@ -230,7 +230,7 @@ const currentTab = () => document.querySelector('main .tab.active').id.slice('ta
 
 // 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
 //   code: 과목 페이지면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌림
-function showTab(name, code) {
+function showTab(name, code, assessSemester = null) {
     if (code && code !== state.courseCode) {
         state.courseCode = code;
         state.courseSem = null;
@@ -238,6 +238,11 @@ function showTab(name, code) {
         state.assessSem = null;
         state.attendSem = null;
     }
+
+    if (name === 'course' && assessSemester) {
+        state.assessSem = assessSemester;
+    }
+
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active',
         b.dataset.tab === (name === 'course' ? 'courses' : name)));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
@@ -600,6 +605,10 @@ async function renderCoursePage() {
     drawPosts();
 
     if (!manage) { state.assess = null; state.attend = null; return; }
+    if (state.assessSem && !sems.includes(state.assessSem)) {
+        sems.push(state.assessSem);
+        sems.sort().reverse();
+    }
     if (!sems.includes(state.assessSem)) state.assessSem = open || state.courseSem;
     fillSelect($('assess-sem'), sems.map((s) => ({ value: s, label: s })), '', state.assessSem);
     if (!sems.includes(state.attendSem)) state.attendSem = state.assessSem;
@@ -1719,6 +1728,7 @@ $('grade-add').onclick = () => {
         fields: gradeFields(false),
         values: { mode: 'score' },
         validate: validateGrade,
+        onOpen: () => {},
         onSubmit: async (d) => {
             const g = await api('POST', '/api/grades', gradeBody(d));
             toast(`성적을 등록했습니다: ${gradeResultText(d, g)}`);
@@ -1726,6 +1736,64 @@ $('grade-add').onclick = () => {
         },
     });
     bindGradeMode();
+
+    const body = $('dlg-body');
+    const courseSelect = body.querySelector('select[name="courseCode"]');
+    const semesterInput = body.querySelector('input[name="semester"]');
+    const saveButton = $('dlg-ok');
+
+    const guide = document.createElement('div');
+    guide.className = 'form-error';
+    guide.style.color = '#d97706';
+    body.appendChild(guide);
+
+    const moveButton = document.createElement('button');
+    moveButton.type = 'button';
+    moveButton.textContent = '평가 기준 화면 열기';
+    moveButton.hidden = true;
+    body.appendChild(moveButton);
+
+    let checkId = 0;
+
+    const checkAssessment = async () => {
+        const id = ++checkId;
+        const code = courseSelect.value;
+        const semester = semesterInput.value.trim();
+
+        guide.textContent = '';
+        moveButton.hidden = true;
+        saveButton.disabled = false;
+
+        if (!code || !SEMESTER_RE.test(semester)) return;
+
+        try {
+            const { items } = await assessmentsOf(code, semester, new Map());
+
+            if (id !== checkId) return;
+
+            if (items.length > 0) {
+                guide.textContent =
+                    '평가 기준으로 성적을 계산하는 과목입니다.\n평가 기준 화면에서 점수를 입력하세요.';
+                moveButton.hidden = false;
+                saveButton.disabled = true;
+            }
+        } catch (err) {
+            if (id === checkId) toast(err.message, true);
+        }
+    };
+
+    courseSelect.addEventListener('change', checkAssessment);
+    semesterInput.addEventListener('input', checkAssessment);
+
+    moveButton.onclick = () => {
+        const code = courseSelect.value;
+        const semester = semesterInput.value.trim();
+
+        dlg.close();
+        showTab('course', code, semester);
+    };
+
+    checkAssessment();
 };
 
 
