@@ -134,11 +134,11 @@ const ASSESS_CATEGORIES = ['출석', '중간고사', '기말고사', '과제', '
 const ATTEND_ITEM = '출석';
 const ATTEND_LOCK_MSG = '출석 점수는 출석부에서 자동 계산됩니다 (아래 출결 영역에서 고치세요)';
 // 상대평가 규칙 안내 (서버 RelativeGrading 상수와 같은 값)
-const RELATIVE_RULES = '교수자 설정 등급별 비율 (A+·A0·B+·B0·C+·F)';
+const RELATIVE_RULES = '교수자 설정 등급별 비율 (A+·A0·B+·B0·C+·D+·D0·F)';
 // 등급 → 평점 (서버 letterToPoint 와 같음, F·R·모르는 값은 0)
 const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.0, 'D+': 1.5, D0: 1.0 };
-const GRADE_RATIO_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'F'];
-const DEFAULT_GRADE_RATIOS = { 'A+': 30, A0: 0, 'B+': 40, B0: 0, 'C+': 30, F: 0 };
+const GRADE_RATIO_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'D+', 'D0', 'F'];
+const DEFAULT_GRADE_RATIOS = { 'A+': 30, A0: 0, 'B+': 40, B0: 0, 'C+': 30, 'D+': 0, D0: 0, F: 0 };
 
 // 학생·성적 탭이 함께 쓰는 페이지 이동 줄. 10건 이하면 표시하지 않는다.
 function renderPager(el, { page, totalPages, total, onMove }) {
@@ -974,7 +974,7 @@ const GRADING_MODES = [
     { value: 'relative', label: `상대평가 (${RELATIVE_RULES})` },
 ];
 // 평가 기준 폼 검사 (서버 PUT /api/assessments 와 같은 규칙·문구)
-//   분류별 비율: 0~100 정수 (빈칸도 오류), 방식: absolute·relative, 그다음 합계 100
+//   평가 항목·상대평가 등급 비율: 0~100 정수 (빈칸도 오류), 방식: absolute·relative, 각 합계 100
 const SCHEME_RULES = '평가 기준이 올바르지 않습니다 (분류별 비율 0~100 정수, 합계 100, 방식 absolute·relative)';
 const validateScheme = (d) => {
     const weights = ASSESS_CATEGORIES.map((c) => String(d[c] ?? '').trim());
@@ -1164,8 +1164,8 @@ async function renderAssess() {
     lockAttendColumn();
 }
 
-// 평가 기준 설정 폼 (ctx = 지금 영역의 {code, sem, mode, items}). 6분류 평가 항목 비율과 6개 상대평가 등급 비율(숫자 입력) + 등급 방식
-//   저장은 PUT /api/assessments 한 번 (6분류 비율을 모두 보냄)
+// 평가 기준 설정 폼 (ctx = 지금 영역의 {code, sem, mode, items}). 6개 평가 항목 비율과 8개 상대평가 등급 비율 + 등급 방식
+//   저장은 PUT /api/assessments 한 번 (평가 항목 6개와 상대평가 등급 8개 비율을 보냄)
 function openSchemeForm(ctx) {
     const weightOf = new Map(ctx.items.map((a) => [a.name, a.weight]));
     const ratioValues = { ...DEFAULT_GRADE_RATIOS, ...(ctx.gradeRatios ?? {}) };
@@ -1228,31 +1228,24 @@ function openSchemeForm(ctx) {
 
     // 해당 입력칸을 제외한 현재 값으로 그 칸에 허용되는 최대값을 계산한다.
     const maxRatioFor = (letter) => {
-        const aPlus = ratioValue('A+');
-        const a0 = ratioValue('A0');
-        const bPlus = ratioValue('B+');
-        const b0 = ratioValue('B0');
-        const cPlus = ratioValue('C+');
-        const f = ratioValue('F');
+        const otherTotal = GRADE_RATIO_LETTERS
+            .filter((item) => item !== letter)
+            .reduce((sum, item) => sum + ratioValue(item), 0);
+        let max = 100 - otherTotal;
 
-        switch (letter) {
-            case 'A+':
-                return Math.max(0, Math.min(30 - a0, 70 - a0 - bPlus - b0, 100 - a0 - bPlus - b0 - cPlus - f));
-            case 'A0':
-                return Math.max(0, Math.min(30 - aPlus, 70 - aPlus - bPlus - b0, 100 - aPlus - bPlus - b0 - cPlus - f));
-            case 'B+':
-                return Math.max(0, Math.min(70 - aPlus - a0 - b0, 100 - aPlus - a0 - b0 - cPlus - f));
-            case 'B0':
-                return Math.max(0, Math.min(70 - aPlus - a0 - bPlus, 100 - aPlus - a0 - bPlus - cPlus - f));
-            case 'C+':
-                return Math.max(0, 100 - aPlus - a0 - bPlus - b0 - f);
-            case 'F':
-                return Math.max(0, 100 - aPlus - a0 - bPlus - b0 - cPlus);
-            default:
-                return 100;
+        // A+ + A0 <= 30%
+        if (letter === 'A+') max = Math.min(max, 30 - ratioValue('A0'));
+        if (letter === 'A0') max = Math.min(max, 30 - ratioValue('A+'));
+
+        // A+ + A0 + B+ + B0 <= 70%
+        if (letter === 'B+') {
+            max = Math.min(max, 70 - ratioValue('A+') - ratioValue('A0') - ratioValue('B0'));
         }
+        if (letter === 'B0') {
+            max = Math.min(max, 70 - ratioValue('A+') - ratioValue('A0') - ratioValue('B+'));
+        }
+        return Math.max(0, max);
     };
-
 const updateRatioMaxes = (changedLetter = null) => {
     if (changedLetter) {
         const changed = ratioInput(changedLetter);
