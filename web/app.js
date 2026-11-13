@@ -58,6 +58,8 @@ async function api(method, url, body) {
         opt.body = JSON.stringify(body);
     }
     const res = await fetch(url, opt);
+    // 데이터를 바꾸는 요청이 성공하면 응답의 변경 번호를 내 변경으로 기억 (자동 갱신이 같은 변경을 또 그리지 않게, GET 은 기억 안 함)
+    if (res.ok && method !== 'GET') liveNoteOwnChange(res.headers.get('X-Data-Version'));
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && url !== '/api/login') showLogin();
     if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
@@ -491,6 +493,7 @@ function resetView() {
 function showLogin() {
     state.me = null;
     if (dlg.open) dlg.close();
+    liveStop();
     resetView();
     $('tabs').hidden = true;
     $('user-box').hidden = true;
@@ -514,6 +517,7 @@ function startApp(me) {
     $('user-box').hidden = false;
     $('app').hidden = false;
     showTab('courses');
+    liveStart();
 }
 
 // 시연 계정 버튼: 아이디·비밀번호를 채우고 로그인 버튼에 포커스 (Enter 나 클릭 한 번으로 로그인)
@@ -2923,6 +2927,88 @@ $('account-body').onclick = (e) => {
         `${a.username} 계정을 삭제할까요?`,
         () => api('DELETE', '/api/accounts/' + encodeURIComponent(a.username)));
 };
+
+// ───────── 자동 갱신 ─────────
+
+// 다른 접속자의 변경을 몇 초 안에 반영: 로그인한 동안 3초마다 GET /api/version (서버 변경 번호) 을 확인하고,
+// 마지막으로 본 번호와 다르면 지금 탭을 다시 그림 (refreshAll, renderSeq 보호 그대로).
+// SSE·WebSocket 대신 폴링 (서버 스레드 풀이 작아 접속자마다 스레드를 붙잡으면 API 가 막힘)
+//   - 탭(브라우저 창)이 안 보이면 확인하지 않고, 다시 보이면 바로 한 번 확인
+//   - 앞 확인(다시 그리기 포함)이 끝나기 전엔 다음 확인을 보내지 않음. 실패(네트워크·401)는 토스트 없이 넘기고 다음 주기에 다시
+//   - 로그인 직후 첫 확인은 번호만 기억 (그리지 않음). 로그아웃(showLogin)하면 멈추고 번호도 비움
+//   - 입력 중(liveEditing)이면 그리지 않고 번호도 그대로 둬서 다음 주기에 다시 판단
+//   - 내 변경: api() 가 POST·PUT·DELETE 성공 응답의 X-Data-Version 을 liveNoteOwnChange 로 넘김. 서버는 변경 뒤에 번호를
+//     올려서 동시에 들어온 다른 사람의 변경이 내 번호 사이에 끼어 있을 수 있으므로, 내 번호들이 마지막 번호에서 빈틈 없이
+//     이어질 때만 마지막 번호를 앞으로 옮김 (빈틈 = 다른 사람의 변경 → 다음 확인에서 다시 그림)
+// version: 마지막으로 본 번호 (null = 아직 모름), own: 아직 이어지지 않은 내 변경 번호들
+// gen: 시작·정지마다 올림 (이전 로그인의 늦은 응답이 상태를 건드리지 않게)
+// epoch: 내 변경으로 version 을 옮길 때마다 올림 (그 전에 보낸 확인 응답은 옛 번호일 수 있어 버림)
+const LIVE_POLL_MS = 3000;
+const live = { on: false, gen: 0, timer: 0, busy: false, version: null, own: new Set(), epoch: 0 };
+
+function liveStart() {
+    liveStop();
+    live.on = true;
+    liveCheck();
+}
+
+function liveStop() {
+    live.gen++;
+    live.on = false;
+    live.busy = false;
+    live.version = null;
+    live.own.clear();
+    clearTimeout(live.timer);
+}
+
+function liveNoteOwnChange(header) {
+    const v = Number(header);
+    if (header === null || !Number.isSafeInteger(v) || live.version === null || v <= live.version) return;
+    live.own.add(v);
+    if (!live.own.has(live.version + 1)) return;
+    while (live.own.delete(live.version + 1)) live.version++;
+    live.epoch++;
+}
+
+// 입력 중: 대화상자·출결 선택 상자가 열려 있거나, 화면(#app) 안의 입력칸·선택 상자에 포커스가 있음
+function liveEditing() {
+    if (dlg.open || attendPicker) return true;
+    const el = document.activeElement;
+    return !!el && el.matches('input, textarea, select') && $('app').contains(el);
+}
+
+async function liveCheck() {
+    if (!live.on || live.busy) return;
+    clearTimeout(live.timer);
+    if (document.visibilityState !== 'visible') return;  // visibilitychange 가 다시 부름
+    const { gen, epoch } = live;
+    live.busy = true;
+    try {
+        const res = await fetch('/api/version', { cache: 'no-store' });
+        if (!res.ok) return;
+        const { version } = await res.json();
+        if (gen !== live.gen || epoch !== live.epoch || !Number.isSafeInteger(version)) return;
+        if (live.version === null || version < live.version) {  // 첫 확인 (작아짐 = 서버 재시작 → 새로 시작)
+            live.version = version;
+            live.own.clear();
+            return;
+        }
+        if (version === live.version || liveEditing()) return;
+        live.version = version;
+        live.own.forEach((v) => { if (v <= version) live.own.delete(v); });
+        await refreshAll();
+    } catch { /* 조용히 넘기고 다음 주기에 다시 */ }
+    finally {
+        if (gen === live.gen) {
+            live.busy = false;
+            live.timer = setTimeout(liveCheck, LIVE_POLL_MS);
+        }
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') liveCheck();
+});
 
 // ───────── 시작 ─────────
 

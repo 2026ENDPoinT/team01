@@ -507,7 +507,36 @@ bool renderIndexHtml(const std::string& webDir, std::string& html) {
     return true;
 }
 
+// POST·PUT·DELETE 를 쓰지만 데이터(gm·accounts → CSV)를 바꾸지 않는 라우트: 변경 번호를 올리지 않음
+//   (svr.Post/Put/Delete 전부를 읽고 분류함. 나머지 POST·PUT·DELETE 는 모두 성공 뒤 gm.save() 또는 accounts->save())
+//   POST /api/login            세션만 만듦 (sessions 는 메모리에만 있고 화면에 보이는 데이터가 아님)
+//   POST /api/logout           세션만 지움 (같은 이유)
+//   POST /api/stats/simulate/… 재수강 시뮬레이션: 계산 결과만 돌려주고 저장하지 않음
+//   POST /api/assessments/batch  여러 (과목, 학기) 평가 기준 조회: 목록을 본문으로 받으려고 POST 를 쓸 뿐 읽기 전용
+//   PUT /api/me/password 는 올림 (계정 파일이 바뀜, 관리자 계정 탭과 같은 기준)
+struct NoDataChangeRoute {
+    const char* path;
+    bool prefix;  // true 면 path 로 시작하는 경로 전부
+};
+constexpr NoDataChangeRoute kNoDataChangeRoutes[] = {
+    {"/api/login", false},
+    {"/api/logout", false},
+    {"/api/stats/simulate/", true},
+    {"/api/assessments/batch", false},
+};
+
 }  // namespace
+
+bool changesData(const std::string& method, const std::string& path, int status) {
+    // 200~399 만 성공 (httplib 은 처리기가 status 를 정하지 않으면 200·404 등으로 채운 뒤 post-routing 을 부름)
+    if (status < 200 || status >= 400) return false;
+    if (method != "POST" && method != "PUT" && method != "DELETE") return false;
+    if (path.rfind("/api/", 0) != 0) return false;
+    for (const NoDataChangeRoute& route : kNoDataChangeRoutes) {
+        if (route.prefix ? path.rfind(route.path, 0) == 0 : path == route.path) return false;
+    }
+    return true;
+}
 
 Server::Server(GradeManager& gm, AccountStore& accounts,
                const std::string& webDir, int port, const std::string& bindAddress)
@@ -585,8 +614,18 @@ void Server::run() {
 
     // 모든 응답(정적 파일·API 공통)에 Cache-Control: no-cache — 지정이 없으면 Cloudflare 가
     // 정적 파일을 기본 4시간 엣지 캐시해서 배포 후에도 옛 app.js 가 나간다. (no-cache = 매번 재검증)
-    svr.set_post_routing_handler([](const httplib::Request&, httplib::Response& res) {
+    // 변경 번호: 데이터를 바꾸는 요청이 성공했으면(changesData) dataVersion 을 1 올리고, 모든 /api/* 응답에
+    //   X-Data-Version 을 붙인다 (올린 요청이면 그 요청이 올린 번호, 아니면 지금 번호). post-routing 은 하나만 등록되므로 여기서 함께 처리.
+    //   라우트 처리기가 끝나 mtx 를 놓은 뒤에 불리므로 번호는 원자 연산으로만 다룬다. 변경과 번호 올림 사이에 다른 요청의
+    //   변경이 끼어들 수 있어 번호 순서가 변경 순서와 다를 수 있다 → 웹은 자기 응답 번호가 '마지막 번호 + 1' 로 이어질 때만
+    //   자기 변경으로 보고, 그 밖에는 다시 그린다 (app.js 자동 갱신 참고)
+    svr.set_post_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         if (!res.has_header("Cache-Control")) res.set_header("Cache-Control", "no-cache");
+        if (req.path.rfind("/api/", 0) != 0) return;
+        const std::uint64_t version = changesData(req.method, req.path, res.status)
+                                          ? dataVersion.fetch_add(1) + 1
+                                          : dataVersion.load();
+        res.set_header("X-Data-Version", std::to_string(version));
     });
 
     // index.html 은 마운트 포인트가 먼저 처리하므로 라우팅 전에 가로채서 동적으로 서빙한다.
@@ -650,6 +689,18 @@ void Server::run() {
         const Account* account = requireRole(req, res, {"admin", "professor", "student"});
         if (!account) return;
         res.set_content(accountJson(*account), "application/json; charset=utf-8");
+    });
+
+    // 변경 번호: 로그인한 웹이 3초마다 부르므로 가볍게 처리한다.
+    //   mtx 는 세션 확인(sessions·accounts 읽기, 만료 세션 지우기 — 다른 라우트와 같이 mtx 안에서만 접근)에만 짧게 잡고,
+    //   번호 읽기·응답 작성은 잠금 밖에서 원자 변수만 읽는다. 브라우저·프록시가 옛 번호를 돌려주지 않게 no-store.
+    svr.Get("/api/version", [this](const httplib::Request& req, httplib::Response& res) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!requireRole(req, res, {"admin", "professor", "student"})) return;
+        }
+        res.set_header("Cache-Control", "no-store");
+        setJson(res, 200, json{{"version", dataVersion.load()}});
     });
 
     svr.Put("/api/me/password", [this](const httplib::Request& req, httplib::Response& res) {

@@ -118,6 +118,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 - 학생 계정에는 `시간표` 탭이 추가되어 학기별 신청 과목을 주간 격자로 확인하고, 후보 과목을 브라우저에 저장해 겹침을 미리 확인할 수 있습니다.
 - 교수의 담당 과목: 과목의 담당 교수 이름(쉼표로 구분)과 계정 이름이 정확히 같은 과목
 - 세션은 쿠키 `sid` (HttpOnly, 8시간)로 유지하고 서버 메모리에만 둡니다. 서버를 다시 켜면 모두 로그아웃됩니다.
+- 다른 사용자의 변경(성적·과목·수강신청·게시물·계정 등)은 새로고침하지 않아도 3초 안팎에 지금 보는 탭에 자동으로 반영됩니다 (화면이 3초마다 서버 변경 번호를 확인). 입력 중(대화상자·출결 선택 상자가 열려 있거나 입력칸·선택 상자에 포커스가 있음)에는 다시 그리지 않고 입력을 마친 뒤 반영하며, 브라우저 탭이 안 보이는 동안은 확인하지 않습니다.
 
 | 기능 | 관리자 | 교수 | 학생 |
 |---|---|---|---|
@@ -273,11 +274,14 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 
 요청/응답 본문은 JSON. `/api/login` 외 모든 `/api/*` 는 로그인이 필요합니다 (안 했으면 `401`, 권한 없음 `403`). 실패 시 `400` 잘못된 값·깨진 JSON·빠진 칸 / `404` 없음 / `409` 중복·정원 초과·수강신청 규칙·평가 기준 규칙·출결 규칙 위반 / `500` 파일 저장 실패 + `{"error": "메시지"}`
 
+모든 `/api/*` 응답에는 헤더 `X-Data-Version: <변경 번호>` 가 붙습니다. 변경 번호는 서버를 켤 때 1 이고, 데이터를 바꾸는 `POST`·`PUT`·`DELETE` 가 성공(`status < 400`)할 때마다 1 오릅니다 (그 응답의 헤더 = 올린 번호). 세션만 바뀌는 `/api/login`·`/api/logout` 과 저장하지 않는 `/api/stats/simulate/…`, 조회용 `POST /api/assessments/batch` 는 올리지 않습니다.
+
 | 메서드 | 경로 | 설명 (권한) |
 |---|---|---|
 | POST | `/api/login` | 로그인 `{username, password}` (공개) |
 | POST | `/api/logout` | 로그아웃 |
 | GET | `/api/me` | 내 정보 `{username, role, name, studentId}` |
+| GET | `/api/version` | 변경 번호 `{"version": N}` (`Cache-Control: no-store`). 화면이 3초마다 확인해 바뀌면 지금 탭을 다시 그림 |
 | PUT | `/api/me/password` | 내 비밀번호 변경 `{currentPassword, newPassword}` |
 | GET | `/api/accounts` | 계정 목록 (관리자) |
 | POST | `/api/accounts` | 계정 생성 `{username, role, name, studentId, password}` (관리자) |
