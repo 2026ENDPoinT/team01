@@ -668,12 +668,14 @@ bool FileIO::loadGradingModes(std::vector<GradingMode>& modes) {
 }
 
 
-// relative_grade_ratios.csv : courseCode,semester,A+,A0,B+,B0,C+,C0,F
-const char* const kRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,C0,F";
+// relative_grade_ratios.csv : courseCode,semester,A+,A0,B+,B0,C+,F
+const char* const kRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,F";
+const char* const kLegacyRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,C0,F";
+
 bool FileIO::saveRelativeGradeRatios(const std::vector<RelativeGradeRatio>& ratios) {
     std::string content = std::string(kRelativeGradeRatiosHeader) + "\n";
     for (const RelativeGradeRatio& item : ratios) {
-        if (item.ratios.size() != 7) continue;
+        if (item.ratios.size() != 6) continue;
         std::vector<std::string> fields = {item.courseCode, item.semester};
         int total = 0;
         for (int value : item.ratios) {
@@ -688,13 +690,15 @@ bool FileIO::saveRelativeGradeRatios(const std::vector<RelativeGradeRatio>& rati
 bool FileIO::loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios) {
     const std::string path = dataDir + "/relative_grade_ratios.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, {kRelativeGradeRatiosHeader}, rows)) return false;
+    if (!readCsv(path, {kRelativeGradeRatiosHeader, kLegacyRelativeGradeRatiosHeader}, rows)) return false;
 
     ratios.clear();
     for (const CsvRow& row : rows) {
+        if (row.fields.size() != 8 && row.fields.size() != 9) continue;
         RelativeGradeRatio item;
         item.courseCode = row.fields[0];
         item.semester = row.fields[1];
+        std::vector<int> loaded;
         int total = 0;
         bool valid = true;
         for (size_t i = 2; i < row.fields.size(); ++i) {
@@ -703,10 +707,15 @@ bool FileIO::loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios) {
                 valid = false;
                 break;
             }
-            item.ratios.push_back(value);
+            loaded.push_back(value);
             total += value;
         }
-        if (item.ratios.size() != 7 || total != 100) valid = false;
+        // 구버전의 C0 비율은 C+에 합산하여 여섯 등급 체계로 이전한다.
+        if (loaded.size() == 7) {
+            loaded[4] += loaded[5];
+            loaded.erase(loaded.begin() + 5);
+        }
+        if (loaded.size() != 6 || total != 100) valid = false;
         const bool duplicate = std::any_of(ratios.begin(), ratios.end(), [&](const RelativeGradeRatio& other) {
             return other.courseCode == item.courseCode && other.semester == item.semester;
         });
@@ -715,6 +724,7 @@ bool FileIO::loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios) {
                       << "번째 줄 무시 (상대평가 등급 비율이 올바르지 않음)" << std::endl;
             continue;
         }
+        item.ratios = std::move(loaded);
         ratios.push_back(std::move(item));
     }
     return true;

@@ -132,11 +132,11 @@ const ASSESS_CATEGORIES = ['출석', '중간고사', '기말고사', '과제', '
 const ATTEND_ITEM = '출석';
 const ATTEND_LOCK_MSG = '출석 점수는 출석부에서 자동 계산됩니다 (아래 출결 영역에서 고치세요)';
 // 상대평가 규칙 안내 (서버 RelativeGrading 상수와 같은 값)
-const RELATIVE_RULES = '교수자 설정 등급별 비율 (A+·A0·B+·B0·C+·C0·F)';
+const RELATIVE_RULES = '교수자 설정 등급별 비율 (A+·A0·B+·B0·C+·F)';
 // 등급 → 평점 (서버 letterToPoint 와 같음, F·R·모르는 값은 0)
 const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.0, 'D+': 1.5, D0: 1.0 };
-const GRADE_RATIO_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'C0', 'F'];
-const DEFAULT_GRADE_RATIOS = { 'A+': 10, A0: 20, 'B+': 20, B0: 20, 'C+': 10, C0: 10, F: 10 };
+const GRADE_RATIO_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'F'];
+const DEFAULT_GRADE_RATIOS = { 'A+': 30, A0: 0, 'B+': 40, B0: 0, 'C+': 30, F: 0 };
 
 // 학생·성적 탭이 함께 쓰는 페이지 이동 줄. 10건 이하면 표시하지 않는다.
 function renderPager(el, { page, totalPages, total, onMove }) {
@@ -993,6 +993,8 @@ function relativeSummary(grades) {
     }
     const counts = GRADE_RATIO_LETTERS.map((letter) =>
         `${letter} ${grades.filter((g) => g.letter === letter).length}명`);
+    const c0Count = grades.filter((g) => g.letter === 'C0').length;
+    if (c0Count > 0) counts.push(`C0 ${c0Count}명 (절대평가 상한 적용)`);
     return `상대평가 결과 · ${counts.join(' · ')} <span class="hint">(동점자는 같은 등급으로 처리)</span>`;
 }
 
@@ -1071,7 +1073,7 @@ async function renderAssess() {
     lockAttendColumn();
 }
 
-// 평가 기준 설정 폼 (ctx = 지금 영역의 {code, sem, mode, items}). 6분류 비율 칸(지금 값, 없으면 0) + 등급 방식
+// 평가 기준 설정 폼 (ctx = 지금 영역의 {code, sem, mode, items}). 6분류 평가 항목 비율과 6개 상대평가 등급 비율(숫자 입력) + 등급 방식
 //   저장은 PUT /api/assessments 한 번 (6분류 비율을 모두 보냄)
 function openSchemeForm(ctx) {
     const weightOf = new Map(ctx.items.map((a) => [a.name, a.weight]));
