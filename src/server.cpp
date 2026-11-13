@@ -12,6 +12,7 @@
 #include <random>
 #include <regex>
 #include <sstream>
+#include <tuple>
 #include <unordered_set>
 
 #include "httplib.h"
@@ -2052,6 +2053,141 @@ void Server::run() {
         }
         if (!gm.removeAssessmentScore(studentId, courseCode, semester, name)) {
             setError(res, 404, "입력된 항목 점수가 없습니다: " + studentId + " " + name);
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 200, json{{"deleted", true}});
+    });
+
+    // 출결 조회: student 는 본인 전체 기록, admin·professor 는 과목·학기 지정
+    svr.Get("/api/attendance", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor", "student"});
+        if (!account) return;
+
+        std::vector<Attendance> records;
+        if (account->role == "student") {
+            records = gm.getAttendanceByStudent(account->studentId);
+        } else {
+            const std::string courseCode = req.get_param_value("courseCode");
+            const std::string semester = req.get_param_value("semester");
+            if (courseCode.empty() || semester.empty()) {
+                setError(res, 400, "courseCode, semester 를 모두 지정해야 합니다");
+                return;
+            }
+            if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+            records = gm.getAttendanceByCourse(courseCode, semester);
+        }
+
+        json recordItems = json::array();
+        std::map<std::tuple<std::string, std::string, std::string>, std::vector<Attendance>> grouped;
+        for (const Attendance& record : records) {
+            recordItems.push_back({
+                {"studentId", record.studentId}, {"courseCode", record.courseCode},
+                {"semester", record.semester}, {"week", record.week}, {"status", record.status}
+            });
+            grouped[{record.studentId, record.courseCode, record.semester}].push_back(record);
+        }
+
+        json summaries = json::array();
+        for (const auto& entry : grouped) {
+            const auto& key = entry.first;
+            const AttendanceSummary summary = summarizeAttendance(entry.second);
+            json item = {
+                {"studentId", std::get<0>(key)},
+                {"present", summary.present}, {"late", summary.late},
+                {"absent", summary.absent}, {"absentEquivalent", summary.absentEquivalent},
+                {"score", summary.score < 0.0 ? json(nullptr) : json(summary.score)},
+                {"shortage", summary.shortage}
+            };
+            if (account->role == "student") {
+                item["courseCode"] = std::get<1>(key);
+                item["semester"] = std::get<2>(key);
+            }
+            summaries.push_back(std::move(item));
+        }
+        setJson(res, 200, json{{"records", recordItems}, {"summaries", summaries}});
+    });
+
+    // 출결 등록·수정
+    svr.Put("/api/attendance", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+
+        Attendance record;
+        if (!readString(body, "studentId", record.studentId, res) ||
+            !readString(body, "courseCode", record.courseCode, res) ||
+            !readString(body, "semester", record.semester, res) ||
+            !readString(body, "status", record.status, res)) return;
+        const auto week = body.find("week");
+        if (week == body.end() || !week->is_number_integer()) {
+            setError(res, 400, "출결 정보가 올바르지 않습니다 (주차 1~16, 상태 출석·지각·결석·공결)");
+            return;
+        }
+        record.week = week->get<int>();
+        if (record.week < 1 || record.week > 16 ||
+            (record.status != "출석" && record.status != "지각" &&
+             record.status != "결석" && record.status != "공결")) {
+            setError(res, 400, "출결 정보가 올바르지 않습니다 (주차 1~16, 상태 출석·지각·결석·공결)");
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, record.courseCode, res)) return;
+        if (!gm.findStudent(record.studentId)) {
+            setError(res, 404, "없는 학생입니다: " + record.studentId);
+            return;
+        }
+        if (!gm.findEnrollment(record.studentId, record.courseCode, record.semester)) {
+            setError(res, 409, kNotEnrolled);
+            return;
+        }
+        if (!record.isValid() || !gm.setAttendance(record)) {
+            setError(res, 400, "출결 정보가 올바르지 않습니다 (주차 1~16, 상태 출석·지각·결석·공결)");
+            return;
+        }
+        if (!gm.save()) {
+            setError(res, 500, kSaveFailed);
+            return;
+        }
+        setJson(res, 200, json{
+            {"studentId", record.studentId}, {"courseCode", record.courseCode},
+            {"semester", record.semester}, {"week", record.week}, {"status", record.status}
+        });
+    });
+
+    // 출결 삭제
+    svr.Delete("/api/attendance", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor"});
+        if (!account) return;
+        const std::string studentId = req.get_param_value("studentId");
+        const std::string courseCode = req.get_param_value("courseCode");
+        const std::string semester = req.get_param_value("semester");
+        const std::string weekText = req.get_param_value("week");
+        int week = 0;
+        try {
+            std::size_t used = 0;
+            week = std::stoi(weekText, &used);
+            if (used != weekText.size()) week = 0;
+        } catch (...) {
+            week = 0;
+        }
+        if (studentId.empty() || courseCode.empty() || semester.empty() || week < 1 || week > 16) {
+            setError(res, 400, "studentId, courseCode, semester, week(1~16) 을 모두 지정해야 합니다");
+            return;
+        }
+        if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (!gm.findStudent(studentId)) {
+            setError(res, 404, "없는 학생입니다: " + studentId);
+            return;
+        }
+        if (!gm.removeAttendance(studentId, courseCode, semester, week)) {
+            setError(res, 404, "없는 출결 기록입니다");
             return;
         }
         if (!gm.save()) {

@@ -66,6 +66,11 @@
 //   PUT    /api/assessment-scores     항목 점수 입력 {studentId,courseCode,semester,name,score} (있으면 수정) → 200 항목 점수
 //   DELETE /api/assessment-scores?studentId=&courseCode=&semester=&name=   항목 점수 삭제 → {"deleted":true}
 //                                     (위 둘: admin, professor 는 담당 과목만. 항목 점수가 바뀌면 성적을 다시 계산)
+//                                     출석 항목 직접 수정·삭제는 항상 409 (출석 점수는 출석부에서 자동 계산됩니다)
+//   GET    /api/attendance?courseCode=&semester=   출결 기록·요약 조회 (admin 전체, professor 담당 과목만, student 본인 전체)
+//   PUT    /api/attendance             출결 등록·수정 {studentId,courseCode,semester,week,status} → 200 기록 (admin, 담당 professor)
+//   DELETE /api/attendance?studentId=&courseCode=&semester=&week=   출결 삭제 → {"deleted":true} (admin, 담당 professor)
+//                                     주차 1~16, 상태 출석·지각·결석·공결. 출결 변경 후 코어가 성적을 자동 동기화
 //   GET    /                          web/ 정적 파일 (공개)
 //
 // 세션: 로그인하면 쿠키 sid=<토큰 hex 64자> (HttpOnly, SameSite=Strict, 8시간) 를 줌.
