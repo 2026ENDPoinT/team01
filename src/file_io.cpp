@@ -245,17 +245,21 @@ bool FileIO::loadStudents(std::vector<Student>& students) {
     return true;
 }
 
-// courses.csv : code,name,credit,professor,category,area,schedule,language,capacity,remote
-//   예전 형식(code,name,credit,professor) 파일도 읽고, 없는 칸은 Course 기본값으로 채움 → 다음 저장 때 새 형식으로 바뀜
+// courses.csv : code,name,credit,professor,category,area,schedule,language,capacity,remote,gradeType
+//   예전 형식(gradeType 없는 10칸, code,name,credit,professor 4칸) 파일도 읽고, 없는 칸은 Course 기본값으로 채움
+//   (gradeType 없으면 "letter") → 다음 저장 때 새 형식으로 바뀜. gradeType 이 letter·pf 가 아닌 줄은 건너뜀
 
-const char* const kCoursesHeader = "code,name,credit,professor,category,area,schedule,language,capacity,remote";
+const char* const kCoursesHeader =
+    "code,name,credit,professor,category,area,schedule,language,capacity,remote,gradeType";
+const char* const kCoursesV2Header = "code,name,credit,professor,category,area,schedule,language,capacity,remote";
 const char* const kCoursesLegacyHeader = "code,name,credit,professor";
 
 bool FileIO::saveCourses(const std::vector<Course>& courses) {
     std::string content = std::string(kCoursesHeader) + "\n";
     for (const Course& c : courses) {
         content += joinCsvLine({c.code, c.name, std::to_string(c.credit), c.professor, c.category, c.area,
-                                c.schedule, c.language, std::to_string(c.capacity), c.remote ? "Y" : "N"});
+                                c.schedule, c.language, std::to_string(c.capacity), c.remote ? "Y" : "N",
+                                c.gradeType});
     }
     return atomicWrite(dataDir + "/courses.csv", content);
 }
@@ -263,7 +267,7 @@ bool FileIO::saveCourses(const std::vector<Course>& courses) {
 bool FileIO::loadCourses(std::vector<Course>& courses) {
     const std::string path = dataDir + "/courses.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, {kCoursesHeader, kCoursesLegacyHeader}, rows)) {
+    if (!readCsv(path, {kCoursesHeader, kCoursesV2Header, kCoursesLegacyHeader}, rows)) {
         return false;
     }
 
@@ -288,6 +292,14 @@ bool FileIO::loadCourses(std::vector<Course>& courses) {
                 continue;
             }
             c.remote = f[9] == "Y";
+        }
+        if (f.size() > 10) {
+            c.gradeType = f[10];
+            if (!isValidGradeType(c.gradeType)) {
+                std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (성적 방식 \"" << c.gradeType
+                          << "\" 이 올바르지 않음, letter 또는 pf)" << std::endl;
+                continue;
+            }
         }
         courses.push_back(c);
     }
@@ -330,8 +342,9 @@ bool FileIO::loadGrades(std::vector<Grade>& grades) {
         if (f.size() >= 5) {
             g.assignedLetter = f[4];
         }
-        // letter 는 "" 이거나 9개 등급 중 하나 (letterToScore 가 모르는 문자열이면 -1)
-        if (!g.assignedLetter.empty() && letterToScore(g.assignedLetter) < 0) {
+        // letter 는 "" 이거나 9개 등급 중 하나 (letterToScore 가 모르는 문자열이면 -1), 또는 P/F 과목의 P·NP
+        //   (과목이 P/F 인지는 GradeManager 가 과목과 맞춰 보지 않음: 불러온 값 그대로)
+        if (!g.assignedLetter.empty() && letterToScore(g.assignedLetter) < 0 && !isPassFailLetter(g.assignedLetter)) {
             std::cerr << "경고: " << path << " " << row.lineNumber << "번째 줄 무시 (등급 \"" << g.assignedLetter
                       << "\" 이 올바르지 않음)" << std::endl;
             continue;

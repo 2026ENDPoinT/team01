@@ -75,6 +75,9 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const gpaOf = (r) => (typeof r === 'number' ? r : r?.gpa);
 // 직접 입력할 수 있는 등급 (서버 letterToScore 가 받는 값)
 const GRADE_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'C0', 'D+', 'D0', 'F'];
+// P/F 과목 (course.gradeType 'pf'): 성적은 P(합격)·NP(불합격) 만 (서버 kLetterPass·kLetterNonPass)
+const PF_LETTERS = ['P', 'NP'];
+const isPassFailCourse = (code) => state.courses.find((c) => c.code === code)?.gradeType === 'pf';
 // 점수 → 등급 (서버 scoreToLetter 와 같은 경계, "이상" 기준)
 const scoreToLetter = (s) => [[95, 'A+'], [90, 'A0'], [85, 'B+'], [80, 'B0'], [75, 'C+'], [70, 'C0'], [65, 'D+'], [60, 'D0']]
     .find(([min]) => s >= min)?.[1] ?? 'F';
@@ -541,6 +544,11 @@ const courseFields = () => [
     { name: 'area', label: '교양영역 (교양 과목만)', optional: true, placeholder: '예: 인문, 자연과학' },
     { name: 'capacity', label: '학기당 정원 (0 = 제한 없음)', type: 'number' },
     { name: 'remote', label: '원격강좌', options: [{ value: 'N', label: '아니오' }, { value: 'Y', label: '예' }] },
+    // 성적이나 평가 기준이 있는 과목은 서버가 바꾸지 못하게 막음 (409)
+    { name: 'gradeType', label: '성적 방식', options: [
+        { value: 'letter', label: '등급 (A+~F, 평점 반영)' },
+        { value: 'pf', label: 'P/F (합격·불합격, 평점 제외)' },
+    ] },
 ];
 // 과목 폼 값 검사 (서버 courseInvalidReason 과 같은 규칙·문구): 잘못되면 이유, 괜찮으면 빈 문자열
 const validateCourse = (d) => {
@@ -555,7 +563,7 @@ const validateCourse = (d) => {
 // 폼 값 → API 본문 (숫자·참거짓 변환)
 const courseBody = (d) => ({ ...d, credit: Number(d.credit), capacity: Number(d.capacity), remote: d.remote === 'Y' });
 // API 값 → 폼 처음 값 (remote 는 선택 상자 값 Y/N 으로)
-const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
+const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N', gradeType: c.gradeType || 'letter' });
 
 // 과목 목록 그리기 (myCourses: 교수는 담당 과목, 학생은 수강신청한 과목만)
 // 과목마다 통계 API 도 같이 호출해 state.stats 에 저장 (못 받으면 null)
@@ -634,6 +642,7 @@ function showCourseDetail(c, st, latest) {
         ['교양영역', esc(c.area) || '-'],
         ['정원', c.capacity > 0 ? esc(c.capacity) + '명' : '제한 없음'],
         ['원격강좌', c.remote ? '예' : '아니오'],
+        ['성적 방식', c.gradeType === 'pf' ? 'P/F (합격·불합격, 평점 제외)' : '등급 (A+~F)'],
     ];
     const stat = (label, v, sub) => `<div><span>${label}</span><b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
     const actions = [
@@ -2196,28 +2205,40 @@ const gradeFields = (editing) => [
     { name: 'mode', label: '입력 방식', options: [{ value: 'score', label: '점수' }, { value: 'letter', label: '등급' }] },
     { name: 'score', label: '점수 (0~100, 등급은 자동: 95↑ A+ · 90↑ A0 · 85↑ B+ · … · 60↑ D0 · 그 아래 F)', type: 'number', step: 'any', min: 0, max: 100 },
     { name: 'letter', label: '등급 (대표 점수로 저장: A+ 95 · A0 90 · B+ 85 · … · D0 60 · F 0)', options: asOptions(GRADE_LETTERS) },
+    { name: 'pf', label: '합격 여부 (P/F 과목, 평점에 들어가지 않음)', options: [
+        { value: 'P', label: 'P (합격)' }, { value: 'NP', label: 'NP (불합격)' },
+    ] },
 ];
 // 입력 방식에 따라 점수 칸 / 등급 선택 상자 중 하나만 보임. 숨긴 칸은 disabled 라 폼 값(FormData)에서 빠짐
+//   고른 과목이 P/F 과목이면 입력 방식·점수·등급 칸을 숨기고 합격 여부(P/NP)만 보임
 function bindGradeMode() {
     const body = $('dlg-body');
     const mode = body.querySelector('select[name=mode]');
     const score = body.querySelector('input[name=score]');
     const letter = body.querySelector('select[name=letter]');
+    const pf = body.querySelector('select[name=pf]');
+    // 수정 폼은 과목 선택 상자가 disabled 라 같은 이름의 숨은 칸에 값이 있음
+    const course = body.querySelector('input[type=hidden][name=courseCode]') ?? body.querySelector('select[name=courseCode]');
+    const show = (el, on) => { el.disabled = !on; el.closest('.field').hidden = !on; };
     const sync = () => {
+        const passFail = isPassFailCourse(course.value);
         const byLetter = mode.value === 'letter';
-        score.disabled = byLetter;
-        score.closest('.field').hidden = byLetter;
-        letter.disabled = !byLetter;
-        letter.closest('.field').hidden = !byLetter;
+        show(mode, !passFail);
+        show(score, !passFail && !byLetter);
+        show(letter, !passFail && byLetter);
+        show(pf, passFail);
     };
-    // 방식을 바꾸면 이전 방식의 검사 오류 문구는 지움
-    mode.onchange = () => { sync(); body.querySelector('.form-error').textContent = ''; };
+    // 방식·과목을 바꾸면 이전 검사 오류 문구는 지움
+    const changed = () => { sync(); body.querySelector('.form-error').textContent = ''; };
+    mode.onchange = changed;
+    if (course.tagName === 'SELECT') course.addEventListener('change', changed);
     sync();
 }
 // 성적 폼 값 검사 (서버와 같은 문구): 잘못되면 이유, 괜찮으면 빈 문자열
 const validateGrade = (d) => {
     if (!SEMESTER_RE.test((d.semester ?? '').trim())) return SEMESTER_RULES;
     if (isLockedSemester(d.semester.trim())) return pastSemesterMessage();
+    if (d.pf !== undefined) return PF_LETTERS.includes(d.pf) ? '' : 'P/F 과목은 P(합격) 또는 NP(불합격)로 입력하세요';
     if (d.mode === 'letter') {
         return GRADE_LETTERS.includes(d.letter) ? '' : '지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)';
     }
@@ -2225,16 +2246,21 @@ const validateGrade = (d) => {
     if ((d.score ?? '').trim() === '' || !Number.isFinite(score) || score < 0 || score > 100) return SCORE_RULES;
     return '';
 };
-// 폼 값 → API 본문: 점수 방식이면 {score}, 등급 방식이면 {letter}
+// 폼 값 → API 본문: 점수 방식이면 {score}, 등급 방식이면 {letter}, P/F 과목이면 {letter: 'P' | 'NP'}
 const gradeBody = (d) => {
     const key = { studentId: d.studentId, courseCode: d.courseCode, semester: d.semester.trim() };
+    if (d.pf !== undefined) return { ...key, letter: d.pf };
     return d.mode === 'letter' ? { ...key, letter: d.letter } : { ...key, score: Number(d.score) };
 };
 // 저장 결과 문구 (서버가 돌려준 성적 g 기준): 점수 방식 "NN점 → 등급", 등급 방식 "등급 A+ (95점)"
 //   재수강 A0 제한 등으로 반영 등급이 입력 등급과 다르면 "→ 반영 등급" 을 붙임
-const gradeResultText = (d, g) => (d.mode === 'letter'
-    ? `등급 ${d.letter} (${round2(g.score)}점)${g.letter !== d.letter ? ` → ${g.letter}` : ''}`
-    : `${round2(g.score)}점 → ${g.letter}`);
+//   P/F 과목은 "P (합격)" / "NP (불합격)"
+const gradeResultText = (d, g) => {
+    if (d.pf !== undefined) return g.letter === 'P' ? 'P (합격)' : `${g.letter} (불합격)`;
+    return d.mode === 'letter'
+        ? `등급 ${d.letter} (${round2(g.score)}점)${g.letter !== d.letter ? ` → ${g.letter}` : ''}`
+        : `${round2(g.score)}점 → ${g.letter}`;
+};
 
 // 서버 kNotEnrolled 와 같은 문구 (성적 등록에서 수강신청이 없을 때 돌려줌)
 const NOT_ENROLLED_MSG = '수강신청하지 않은 학생입니다 (학번·과목·학기를 확인하세요)';
@@ -2421,7 +2447,8 @@ $('grade-body').onclick = async (e) => {
         openForm({
             title: '성적 수정',
             fields: gradeFields(true),
-            values: { ...g, mode: 'score', letter: GRADE_LETTERS.includes(g.letter) ? g.letter : scoreToLetter(g.score) },
+            values: { ...g, mode: 'score', letter: GRADE_LETTERS.includes(g.letter) ? g.letter : scoreToLetter(g.score),
+                pf: PF_LETTERS.includes(g.letter) ? g.letter : 'P' },
             validate: validateGrade,
             onSubmit: async (d) => {
                 const saved = await api('PUT', '/api/grades', gradeBody(d));

@@ -119,3 +119,14 @@ TEST_CASE(accountError_each_wrong_field_has_its_own_message) {
     CHECK_EQ(accountError("x", false, "professor", "", "", "", false),
              std::string("교수·관리자 계정은 이름이 필요합니다"));
 }
+
+TEST_CASE(readCourse_gradeType) {
+    Course c;
+    CHECK_EQ(readCourse(with(courseBody(), "gradeType", "pf"), "", c), std::string(""));
+    CHECK(c.isPassFail());
+    CHECK_EQ(readCourse(courseBody(), "", c), std::string(""));
+    CHECK_EQ(c.gradeType, std::string(kGradeTypeLetter));  // 없으면 기본 letter
+    CHECK_EQ(courseReason(with(courseBody(), "gradeType", "pass")),
+             std::string("성적 방식은 letter(등급) 또는 pf(P/F) 여야 합니다"));
+    CHECK_EQ(courseReason(with(courseBody(), "gradeType", 1)), std::string("성적 방식은 문자열이어야 합니다"));
+}

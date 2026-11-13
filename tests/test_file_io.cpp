@@ -395,3 +395,63 @@ TEST_CASE(fileIO_grading_modes_roundtrip_and_skip_broken_lines) {
     CHECK(missing.loadGradingModes(modes));
     CHECK(modes.empty());
 }
+
+// ----- Pass/Fail 과목: courses.csv 성적 방식 칸, grades.csv 의 P·NP -----
+
+TEST_CASE(fileIO_courses_gradeType_roundtrip_and_legacy_10_columns) {
+    TempDir dir;
+    Course pf = makeCourse("100901", "사회봉사", 1);
+    pf.gradeType = kGradeTypePassFail;
+    const Course letter = makeCourse("109001", "프로그래밍기초", 3);
+    {
+        FileIO io(dir.str());
+        CHECK(io.saveCourses({pf, letter}));
+    }
+    CHECK(readFile(dir.path() / "courses.csv")
+              .rfind("code,name,credit,professor,category,area,schedule,language,capacity,remote,gradeType\n", 0) == 0);
+
+    FileIO io(dir.str());
+    std::vector<Course> loaded;
+    CHECK(io.loadCourses(loaded));
+    CHECK(loaded.size() == 2 && loaded[0].gradeType == kGradeTypePassFail && loaded[0].isPassFail() &&
+          loaded[1].gradeType == kGradeTypeLetter);
+
+    // 예전 10칸 파일: 과목이 사라지지 않고 성적 방식은 letter
+    {
+        std::ofstream out(dir.path() / "courses.csv", std::ios::binary);
+        out << "code,name,credit,professor,category,area,schedule,language,capacity,remote\n"
+            << "109001,프로그래밍기초,3,김철수,전공필수,,월(1~2),한국어전용,40,N\n"
+            << "100201,글쓰기,2,이영희,교양필수,인문,,한국어전용,0,Y\n";
+    }
+    CHECK(io.loadCourses(loaded));
+    CHECK_EQ(loaded.size(), static_cast<size_t>(2));
+    CHECK(loaded.size() == 2 && loaded[0].code == "109001" && loaded[0].capacity == 40 &&
+          loaded[0].gradeType == kGradeTypeLetter && loaded[1].remote && loaded[1].gradeType == kGradeTypeLetter);
+
+    // 모르는 성적 방식 줄은 건너뜀
+    {
+        std::ofstream out(dir.path() / "courses.csv", std::ios::binary);
+        out << "code,name,credit,professor,category,area,schedule,language,capacity,remote,gradeType\n"
+            << "100901,사회봉사,1,,교양선택,,,한국어전용,0,N,pf\n"
+            << "100902,봉사2,1,,교양선택,,,한국어전용,0,N,PF\n";
+    }
+    CHECK(io.loadCourses(loaded));
+    CHECK(loaded.size() == 1 && loaded[0].isPassFail());
+}
+
+TEST_CASE(fileIO_grades_keep_pass_fail_letters) {
+    TempDir dir;
+    Grade pass = makeGrade("24000001", "100901", "2026-1", kPassScore);
+    pass.assignedLetter = kLetterPass;
+    Grade nonPass = makeGrade("24000002", "100901", "2026-1", kNonPassScore);
+    nonPass.assignedLetter = kLetterNonPass;
+    {
+        FileIO io(dir.str());
+        CHECK(io.saveGrades({pass, nonPass}));
+    }
+    FileIO io(dir.str());
+    std::vector<Grade> loaded;
+    CHECK(io.loadGrades(loaded));
+    CHECK(loaded.size() == 2 && loaded[0].assignedLetter == "P" && loaded[0].score == 100 &&
+          loaded[1].assignedLetter == "NP" && loaded[1].score == 0);
+}
