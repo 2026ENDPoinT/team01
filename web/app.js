@@ -10,8 +10,9 @@ const $ = (id) => document.getElementById(id);
 // myEnrollments: 학생 자기 수강신청 목록 (loadBase 가 채움, 다른 역할은 빈 목록) → 학생이 볼 수 있는 과목을 정함
 // courseCode·courseSem·postFilter: 과목 페이지에서 지금 보는 과목 · 학기 · 분류 칩 ('all' = 전체)
 // coursePosts: 지금 과목 페이지의 게시물 (서버가 권한에 맞게 걸러 줌, 학기·분류는 화면에서 거름)
-// assessSem: 과목 페이지 '평가 항목' 영역에서 고른 학기
-// assess: 그 영역에 지금 그려 둔 {code, sem, items} (점수 칸·버튼이 어느 항목인지 찾을 때 사용, 안 그렸으면 null)
+// assessSem: 과목 페이지 '평가 기준' 영역에서 고른 학기
+// assess: 그 영역에 지금 그려 둔 {code, sem, mode, items, cols} (items = 6분류 전부, cols = 점수표 열 = 비율이 0보다 큰 분류.
+//   점수 칸·버튼이 어느 분류인지 찾을 때 사용, 안 그렸으면 null)
 // attendSem: 과목 페이지 '출결' 영역에서 고른 학기
 // attend: 그 영역에 지금 그려 둔 {code, sem, records, summaries, seq} (출결 칸이 사용, 안 그렸거나 불러오기 실패면 null)
 const state = {
@@ -83,14 +84,25 @@ const SCORE_RULES = '점수는 0~100 사이 숫자여야 합니다';
 // 중복을 지운 학기 목록 (최신 학기가 위로, 빈 값 제외)
 const sortSemesters = (list) => [...new Set(list.filter(Boolean))].sort().reverse();
 
-// 평가 항목·항목 점수 API 의 과목·학기 쿼리
+// 평가 기준·항목 점수 API 의 과목·학기 쿼리
 const assessQuery = (code, sem) => new URLSearchParams({ courseCode: code, semester: sem }).toString();
-// (과목, 학기) 평가 항목 목록. cache(Map) 에 요청을 담아 같은 조합은 한 번만 부름 (실패하면 빈 목록)
+// (과목, 학기) 평가 기준 {mode, items}. cache(Map) 에 요청을 담아 같은 조합은 한 번만 부름 (실패하면 {mode:'absolute', items:[]})
 function assessmentsOf(code, sem, cache) {
     const k = JSON.stringify([code, sem]);
-    if (!cache.has(k)) cache.set(k, api('GET', '/api/assessments?' + assessQuery(code, sem)).catch(() => []));
+    if (!cache.has(k)) {
+        cache.set(k, api('GET', '/api/assessments?' + assessQuery(code, sem)).catch(() => ({ mode: 'absolute', items: [] })));
+    }
     return cache.get(k);
 }
+// 평가 분류 6개 (서버 assessmentCategories() 와 같은 순서·글자)
+const ASSESS_CATEGORIES = ['출석', '중간고사', '기말고사', '과제', '팀프로젝트', '기타'];
+// 출석부에서 자동 계산되는 분류 (서버 kAttendanceCategory). 점수표에서 늘 읽기 전용
+const ATTEND_ITEM = '출석';
+const ATTEND_LOCK_MSG = '출석 점수는 출석부에서 자동 계산됩니다 (아래 출결 영역에서 고치세요)';
+// 상대평가 규칙 안내 (서버 RelativeGrading 상수와 같은 값)
+const RELATIVE_RULES = 'A0 이상 30%·B0 이상 70% 이하, 평균 3.50 이하';
+// 등급 → 평점 (서버 letterToPoint 와 같음, F·R·모르는 값은 0)
+const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.0, 'D+': 1.5, D0: 1.0 };
 
 // ───────── 역할 ─────────
 
@@ -217,7 +229,7 @@ const renderers = {
 const currentTab = () => document.querySelector('main .tab.active').id.slice('tab-'.length);
 
 // 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
-//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 항목·출결 학기 선택을 처음으로 되돌림
+//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌림
 function showTab(name, code) {
     if (code && code !== state.courseCode) {
         state.courseCode = code;
@@ -546,7 +558,7 @@ const postCategory = (v) => POST_CATEGORIES.find((k) => k.value === v) ?? { valu
 const postsUrl = (code) => '/api/courses/' + encodeURIComponent(code) + '/posts';
 // 지금 과목 페이지의 과목 (없으면 undefined)
 const pageCourse = () => state.courses.find((c) => c.code === state.courseCode);
-// 게시물·평가 항목을 추가·수정·삭제할 수 있는지: 관리자 또는 담당 교수
+// 게시물·평가 기준을 추가·수정·삭제할 수 있는지: 관리자 또는 담당 교수
 const canManageCourse = (c) => isAdmin() || teaches(c);
 // 마감·시험일이 지났는지 (날짜만 있으면 그날 23:59 기준, 시각은 브라우저 지역 시간)
 function isExpired(due) {
@@ -558,8 +570,8 @@ function isExpired(due) {
 // 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
 //   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
 //   처음 보이는 학기: 이전 선택 → 게시물이 있는 가장 최근 학기 → (관리자·교수) 신청 학기 → 가장 최근 학기
-//   관리자·담당 교수는 아래 '평가 항목'·'출결' 영역도 그림 (같은 학기 목록, 평가 항목 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기,
-//   출결 처음 학기: 이전 선택 → 평가 항목 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
+//   관리자·담당 교수는 아래 '평가 기준'·'출결' 영역도 그림 (같은 학기 목록, 평가 기준 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기,
+//   출결 처음 학기: 이전 선택 → 평가 기준 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
 async function renderCoursePage() {
     const code = state.courseCode;
     const c = pageCourse();
@@ -735,41 +747,57 @@ $('course-posts').onclick = (e) => {
     }
 };
 
-// ───────── 평가 항목 (과목 페이지, 관리자·담당 교수) ─────────
+// ───────── 평가 기준 (과목 페이지, 관리자·담당 교수) ─────────
 
-// 평가 항목 폼 검사 (서버 Assessment::isValid 와 같은 규칙, 서버 kAssessmentRules 와 같은 문구)
-//   이름: 앞뒤 공백을 지우고 비어 있지 않고 60바이트 이하, 비율: 1~100 정수
-const ASSESS_RULES = '평가 항목이 올바르지 않습니다 (이름 필수, 비율 1~100 정수)';
-const validateAssessment = (d) => {
-    const name = (d.name ?? '').trim();
-    if (!name || new TextEncoder().encode(name).length > 60) return ASSESS_RULES;
-    const weight = Number(d.weight);
-    if ((d.weight ?? '').trim() === '' || !Number.isInteger(weight) || weight < 1 || weight > 100) return ASSESS_RULES;
-    return '';
-};
-const assessFields = () => [
-    { name: 'name', label: '이름 (예: 중간고사, 출석)', placeholder: '예: 중간고사' },
-    { name: 'weight', label: '반영 비율 (%, 1~100 정수)', type: 'number', min: 1, max: 100, step: 1 },
+// 등급 산출 방식 선택 항목 (서버 kGradingAbsolute·kGradingRelative)
+const GRADING_MODES = [
+    { value: 'absolute', label: '절대평가 (점수 기준)' },
+    { value: 'relative', label: `상대평가 (${RELATIVE_RULES})` },
 ];
+// 평가 기준 폼 검사 (서버 PUT /api/assessments 와 같은 규칙·문구)
+//   분류별 비율: 0~100 정수 (빈칸도 오류), 방식: absolute·relative, 그다음 합계 100
+const SCHEME_RULES = '평가 기준이 올바르지 않습니다 (분류별 비율 0~100 정수, 합계 100, 방식 absolute·relative)';
+const validateScheme = (d) => {
+    const weights = ASSESS_CATEGORIES.map((c) => String(d[c] ?? '').trim());
+    if (weights.some((w) => !/^\d+$/.test(w) || Number(w) > 100)) return SCHEME_RULES;
+    if (!GRADING_MODES.some((m) => m.value === d.mode)) return SCHEME_RULES;
+    const total = weights.reduce((t, w) => t + Number(w), 0);
+    return total === 100 ? '' : `비율 합계가 100이어야 합니다 (지금 ${total}%)`;
+};
 // 항목 점수표 마지막 열: 서버가 계산한 최종 점수와 등급 (성적이 없으면 = 미완성 '-')
 const finalCell = (g) => (g ? `<b>${esc(round2(g.score))}</b> ${letterBadge(g.letter)}` : '-');
 
-// '평가 항목' 영역 그리기 (고른 학기 state.assessSem)
-//   항목 표(이름·비율·수정/삭제) + 비율 합계, 항목이 있으면 수강생별 항목 점수 입력표 (행 = 수강생, 열 = 항목, 마지막 = 최종)
-//   출결 기록이 있는 과목·학기면 '출석' 열은 읽기 전용 (lockAttendColumn)
+// 상대평가 요약 줄: n = 이 과목·학기 성적 수, A0 이상·B0 이상 인원과 평균 평점은 서버가 준 등급으로 셈
+//   상한은 서버 규칙처럼 내림 (⌊n×0.3⌋, ⌊n×0.7⌋), 성적이 없으면 평균 '-'
+function relativeSummary(grades) {
+    const n = grades.length;
+    const count = (letters) => grades.filter((g) => letters.includes(g.letter)).length;
+    const point = (l) => (Object.hasOwn(LETTER_POINT, l) ? LETTER_POINT[l] : 0);
+    const avg = n ? grades.reduce((t, g) => t + point(g.letter), 0) / n : null;
+    const cap = (r) => Math.floor(n * r + 1e-9);
+    return `상대평가 · A0 이상 ${count(['A+', 'A0'])}명 / 상한 ${cap(0.3)} · B0 이상 ${count(['A+', 'A0', 'B+', 'B0'])}명 / 상한 ${cap(0.7)}` +
+        ` · 평균 평점 ${fmt(avg)} / 3.50 <span class="hint">(최종 성적 ${n}명 기준, 성적이 더 생기면 등급이 다시 정해집니다)</span>`;
+}
+
+// '평가 기준' 영역 그리기 (고른 학기 state.assessSem)
+//   평가 기준이 없으면 안내 문구만 (설정 버튼만, 삭제 버튼 숨김)
+//   있으면 6분류 표(분류·비율, 0% 줄은 흐리게) + 비율 합계·등급 방식 배지,
+//   수강생별 항목 점수 입력표 (행 = 수강생, 열 = 비율이 0보다 큰 분류, 마지막 = 최종), 상대평가면 요약 줄
+//   '출석' 열은 늘 읽기 전용 (lockAttendColumn)
 async function renderAssess() {
     const code = state.courseCode;
     const sem = state.assessSem ?? '';
     const box = $('assess-body');
-    // 다 받기 전에는 추가 버튼·점수 칸이 이전 학기를 가리키지 않게 비워 둠
+    // 다 받기 전에는 설정·삭제 버튼과 점수 칸이 이전 학기를 가리키지 않게 비워 둠
     state.assess = null;
     $('assess-add').disabled = !sem;
+    $('assess-del').hidden = true;
     if (!sem) {
         box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
         return;
     }
     const q = assessQuery(code, sem);
-    const [items, enrolls, scores, grades] = await Promise.all([
+    const [{ mode, items }, enrolls, scores, grades] = await Promise.all([
         api('GET', '/api/assessments?' + q),
         api('GET', '/api/enrollments?' + q),
         api('GET', '/api/assessment-scores?' + q),
@@ -777,109 +805,108 @@ async function renderAssess() {
     ]);
     // 기다리는 사이 과목·학기·탭이 바뀌었으면 그리지 않음
     if (currentTab() !== 'course' || state.courseCode !== code || state.assessSem !== sem) return;
-    state.assess = { code, sem, items };
+    const cols = items.filter((a) => a.weight > 0);
+    state.assess = { code, sem, mode, items, cols, finalSeq: 0 };
+    if (!items.length) {
+        box.innerHTML = '<p class="hint">평가 기준이 없습니다. 설정하면 이 과목·학기 성적은 항목 점수로 자동 계산됩니다</p>';
+        return;
+    }
+    $('assess-del').hidden = false;
 
+    const relative = mode === 'relative';
     const total = items.reduce((t, a) => t + a.weight, 0);
-    const itemRows = items.length ? items.map((a, i) => `
-        <tr>
-            <td><b>${esc(a.name)}</b></td>
-            <td class="num">${esc(a.weight)}</td>
-            <td class="actions">
-                <button type="button" class="link" data-act="edit" data-i="${i}">수정</button>
-                <button type="button" class="link danger" data-act="del" data-i="${i}">삭제</button>
-            </td>
-        </tr>`).join('') : emptyRow(3, '평가 항목이 없습니다. 항목을 추가하면 이 과목·학기 성적은 항목 점수로 자동 계산됩니다');
-    const sumRow = items.length ? `<tfoot><tr><td colspan="3" class="weight-sum${total === 100 ? '' : ' warn'}">
-        비율 합계 <b>${total} / 100</b>${total === 100 ? '' : ' · 합계가 100이어야 최종 성적이 계산됩니다'}</td></tr></tfoot>` : '';
-    let html = `
-        <div class="table-wrap">
-            <table><thead><tr><th>이름</th><th class="num">비율(%)</th><th></th></tr></thead>
-            <tbody>${itemRows}</tbody>${sumRow}</table>
-        </div>`;
+    const modeBadge = `<span class="tag mode">${relative ? '상대평가' : '절대평가 (점수 기준)'}</span>`;
+    const schemeRows = items.map((a) => `
+        <tr${a.weight > 0 ? '' : ' class="zero"'}><td><b>${esc(a.name)}</b></td><td class="num">${esc(a.weight)}</td></tr>`).join('');
 
-    if (items.length) {
-        const scoreOf = new Map(scores.map((s) => [JSON.stringify([s.studentId, s.name]), s.score]));
-        const gradeOf = new Map(grades.map((g) => [g.studentId, g]));
-        const rows = [...enrolls].sort((a, b) => a.studentId.localeCompare(b.studentId)).map((e) => {
-            const cells = items.map((a, i) => {
-                const v = esc(scoreOf.get(JSON.stringify([e.studentId, a.name])) ?? '');
-                return `<td class="num"><input class="score-cell" type="number" step="any" min="0" max="100" data-i="${i}"
-                    value="${v}" data-prev="${v}" aria-label="${esc(studentName(e.studentId))} ${esc(a.name)}"></td>`;
-            }).join('');
-            return `
-            <tr data-sid="${esc(e.studentId)}">
-                <td>${esc(e.studentId)}</td>
-                <td><b>${esc(studentName(e.studentId))}</b></td>
-                ${cells}
-                <td class="num final">${finalCell(gradeOf.get(e.studentId))}</td>
-            </tr>`;
+    const scoreOf = new Map(scores.map((s) => [JSON.stringify([s.studentId, s.name]), s.score]));
+    const gradeOf = new Map(grades.map((g) => [g.studentId, g]));
+    const rows = [...enrolls].sort((a, b) => a.studentId.localeCompare(b.studentId)).map((e) => {
+        const cells = cols.map((a, i) => {
+            const v = esc(scoreOf.get(JSON.stringify([e.studentId, a.name])) ?? '');
+            return `<td class="num"><input class="score-cell" type="number" step="any" min="0" max="100" data-i="${i}"
+                value="${v}" data-prev="${v}" aria-label="${esc(studentName(e.studentId))} ${esc(a.name)}"></td>`;
         }).join('');
-        html += `
-        <h4 class="assess-head">항목 점수 <span class="hint">칸을 고치면 바로 저장 · 빈칸으로 지우면 점수 삭제 · 모든 항목에 점수가 있고 합계가 100이면 최종 성적 자동 계산</span></h4>
+        return `
+        <tr data-sid="${esc(e.studentId)}">
+            <td>${esc(e.studentId)}</td>
+            <td><b>${esc(studentName(e.studentId))}</b></td>
+            ${cells}
+            <td class="num final">${finalCell(gradeOf.get(e.studentId))}</td>
+        </tr>`;
+    }).join('');
+    box.innerHTML = `
+        <div class="table-wrap">
+            <table class="scheme-table"><thead><tr><th>분류</th><th class="num">비율(%)</th></tr></thead>
+            <tbody>${schemeRows}</tbody>
+            <tfoot><tr><td colspan="2" class="weight-sum${total === 100 ? '' : ' warn'}">
+                비율 합계 <b>${total} / 100</b> <span class="mode-label">등급 방식 ${modeBadge}</span></td></tr></tfoot></table>
+        </div>
+        <h4 class="assess-head">항목 점수 <span class="hint">칸을 고치면 바로 저장 · 빈칸으로 지우면 점수 삭제 · 출석은 출석부에서 자동 계산 · 비율이 0보다 큰 분류에 모두 점수가 있으면 최종 성적 자동 계산</span></h4>
         <div class="table-wrap">
             <table><thead><tr><th>학번</th><th>이름</th>
-                ${items.map((a) => `<th class="num">${esc(a.name)} <span class="hint">${esc(a.weight)}%</span></th>`).join('')}
+                ${cols.map((a) => `<th class="num">${esc(a.name)} <span class="hint">${esc(a.weight)}%</span></th>`).join('')}
                 <th class="num">최종 (점수·등급)</th></tr></thead>
-            <tbody>${rows || emptyRow(items.length + 3, '이 학기 수강생이 없습니다')}</tbody></table>
-        </div>`;
-    }
-    box.innerHTML = html;
-    await lockAttendColumn();
+            <tbody>${rows || emptyRow(cols.length + 3, '이 학기 수강생이 없습니다')}</tbody></table>
+        </div>
+        ${relative ? `<p class="relative-line">${relativeSummary(grades)}</p>` : ''}`;
+    lockAttendColumn();
 }
 
-// 평가 항목 추가(item 없음) / 수정 폼. ctx = 지금 영역의 {code, sem}
-function openAssessForm(ctx, item) {
+// 평가 기준 설정 폼 (ctx = 지금 영역의 {code, sem, mode, items}). 6분류 비율 칸(지금 값, 없으면 0) + 등급 방식
+//   저장은 PUT /api/assessments 한 번 (6분류 비율을 모두 보냄)
+function openSchemeForm(ctx) {
+    const weightOf = new Map(ctx.items.map((a) => [a.name, a.weight]));
     openForm({
-        title: `${item ? '평가 항목 수정' : '평가 항목 추가'} · ${courseName(ctx.code)} ${ctx.sem}`,
-        fields: assessFields(),
-        values: item ?? {},
-        validate: validateAssessment,
+        title: `평가 기준 설정 · ${courseName(ctx.code)} ${ctx.sem}`,
+        fields: [
+            ...ASSESS_CATEGORIES.map((c) => ({ name: c, label: `${c} 비율 (%, 0~100 정수)`, type: 'number', min: 0, max: 100, step: 1 })),
+            { name: 'mode', label: '등급 방식', options: GRADING_MODES },
+        ],
+        values: { ...Object.fromEntries(ASSESS_CATEGORIES.map((c) => [c, weightOf.get(c) ?? 0])), mode: ctx.mode },
+        validate: validateScheme,
         onSubmit: async (d) => {
-            const name = d.name.trim();
-            const weight = Number(d.weight);
-            if (item) {
-                await api('PUT', '/api/assessments', { courseCode: ctx.code, semester: ctx.sem, name: item.name, newName: name, weight });
-                toast('수정했습니다');
-            } else {
-                await api('POST', '/api/assessments', { courseCode: ctx.code, semester: ctx.sem, name, weight });
-                toast(`평가 항목을 추가했습니다: ${name} ${weight}%`);
-            }
+            const weights = Object.fromEntries(ASSESS_CATEGORIES.map((c) => [c, Number(d[c])]));
+            await api('PUT', '/api/assessments', { courseCode: ctx.code, semester: ctx.sem, mode: d.mode, weights });
+            toast('평가 기준을 저장했습니다');
             await refreshAll();
         },
     });
 }
 
-// 저장한 학생의 최종 열만 다시 그림 (표 전체를 다시 그리지 않아 다음 칸 입력이 끊기지 않음). 받은 성적(없으면 undefined)을 돌려줌
-async function refreshFinal(ctx, sid) {
-    const [g] = await api('GET', '/api/grades?' + new URLSearchParams({ studentId: sid, courseCode: ctx.code, semester: ctx.sem }));
-    if (state.assess !== ctx) return g;
-    const row = [...$('assess-body').querySelectorAll('tr[data-sid]')].find((r) => r.dataset.sid === sid);
-    if (row) row.querySelector('.final').innerHTML = finalCell(g);
-    return g;
+// 이 과목·학기 성적을 다시 받아 점수표의 최종 열 전부와 상대평가 요약 줄을 다시 그림 (표 전체를 다시 그리지 않아 다음 칸 입력이 끊기지 않음)
+//   상대평가면 한 학생 점수가 바뀌어도 다른 학생 등급이 바뀌므로 모든 행을 다시 그림
+//   받은 성적 목록을 돌려줌. 연달아 부르면 마지막으로 보낸 요청의 응답만 그림 (ctx.finalSeq)
+async function refreshFinals(ctx) {
+    const seq = ++ctx.finalSeq;
+    const grades = await api('GET', '/api/grades?' + assessQuery(ctx.code, ctx.sem));
+    if (state.assess !== ctx || ctx.finalSeq !== seq) return grades;
+    const gradeOf = new Map(grades.map((g) => [g.studentId, g]));
+    $('assess-body').querySelectorAll('tr[data-sid]').forEach((r) => {
+        r.querySelector('.final').innerHTML = finalCell(gradeOf.get(r.dataset.sid));
+    });
+    const line = $('assess-body').querySelector('.relative-line');
+    if (line) line.innerHTML = relativeSummary(grades);
+    return grades;
 }
 
-$('assess-add').onclick = () => { if (state.assess) openAssessForm(state.assess, null); };
+$('assess-add').onclick = () => { if (state.assess) openSchemeForm(state.assess); };
+$('assess-del').onclick = () => {
+    const ctx = state.assess;
+    if (!ctx?.items.length) return;
+    confirmDelete('평가 기준을 지우면 이 과목·학기의 항목 점수와 최종 성적이 모두 지워집니다',
+        () => api('DELETE', '/api/assessments?' + assessQuery(ctx.code, ctx.sem)));
+};
 $('assess-sem').onchange = () => {
     state.assessSem = $('assess-sem').value;
     renderAssess().catch((e) => toast(e.message, true));
-};
-// 항목 표의 수정·삭제 버튼
-$('assess-body').onclick = (e) => {
-    const b = e.target.closest('button[data-act]');
-    const ctx = state.assess;
-    const item = b && ctx?.items[Number(b.dataset.i)];
-    if (!item) return;
-    if (b.dataset.act === 'edit') openAssessForm(ctx, item);
-    if (b.dataset.act === 'del') confirmDelete(
-        `"${item.name}" 평가 항목을 삭제할까요?\n그 항목의 점수도 지워지고 최종 성적이 다시 계산됩니다.`,
-        () => api('DELETE', '/api/assessments?' + new URLSearchParams({ courseCode: ctx.code, semester: ctx.sem, name: item.name })));
 };
 // 점수 칸을 바꾸면(Enter·칸 이동) 저장: 숫자면 PUT, 빈칸이면 DELETE. 실패하면 이전 값으로 되돌리고 토스트
 $('assess-body').addEventListener('change', async (e) => {
     const input = e.target.closest('input.score-cell');
     const ctx = state.assess;
     if (!input || !ctx) return;
-    const item = ctx.items[Number(input.dataset.i)];
+    const item = ctx.cols[Number(input.dataset.i)];
     const sid = input.closest('tr').dataset.sid;
     const prev = input.dataset.prev;
     const raw = input.value.trim();
@@ -903,7 +930,7 @@ $('assess-body').addEventListener('change', async (e) => {
         return;
     }
     try {
-        const g = await refreshFinal(ctx, sid);
+        const g = (await refreshFinals(ctx)).find((x) => x.studentId === sid);
         toast(`${studentName(sid)} ${item.name} ${raw === '' ? '삭제' : '저장'} · ` + (g ? `최종 ${round2(g.score)}점 → ${g.letter}` : '최종 성적 미완성'));
     } catch (err) { toast(err.message, true); }
 });
@@ -917,9 +944,6 @@ const nextAttendStatus = (s) => ATTEND_STATUSES[ATTEND_STATUSES.indexOf(s) + 1] 
 const ATTEND_CLASS = { 출석: 'present', 지각: 'late', 결석: 'absent', 공결: 'excused' };
 // 수업 주차 수 (서버 출결 주차 1~16, 게시물 주차와 같음)
 const ATTEND_WEEKS = 16;
-// 출결 기록에서 점수가 자동 계산되는 평가 항목 이름 (서버 규칙과 같음)
-const ATTEND_ITEM = '출석';
-const ATTEND_LOCK_MSG = '출석 점수는 출결 기록에서 자동 계산됩니다 (아래 출결 영역에서 고치세요)';
 // 출결 칸 하나를 구분하는 키 (학번, 주차)
 const attendKey = (sid, week) => sid + '|' + week;
 
@@ -978,7 +1002,6 @@ async function renderAttend() {
             paintAttendSummary(ctx, tr);
         });
         state.attend = ctx;
-        if (state.assess?.code === code && state.assess.sem === sem) await lockAttendColumn();
     } catch (err) {
         if (!stale()) box.innerHTML = `<p class="attend-error">출결을 불러오지 못했습니다: ${esc(err.message)}</p>`;
     }
@@ -1002,28 +1025,18 @@ function paintAttendSummary(ctx, tr) {
     tr.querySelector('.att-score').innerHTML = fmt(has ? s.score : null) + (has && s.shortage ? ' <span class="badge F">출석 미달</span>' : '');
 }
 
-// 평가 항목 점수표의 '출석' 열: 그 과목·학기에 출결 기록이 있으면 읽기 전용 (서버도 직접 수정을 409 로 막음)
-//   출결 영역이 같은 과목·학기면 그 기록으로, 아니면 서버에서 받아 판단 (못 받으면 고칠 수 있게 둠). 던지지 않음
-async function lockAttendColumn() {
-    const a = state.assess;
-    const i = a ? a.items.findIndex((x) => x.name === ATTEND_ITEM) : -1;
+// 평가 기준 점수표의 '출석' 열은 늘 읽기 전용 (출석부에서 자동 계산, 서버도 직접 입력을 409 로 막음)
+function lockAttendColumn() {
+    const i = state.assess ? state.assess.cols.findIndex((x) => x.name === ATTEND_ITEM) : -1;
     if (i < 0) return;
-    const at = state.attend;
-    let has = false;
-    if (at && at.code === a.code && at.sem === a.sem) {
-        has = at.records.size > 0;
-    } else {
-        try { has = (await attendanceOf(assessQuery(a.code, a.sem))).records.length > 0; } catch { has = false; }
-        if (state.assess !== a) return;
-    }
     $('assess-body').querySelectorAll(`input.score-cell[data-i="${i}"]`).forEach((input) => {
-        input.disabled = has;
-        input.title = has ? ATTEND_LOCK_MSG : '';
+        input.disabled = true;
+        input.title = ATTEND_LOCK_MSG;
     });
 }
 
 // 칸을 누르면 다음 상태로 바꾸고 바로 저장 (상태는 PUT, 없음은 DELETE). 저장 중인 칸은 다시 눌러도 무시
-//   실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 항목 점수표를 다시 그림
+//   실패하면 이전 상태로 되돌리고 오류 토스트, 성공하면 그 학생의 행 끝 값과 평가 기준 점수표를 다시 그림
 async function toggleAttend(btn) {
     const ctx = state.attend;
     if (!ctx || btn.dataset.busy) return;
@@ -1051,11 +1064,10 @@ async function toggleAttend(btn) {
     }
     delete btn.dataset.busy;
     if (state.attend !== ctx) return;
-    await lockAttendColumn();
     if (saved) await refreshAttendRow(ctx, tr, sid, `${week}주 ${next || '기록 삭제'}`);
 }
 
-// 저장한 학생의 행 끝 값을 서버 요약으로 다시 그리고, 같은 과목·학기 평가 항목 점수표의 그 학생 '출석' 칸·최종 열도 다시 그림
+// 저장한 학생의 행 끝 값을 서버 요약으로 다시 그리고, 같은 과목·학기 평가 기준 점수표의 그 학생 '출석' 칸·최종 열도 다시 그림
 //   같은 학생을 연달아 바꾸면 마지막 저장 뒤에 보낸 요청의 응답만 그림 (seq)
 async function refreshAttendRow(ctx, tr, sid, what) {
     const seq = (ctx.seq.get(sid) ?? 0) + 1;
@@ -1075,11 +1087,11 @@ async function refreshAttendRow(ctx, tr, sid, what) {
     }
 }
 
-// 평가 항목 점수표가 같은 과목·학기이고 '출석' 항목이 있으면, 그 학생의 '출석' 칸을 서버가 다시 계산한 점수로 바꾸고
-//   최종 열은 refreshFinal 로 다시 그림. 받은 성적(없으면 undefined)을 돌려주고, 다시 그릴 표가 없으면 null
+// 평가 기준 점수표가 같은 과목·학기이고 '출석' 열(비율이 0보다 큼)이 있으면, 그 학생의 '출석' 칸을 서버가 다시 계산한 점수로 바꾸고
+//   최종 열은 refreshFinals 로 다시 그림. 그 학생 성적(없으면 undefined)을 돌려주고, 다시 그릴 표가 없으면 null
 async function refreshAssessAttend(ctx, sid, latest) {
     const a = state.assess;
-    const i = a && a.code === ctx.code && a.sem === ctx.sem ? a.items.findIndex((x) => x.name === ATTEND_ITEM) : -1;
+    const i = a && a.code === ctx.code && a.sem === ctx.sem ? a.cols.findIndex((x) => x.name === ATTEND_ITEM) : -1;
     if (i < 0) return null;
     const scores = await api('GET', '/api/assessment-scores?' + assessQuery(a.code, a.sem));
     if (state.assess !== a || !latest()) return null;
@@ -1090,7 +1102,7 @@ async function refreshAssessAttend(ctx, sid, latest) {
         input.value = v;
         input.dataset.prev = v;
     }
-    return refreshFinal(a, sid);
+    return (await refreshFinals(a)).find((x) => x.studentId === sid);
 }
 
 $('attend-sem').onchange = () => { state.attendSem = $('attend-sem').value; renderAttend(); };
@@ -1464,7 +1476,7 @@ async function showStudentReport(s) {
 
 // ───────── 내 성적 (학생) ─────────
 
-// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 항목·출결 기록이 있는 과목이 없으면 생략) + 성적표
+// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
 async function renderMyReport() {
     const [progress, report] = await Promise.all([
         myAssessmentsHtml(),
@@ -1473,13 +1485,12 @@ async function renderMyReport() {
     $('myreport-body').innerHTML = progress + report;
 }
 
-// '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 평가 항목이 있는 것마다
-//   항목별 비율·내 점수 표와 한 줄 요약
+// '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 평가 기준이 있는 것마다
+//   분류별 비율·내 점수 표(비율 0인 분류는 뺌)와 한 줄 요약
 //     최종 성적이 있으면 그 점수·등급
-//     없으면 현재까지 환산 = Σ(입력된 점수×비율) / Σ(점수가 입력된 항목의 비율), 소수 둘째 반올림,
-//     예상 등급은 scoreToLetter 경계 (미확정)
-//   평가 항목이 있는 과목이 없으면 빈 문자열
-//   출결 기록이 있는 과목은 내 출결 요약 줄도 보임 (평가 항목이 없어도 그 과목을 보임, 기록이 없는 과목은 줄 없음)
+//     없으면 estimateLine (점수가 없는 분류 중 출석이 아닌 칸에 예상 점수 입력칸, 입력하면 simLine 으로 다시 계산, 서버로 보내지 않음)
+//   평가 기준이 있는 과목이 없으면 빈 문자열
+//   출결 기록이 있는 과목은 내 출결 요약 줄도 보임 (평가 기준이 없어도 그 과목을 보임, 기록이 없는 과목은 줄 없음)
 //   출결을 못 받으면 이 영역 안에 한 줄 오류만 보이고 나머지는 그대로
 async function myAssessmentsHtml() {
     const [scores, grades, attend] = await Promise.all([
@@ -1491,44 +1502,96 @@ async function myAssessmentsHtml() {
     [...state.myEnrollments, ...scores, ...attend.summaries.values()].forEach((e) =>
         combos.set(JSON.stringify([e.courseCode, e.semester]), { code: e.courseCode, sem: e.semester }));
     const cache = new Map();
-    const list = await Promise.all([...combos.values()].map(async (x) => ({ ...x, items: await assessmentsOf(x.code, x.sem, cache) })));
+    const list = await Promise.all([...combos.values()].map(async (x) => {
+        const { mode, items } = await assessmentsOf(x.code, x.sem, cache);
+        return { ...x, mode, items };
+    }));
     const shown = list.filter((x) => x.items.length || attend.summaries.has(JSON.stringify([x.code, x.sem])))
         .sort((a, b) => b.sem.localeCompare(a.sem) || a.code.localeCompare(b.code));
     const attendError = attend.error ? `<p class="attend-error">출결을 불러오지 못했습니다: ${esc(attend.error)}</p>` : '';
     if (!shown.length) return attendError ? `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}</div>` : '';
 
-    const cards = shown.map(({ code, sem, items }) => {
+    const cards = shown.map(({ code, sem, mode, items }) => {
         const head = `<h4 class="assess-head">${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span></h4>`;
         const att = attend.summaries.get(JSON.stringify([code, sem]));
         if (!items.length) return head + `<p class="attend-line">${attendSummaryLine(att)}</p>`;
+        const cols = items.filter((a) => a.weight > 0);
         const mine = (name) => scores.find((s) => s.courseCode === code && s.semester === sem && s.name === name);
-        const total = items.reduce((t, a) => t + a.weight, 0);
-        const done = items.filter((a) => mine(a.name));
-        const doneWeight = done.reduce((t, a) => t + a.weight, 0);
         const final = grades.find((g) => g.courseCode === code && g.semester === sem);
-        let line;
-        if (final) {
-            line = `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}`;
-        } else if (doneWeight > 0) {
-            const est = round2(done.reduce((t, a) => t + mine(a.name).score * a.weight, 0) / doneWeight);
-            line = `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
-                <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
-        } else {
-            line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
-        }
-        const rows = items.map((a) => `
-            <tr><td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${esc(mine(a.name)?.score ?? '-')}</td></tr>`).join('');
+        const simulate = (a) => !final && !mine(a.name) && a.name !== ATTEND_ITEM;
+        const line = final
+            ? `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}`
+            : estimateLine(cols.map((a) => ({ weight: a.weight, score: mine(a.name)?.score ?? null })), mode, cols.some(simulate));
+        const rows = cols.map((a) => {
+            const s = mine(a.name);
+            const cell = s ? esc(s.score)
+                : simulate(a) ? '<input type="number" class="sim-input" min="0" max="100" step="any" placeholder="예상">' : '-';
+            return `
+            <tr data-w="${esc(a.weight)}"${s ? ` data-score="${esc(s.score)}"` : ''}>
+                <td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${cell}</td></tr>`;
+        }).join('');
         return `
             ${head}
             <div class="table-wrap">
-                <table><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
+                <table data-mode="${esc(mode)}"><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr><td colspan="3" class="estimate">${line}</td></tr>
+                <tfoot><tr><td colspan="3" class="estimate sim-line">${line}</td></tr>
                 ${att ? `<tr><td colspan="3" class="estimate">${attendSummaryLine(att)}</td></tr>` : ''}</tfoot></table>
             </div>`;
     }).join('');
     return `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}${cards}</div>`;
 }
+
+// 최종 성적이 없는 과목의 요약 줄 (미확정)
+//   parts: 비율이 0보다 큰 분류마다 {weight, score} (score = 받은 점수 또는 유효한 예상 점수, 없으면 null)
+//   모두 차면 예상 최종 = Σ(점수×비율) / 100 (소수 둘째 자리 반올림), 점수 기준 등급 (scoreToLetter 경계)
+//   빈칸이 남으면 현재까지 환산 = Σ(점수×비율) / Σ(점수가 있는 분류의 비율), canSimulate(예상 점수 칸이 있음)면 빈칸 안내를 붙임
+//   상대평가 과목이면 실제 등급은 순위로 정해진다는 안내를 덧붙임
+function estimateLine(parts, mode, canSimulate) {
+    const done = parts.filter((p) => p.score !== null);
+    const total = parts.reduce((t, p) => t + p.weight, 0);
+    const doneWeight = done.reduce((t, p) => t + p.weight, 0);
+    const sum = done.reduce((t, p) => t + p.score * p.weight, 0);
+    let line;
+    if (parts.length && done.length === parts.length) {
+        const est = round2(sum / 100);
+        line = `예상 최종 <b>${est.toFixed(2)}점</b> (점수 기준 등급 ${letterBadge(scoreToLetter(est))}, 미확정)`;
+    } else {
+        if (doneWeight > 0) {
+            const est = round2(sum / doneWeight);
+            line = `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
+                <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
+        } else {
+            line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
+        }
+        if (canSimulate) line += ' <span class="hint">· 빈칸에 예상 점수를 넣으면 최종 점수를 계산합니다</span>';
+    }
+    if (mode === 'relative') line += ` <span class="hint">· 상대평가 과목이라 실제 등급은 수강생 순위로 정해집니다 (${RELATIVE_RULES})</span>`;
+    return line;
+}
+
+// 예상 점수 칸이 있는 과목 표 하나의 요약 줄을 화면 값으로 다시 계산 (받은 점수 = 행의 data-score, 예상 점수 = 입력칸)
+//   0~100 밖이거나 숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스
+function simLine(table) {
+    const parts = [...table.querySelectorAll('tbody tr[data-w]')].map((tr) => {
+        const weight = Number(tr.dataset.w);
+        const input = tr.querySelector('input.sim-input');
+        if (!input) return { weight, score: tr.dataset.score === undefined ? null : Number(tr.dataset.score) };
+        const raw = input.value.trim();
+        const n = Number(raw);
+        const ok = raw !== '' && Number.isFinite(n) && n >= 0 && n <= 100;
+        input.classList.toggle('invalid', !ok && (raw !== '' || input.validity.badInput));
+        return { weight, score: ok ? n : null };
+    });
+    return estimateLine(parts, table.dataset.mode, true);
+}
+// 예상 점수를 입력할 때마다 그 과목 요약 줄만 다시 그림 (서버로 보내지 않고, 화면을 다시 그리면 사라짐)
+$('tab-myreport').addEventListener('input', (e) => {
+    const input = e.target.closest('input.sim-input');
+    if (!input) return;
+    const table = input.closest('table');
+    table.querySelector('td.sim-line').innerHTML = simLine(table);
+});
 
 // 내 출결 요약 (학생, 서버가 쿼리 없이 본인 기록 전체를 줌): {summaries: (과목, 학기) → 서버 요약, error}
 //   score 가 null(기록 없음)인 요약은 뺌. 실패하면 빈 목록과 오류 문구 (던지지 않음)
@@ -1571,7 +1634,7 @@ async function renderGrades() {
     const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
     const cache = new Map();
-    const assessed = await Promise.all(grades.map((g) => assessmentsOf(g.courseCode, g.semester, cache).then((items) => items.length > 0)));
+    const assessed = await Promise.all(grades.map((g) => assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
 
     $('grade-body').innerHTML = grades.length ? grades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
