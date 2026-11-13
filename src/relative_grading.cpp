@@ -48,7 +48,15 @@ bool validRatios(const std::vector<int>& ratios) {
         if (ratio < 0 || ratio > 100) return false;
         total += ratio;
     }
-    return total == 100;
+    if (total != 100) return false;
+
+    // A+ + A0는 30% 이하, A+ + A0 + B+ + B0는 70% 이하여야 한다.
+    const int aPlusAndA0 = ratios[0] + ratios[1];
+    const int aThroughB0 = aPlusAndA0 + ratios[2] + ratios[3];
+    if (aPlusAndA0 > static_cast<int>(kMaxARatio * 100)) return false;
+    if (aThroughB0 > static_cast<int>(kMaxABRatio * 100)) return false;
+
+    return true;
 }
 
 std::vector<std::string> assignLetters(const std::vector<double>& scores,

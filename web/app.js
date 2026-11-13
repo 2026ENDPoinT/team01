@@ -978,7 +978,11 @@ const validateScheme = (d) => {
     if (total !== 100) return `평가 항목 비율 합계가 100이어야 합니다 (지금 ${total}%)`;
     const ratios = GRADE_RATIO_LETTERS.map((letter) => String(d[`ratio_${letter}`] ?? '').trim());
     if (ratios.some((r) => !/^\d+$/.test(r) || Number(r) > 100)) return '상대평가 등급 비율은 0~100 정수로 입력하세요';
-    const ratioTotal = ratios.reduce((t, r) => t + Number(r), 0);
+    const ratioNumbers = ratios.map(Number);
+    const ratioTotal = ratioNumbers.reduce((t, r) => t + r, 0);
+    const [aPlus, a0, bPlus, b0] = ratioNumbers;
+    if (aPlus + a0 > 30) return 'A+와 A0 비율 합계는 30% 이하여야 합니다';
+    if (aPlus + a0 + bPlus + b0 > 70) return 'A+, A0, B+, B0 비율 합계는 70% 이하여야 합니다';
     return ratioTotal === 100 ? '' : `상대평가 등급 비율 합계가 100이어야 합니다 (지금 ${ratioTotal}%)`;
 };
 // 항목 점수표 마지막 열: 서버가 계산한 최종 점수와 등급 (성적이 없으면 = 미완성 '-')
@@ -1182,6 +1186,67 @@ function openSchemeForm(ctx) {
             await refreshAll();
         },
     });
+
+    // 입력 중에도 누적 상한을 강제한다.
+    // A+ + A0 <= 30%, A+ + A0 + B+ + B0 <= 70%, 전체 합계 <= 100%.
+    const ratioInput = (letter) => $('dlg-body').querySelector(`[name="ratio_${letter}"]`);
+    const ratioValue = (letter) => {
+        const raw = ratioInput(letter)?.value ?? '';
+        return /^\d+$/.test(raw) ? Number(raw) : 0;
+    };
+
+    // 해당 입력칸을 제외한 현재 값으로 그 칸에 허용되는 최대값을 계산한다.
+    const maxRatioFor = (letter) => {
+        const aPlus = ratioValue('A+');
+        const a0 = ratioValue('A0');
+        const bPlus = ratioValue('B+');
+        const b0 = ratioValue('B0');
+        const cPlus = ratioValue('C+');
+        const f = ratioValue('F');
+
+        switch (letter) {
+            case 'A+':
+                return Math.max(0, Math.min(30 - a0, 70 - a0 - bPlus - b0, 100 - a0 - bPlus - b0 - cPlus - f));
+            case 'A0':
+                return Math.max(0, Math.min(30 - aPlus, 70 - aPlus - bPlus - b0, 100 - aPlus - bPlus - b0 - cPlus - f));
+            case 'B+':
+                return Math.max(0, Math.min(70 - aPlus - a0 - b0, 100 - aPlus - a0 - b0 - cPlus - f));
+            case 'B0':
+                return Math.max(0, Math.min(70 - aPlus - a0 - bPlus, 100 - aPlus - a0 - bPlus - cPlus - f));
+            case 'C+':
+                return Math.max(0, 100 - aPlus - a0 - bPlus - b0 - f);
+            case 'F':
+                return Math.max(0, 100 - aPlus - a0 - bPlus - b0 - cPlus);
+            default:
+                return 100;
+        }
+    };
+
+    const updateRatioMaxes = (changedLetter = null) => {
+        // 방금 입력한 값이 허용 범위를 넘으면 즉시 최대값으로 조정한다.
+        if (changedLetter) {
+            const changed = ratioInput(changedLetter);
+            if (changed && changed.value !== '') {
+                const value = Number(changed.value);
+                if (Number.isFinite(value)) {
+                    changed.value = String(Math.max(0, Math.min(100, maxRatioFor(changedLetter), Math.trunc(value))));
+                }
+            }
+        }
+
+        // 모든 입력칸의 max 속성도 현재 다른 등급 비율에 맞춰 갱신한다.
+        GRADE_RATIO_LETTERS.forEach((letter) => {
+            const input = ratioInput(letter);
+            if (!input) return;
+            input.min = '0';
+            input.max = String(maxRatioFor(letter));
+        });
+    };
+
+    GRADE_RATIO_LETTERS.forEach((letter) => {
+        ratioInput(letter)?.addEventListener('input', () => updateRatioMaxes(letter));
+    });
+    updateRatioMaxes();
 }
 
 // 이 과목·학기 성적을 다시 받아 점수표의 최종 열 전부와 상대평가 요약 줄을 다시 그림 (표 전체를 다시 그리지 않아 다음 칸 입력이 끊기지 않음)
