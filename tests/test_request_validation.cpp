@@ -130,3 +130,21 @@ TEST_CASE(readCourse_gradeType) {
              std::string("성적 방식은 letter(등급) 또는 pf(P/F) 여야 합니다"));
     CHECK_EQ(courseReason(with(courseBody(), "gradeType", 1)), std::string("성적 방식은 문자열이어야 합니다"));
 }
+
+TEST_CASE(newCourseError_requires_professor_and_schedule) {
+    Course c;
+    CHECK_EQ(readCourse(with(courseBody(), "schedule", "월(1~2)"), "", c), std::string(""));
+    CHECK_EQ(RequestValidation::newCourseError(c), std::string(""));
+
+    c.professor = "";
+    CHECK_EQ(RequestValidation::newCourseError(c), std::string("담당 교수가 비어 있습니다"));
+    c.professor = "   ";
+    CHECK_EQ(RequestValidation::newCourseError(c), std::string("담당 교수가 비어 있습니다"));
+    c.professor = "김철수";
+    c.schedule = "";
+    CHECK_EQ(RequestValidation::newCourseError(c), std::string("강의시간이 비어 있습니다"));
+
+    // 수정 경로(readCourse·courseError)는 강의시간이 비어도 그대로 통과 (기존 과목·원격강좌)
+    CHECK_EQ(readCourse(courseBody(), "", c), std::string(""));
+    CHECK(c.schedule.empty());
+}

@@ -294,7 +294,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | PUT | `/api/students/:id` | 학생 수정 (관리자) |
 | DELETE | `/api/students/:id` | 학생 삭제 (성적·수강신청·계정도 삭제, 관리자) |
 | GET | `/api/courses` | 과목 목록 |
-| POST | `/api/courses` | 과목 등록 (관리자) |
+| POST | `/api/courses` | 과목 등록 (관리자). 담당 교수·강의시간 필수 (비면 `400`, 수정 `PUT` 은 빈 강의시간 허용) |
 | PUT | `/api/courses/:code` | 과목 수정 (관리자) |
 | DELETE | `/api/courses/:code` | 과목 삭제 (성적·수강신청·게시물도 삭제, 관리자) |
 | GET | `/api/courses/:code/posts` | 과목 게시물 목록 (학기·주차·id 순, 관리자·담당 교수·수강신청한 학생) |

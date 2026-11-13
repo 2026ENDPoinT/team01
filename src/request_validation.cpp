@@ -92,6 +92,12 @@ std::string courseError(const Course& c) {
     return "";
 }
 
+std::string newCourseError(const Course& c) {
+    if (isBlank(c.professor)) return "담당 교수가 비어 있습니다";
+    if (isBlank(c.schedule)) return "강의시간이 비어 있습니다";
+    return "";
+}
+
 std::string accountError(const std::string& username, bool checkUsername, const std::string& role,
                          const std::string& name, const std::string& studentId, const std::string& password,
                          bool passwordRequired) {

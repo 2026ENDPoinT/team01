@@ -20,6 +20,10 @@ std::string readCourse(const nlohmann::json& body, const std::string& defaultCod
 // 읽은 과목 값 검사: 과목코드 형식, 과목명 비움, 학점 1~4, 이수구분·강의언어 목록, 강의시간 형식, 정원 0~999, 성적 방식
 std::string courseError(const Course& course);
 
+// 새 과목 등록에만 더 보는 항목: 담당 교수·강의시간 필수 (공백만 있어도 비어 있는 것으로 봄)
+//   수정은 검사하지 않음 (강의시간이 빈 기존 과목·원격강좌를 그대로 고칠 수 있게)
+std::string newCourseError(const Course& course);
+
 // 계정 값 검사 (만들기·수정 공용)
 //   checkUsername: 만들 때만 아이디 형식 검사 (수정은 아이디를 바꿀 수 없음)
 //   password: 만들 때는 필수, 수정할 때는 "" 이면 바꾸지 않으므로 검사 안 함 (passwordRequired 로 구분)
