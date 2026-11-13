@@ -143,6 +143,27 @@ TEST_CASE(academicWarnings_low_gpa_kept_after_retake) {
     }
 }
 
+// 학사경고의 원래 등급은 Grade::letter() (상대평가 등급 포함): 점수 90 이지만 assignedLetter D0
+TEST_CASE(academicWarnings_uses_assignedLetter) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    CHECK(gm.addStudent(makeStudent("24000001", "가")));
+    CHECK(gm.addCourse(makeCourse("100001", "과목1", 3)));
+    CHECK(gm.addEnrollment(makeEnrollment("24000001", "100001", "2026-1")));
+    Grade g = makeGrade("24000001", "100001", "2026-1", 90);
+    g.assignedLetter = "D0";  // 평점 1.0
+    CHECK(gm.addGrade(g));
+
+    const std::vector<Statistics::WarningEntry> warnings = Statistics::academicWarnings(gm, "24000001");
+    CHECK_EQ(warnings.size(), static_cast<size_t>(1));
+    if (warnings.size() == 1) {
+        CHECK_EQ(warnings[0].semester, std::string("2026-1"));
+        CHECK_EQ(warnings[0].reason, std::string("평점평균 1.75 미만"));
+        CHECK(warnings[0].hasGpa);
+        CHECK_NEAR(warnings[0].gpa, 1.0, 1e-9);
+    }
+}
+
 TEST_CASE(academicWarnings_missing_enrollment_semester) {
     TempDir dir;
     GradeManager gm(dir.str());

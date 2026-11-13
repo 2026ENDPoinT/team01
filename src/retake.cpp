@@ -40,7 +40,7 @@ std::string officialLetter(const Grade& grade, const std::vector<Grade>& grades)
     if (isReplaced(grade, grades)) {
         return "R";
     }
-    std::string letter = scoreToLetter(grade.score);
+    std::string letter = grade.letter();
     if (letter == "A+" && isRetake(grade, grades)) {
         return "A0";
     }
