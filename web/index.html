@@ -19,7 +19,6 @@
             <button data-tab="students" data-roles="admin">학생</button>
             <button data-tab="grades" data-roles="admin professor">성적</button>
             <button data-tab="myreport" data-roles="student">내 성적</button>
-            <button data-tab="ranking" data-roles="admin">석차</button>
             <button data-tab="accounts" data-roles="admin">계정</button>
         </nav>
         <div id="user-box" hidden>
@@ -135,24 +134,6 @@
                 <h2 class="page-title">내 성적</h2>
             </div>
             <div id="myreport-body"></div>
-        </section>
-
-        <!-- 석차 -->
-        <section id="tab-ranking" class="tab">
-            <div class="page-head">
-                <h2 class="page-title">석차</h2>
-            </div>
-            <div class="toolbar">
-                <label>학기 <select id="rank-semester"></select></label>
-                <span class="spacer"></span>
-                <span class="hint">GPA 4.5 만점 · 동점이면 같은 등수</span>
-            </div>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>등수</th><th>학번</th><th>이름</th><th class="num">GPA</th><th>GPA 막대</th></tr></thead>
-                    <tbody id="rank-body"></tbody>
-                </table>
-            </div>
         </section>
 
         <!-- 계정 (관리자) -->

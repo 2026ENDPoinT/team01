@@ -17,7 +17,7 @@ flowchart LR
         SRV["Server (src/server.cpp)<br/>HTTP 라우트 · 세션 쿠키 sid<br/>requireRole · 전역 mtx 하나"]
         ACC["AccountStore<br/>계정 · 비밀번호 해시 · teaches"]
         GM["GradeManager<br/>메모리 vector · 연쇄 처리<br/>syncGrade"]
-        ST["Statistics<br/>GPA · 석차 · 학사경고"]
+        ST["Statistics<br/>GPA · 학사경고"]
         RT["Retake<br/>재수강 규칙"]
         VAL["값 규칙<br/>student · course · grade<br/>assessment · course_post"]
         FIO["FileIO<br/>CSV 읽기·쓰기<br/>atomicWrite + .bak"]
@@ -44,7 +44,7 @@ flowchart LR
 - 브라우저는 `web/` 의 정적 파일(`svr.set_mount_point("/", webDir)`)을 받아 와서 순수 JavaScript(`web/app.js`, 프레임워크 없음)로 `/api/*` 를 호출합니다. 화면은 서버가 준 JSON 을 그릴 뿐이고, 저장된 데이터의 기준은 서버입니다.
 - `Server` 는 요청 하나를 "로그인 확인 → 역할 확인 → 본문 검사 → `GradeManager` 호출 → `gm.save()` → JSON 응답" 순서로 처리합니다.
 - `GradeManager` 는 학생·과목·성적·수강신청·게시물·평가 항목·항목 점수를 `std::vector` 로 메모리에 들고 있고, 파일은 `FileIO` 를 통해서만 만집니다.
-- GPA·석차·학사경고는 `Statistics`(namespace 함수 모음)가 `GradeManager` 를 읽기만 해서 계산합니다. 계산 결과를 저장하는 곳은 없습니다.
+- GPA·학사경고는 `Statistics`(namespace 함수 모음)가 `GradeManager` 를 읽기만 해서 계산합니다. 계산 결과를 저장하는 곳은 없습니다.
 - `AccountStore` 는 `GradeManager` 와 별개로 `accounts.csv` 만 담당합니다 (`FileIO` 인스턴스를 따로 가짐).
 - `main.cpp` 는 `GradeManager`, `AccountStore` 를 만들어 `load()` 한 뒤 `Server` 에 넘기고 `run()` 을 부르는 조립만 합니다 (`AccountStore::ensureAdmin` 으로 첫 관리자도 만듦).
 - 서버는 `svr.listen("127.0.0.1", port)` 로 이 컴퓨터에서만 접속할 수 있게 열립니다.
@@ -79,7 +79,7 @@ flowchart LR
 |---|---|---|
 | `include/grade_manager.h`, `src/grade_manager.cpp` | `GradeManager`: 메모리 vector 보관, 등록·수정·삭제·조회, 연쇄 처리(`updateStudent`·`removeStudent`·`updateCourse`·`removeCourse`), 평가 항목 → 성적 동기화(`syncGrade`·`syncCourse`), `load()`/`save()` | h: `assessment.h` `course.h` `course_post.h` `enrollment.h` `file_io.h` `grade.h` `student.h` |
 | `include/retake.h`, `src/retake.cpp` | `Retake::isReplaced` · `isRetake` · `officialLetter`(R, 재수강 A+→A0) · `activeGrades` · `admittedSince2018` | h: `grade.h` |
-| `include/statistics.h`, `src/statistics.cpp` | `Statistics::calcGPA` · `gpaSummary` · `courseStats` · `ranking` · `academicWarnings`. 데이터를 바꾸지 않는 계산 전용 | h: `grade_manager.h`. cpp: `retake.h` |
+| `include/statistics.h`, `src/statistics.cpp` | `Statistics::calcGPA` · `gpaSummary` · `courseStats` · `academicWarnings`. 데이터를 바꾸지 않는 계산 전용 | h: `grade_manager.h`. cpp: `retake.h` |
 | `include/report_exporter.h`, `src/report_exporter.cpp` | `ReportExporter::studentReport` · `courseReport`: 성적표 CSV 문자열 (UTF-8 BOM, 수식 주입 방지 `safeCell`) | h: `grade_manager.h`. cpp: `retake.h`, `statistics.h` |
 | `include/server.h`, `src/server.cpp` | `Server`: 라우트 등록, 세션(`sessionToken` · `currentAccount`), 역할 확인 `requireRole`, JSON 변환, 오류 문구 | h: `account.h`, `grade_manager.h`. cpp: `statistics.h` `course_post.h` `retake.h` `report_exporter.h`, `httplib.h`, `json.hpp` |
 | `src/main.cpp` | 데이터 폴더(`PROJECT_ROOT/data`)를 열고 `GradeManager`·`AccountStore`·`Server` 를 만들어 실행 | `account.h` `grade_manager.h` `server.h` |
@@ -168,10 +168,10 @@ sequenceDiagram
 3. 곧바로 `syncGrade(studentId, courseCode, semester)` 가 그 학생의 항목과 점수를 모아 `finalScore(items, scores)` (`src/assessment.cpp`) 를 부릅니다. 비율 합계가 100 이 아니거나 점수 없는 항목이 있으면 `-1` 이고, 그러면 `grades` 의 그 성적을 지웁니다. 0 이상이면 성적을 추가하거나 점수를 바꿉니다.
 4. 항목 자체를 바꾸는 경우(`addAssessment` · `updateAssessment` · `removeAssessment`)는 `syncCourse` 가 그 과목·학기에 수강신청한 학생 전원에게 `syncGrade` 를 돌립니다.
 5. 라우트가 `gm.save()` 로 저장하면 `assessment_scores.csv` 와 `grades.csv` 가 바뀝니다.
-6. 이렇게 만들어진 성적은 평범한 `Grade` 라서 GPA·석차·재수강·학사경고 코드는 그대로 씁니다 (`include/assessment.h` 머리 주석, README "평가 항목 성적"). 항목 계산 과목의 성적을 직접 등록·수정·삭제하는 것은 서버가 409 로 막습니다 (`kAssessedCourse`).
+6. 이렇게 만들어진 성적은 평범한 `Grade` 라서 GPA·재수강·학사경고 코드는 그대로 씁니다 (`include/assessment.h` 머리 주석, README "평가 항목 성적"). 항목 계산 과목의 성적을 직접 등록·수정·삭제하는 것은 서버가 409 로 막습니다 (`kAssessedCourse`).
 7. 이 경우 성적 점수(`grades.csv`)는 계산 결과를 파일에 저장하는 유일한 예외입니다. 그래서 `finalScore` 계산식을 바꿔도 이미 저장된 성적은 다음 `syncGrade`·`syncCourse` 가 불리기 전까지 그대로입니다 (`load()` 는 다시 계산하지 않음).
 
-### 3-c. GPA·석차 조회 (요청 때마다 계산, 캐시 없음)
+### 3-c. GPA 조회 (요청 때마다 계산, 캐시 없음)
 
 ```mermaid
 sequenceDiagram
@@ -197,10 +197,9 @@ sequenceDiagram
 ```
 
 1. `GET /api/stats/summary/:id` 의 `gpaSummary` 와 `GET /api/stats/gpa/:id` 의 `calcGPA` 는 같은 내부 함수 `sumBySemester` 를 씁니다. `Retake::activeGrades(gm.getGradesByStudent(id))` 로 지워진 성적을 빼고, 과목별 학점은 `gm.findCourse(...)->credit`, 평점은 `letterToPoint(Retake::officialLetter(...))` 로 구해서 학기별로 (평점 × 학점) 합과 학점 합을 모읍니다. GPA = 합 ÷ 학점 합입니다.
-2. 석차는 `GET /api/stats/ranking` → `Statistics::ranking` 이 모든 학생에 대해 `calcGPA` 를 부른 뒤 정렬하고, 같은 GPA 에는 같은 등수를 줍니다 (1, 2, 2, 4 …).
-3. 학사경고는 `Statistics::academicWarnings` 가 수강신청·성적에서 매번 판정합니다 (재수강 규칙을 쓰지 않고 원래 성적 `scoreToLetter` 사용).
-4. 캐시가 없음을 확인한 근거: `grades.csv` 의 칸은 `studentId,courseCode,semester,score` 뿐이라 등급·GPA 를 저장하는 곳이 없고 (`FileIO::saveGrades`), `src/` 에서 `cache` 를 검색해도 결과가 없으며 `static` 변수는 목록 상수(`courseCategories` 등)뿐이라 계산 결과를 담아 두는 변수가 없습니다. 그래서 성적을 고치거나 지우면 다음 조회부터 값이 달라집니다.
-5. 소수 둘째 자리 표시는 서버가 아니라 `web/app.js` 의 `fmt` 가 합니다 (서버는 계산한 `double` 을 그대로 JSON 에 담음).
+2. 학사경고는 `Statistics::academicWarnings` 가 수강신청·성적에서 매번 판정합니다 (재수강 규칙을 쓰지 않고 원래 성적 `scoreToLetter` 사용).
+3. 캐시가 없음을 확인한 근거: `grades.csv` 의 칸은 `studentId,courseCode,semester,score` 뿐이라 등급·GPA 를 저장하는 곳이 없고 (`FileIO::saveGrades`), `src/` 에서 `cache` 를 검색해도 결과가 없으며 `static` 변수는 목록 상수(`courseCategories` 등)뿐이라 계산 결과를 담아 두는 변수가 없습니다. 그래서 성적을 고치거나 지우면 다음 조회부터 값이 달라집니다.
+4. 소수 둘째 자리 표시는 서버가 아니라 `web/app.js` 의 `fmt` 가 합니다 (서버는 계산한 `double` 을 그대로 JSON 에 담음).
 
 ---
 
@@ -235,8 +234,7 @@ sequenceDiagram
   - 재수강 판정은 같은 학생·과목의 더 늦은 학기 성적이 있느냐로 결정됩니다 (`Retake::isReplaced` · `isRetake`). 나중 학기 성적을 등록하거나 지우면 이전 성적의 등급 표시(R, A0 제한)와 GPA 가 함께 바뀌어야 하는데, 값을 저장해 두면 그때마다 맞춰 고쳐야 합니다. 읽을 때 계산하면 원본(점수·수강신청)이 하나뿐이라 어긋날 수 없습니다.
   - `include/retake.h` 주석: 삭제된 성적도 `grades.csv` 에 그대로 남기는 이유가 "성적표의 R 표시와 학사경고 판단에 필요"하기 때문입니다.
   - 학사경고는 "이미 내려진 학사경고는 유지"해야 하므로 재수강 규칙을 적용하지 않고 원래 성적(`scoreToLetter`)으로 판정합니다 (`include/statistics.h`).
-- 예외: 평가 항목으로 만든 최종 점수는 `syncGrade` 가 `grades` 에 저장합니다. 계산 결과를 평범한 성적으로 만들어 나머지 코드(GPA·석차·재수강·학사경고·성적표)를 그대로 쓰기 위해서입니다 (README "평가 항목 성적", `include/assessment.h`).
-- 대가: 조회할 때마다 계산하므로 석차는 학생 수만큼 `calcGPA` 를 반복합니다 (`Statistics::ranking`). 지금 데이터 규모에서는 문제가 없습니다 (팀 판단).
+- 예외: 평가 항목으로 만든 최종 점수는 `syncGrade` 가 `grades` 에 저장합니다. 계산 결과를 평범한 성적으로 만들어 나머지 코드(GPA·재수강·학사경고·성적표)를 그대로 쓰기 위해서입니다 (README "평가 항목 성적", `include/assessment.h`).
 
 ### 왜 역할 확인을 서버에서 하는가
 
@@ -292,16 +290,16 @@ A. cpp-httplib 이 요청을 스레드 풀에서 동시에 처리하지만, 모�
 A. 원문은 저장하지 않습니다. 계정마다 `random_device` 로 만든 16바이트(hex 32자) salt 를 두고, `hashPassword` 가 `sha256(salt + 비밀번호)` 에 `sha256(d + salt)` 를 9999번 더 적용합니다 (총 10,000번). `accounts.csv` 에는 `salt`, `passwordHash` 만 있고 API 응답(`accountJson`)에는 해시가 들어가지 않습니다. SHA-256 은 외부 라이브러리 없이 `account.cpp` 에 직접 구현했고 `tests/test_account.cpp` 의 `sha256Hex_known_vectors` 가 알려진 값과 비교합니다. 반복 SHA-256 은 bcrypt·argon2 같은 비밀번호 전용 방식은 아니라는 한계가 있습니다. 로그인 세션은 쿠키 `sid`(HttpOnly, SameSite=Strict, 8시간)로 유지하고 서버 메모리에만 있어서 서버를 다시 켜면 모두 로그아웃됩니다. 서버는 `127.0.0.1` 에서만 열리고 HTTPS 는 쓰지 않습니다.
 
 **Q4. 테스트는 어떻게 했나요?**
-A. 외부 프레임워크 없이 `tests/check.h` 의 `TEST_CASE`·`CHECK` 매크로로 `GradeTests` 하나를 만들었습니다 (이 문서 작성 시점 `TEST_CASE` 76개, 등급 경계·재수강·석차 동점·평가 항목 계산·연쇄 삭제·CSV 저장/불러오기·계정 해시 등). `TempDir` 의 임시 폴더만 써서 `data/` 를 건드리지 않고, GitHub Actions(`.github/workflows/`)가 빌드와 `ctest` 를 돌립니다. 다만 HTTP 라우트를 직접 부르는 자동 테스트는 없고, README 의 시연 시나리오와 curl 예제로 확인합니다.
+A. 외부 프레임워크 없이 `tests/check.h` 의 `TEST_CASE`·`CHECK` 매크로로 `GradeTests` 하나를 만들었습니다 (이 문서 작성 시점 `TEST_CASE` 99개, 등급 경계·재수강·평가 항목 계산·연쇄 삭제·CSV 저장/불러오기·계정 해시 등). `TempDir` 의 임시 폴더만 써서 `data/` 를 건드리지 않고, GitHub Actions(`.github/workflows/`)가 빌드와 `ctest` 를 돌립니다. 다만 HTTP 라우트를 직접 부르는 자동 테스트는 없고, README 의 시연 시나리오와 curl 예제로 확인합니다.
 
 **Q5. GPA 는 어디서 어떻게 계산하나요? 저장해 두나요?**
 A. 저장하지 않고 요청 때마다 `Statistics::gpaSummary` / `calcGPA` 가 계산합니다. `Retake::activeGrades` 로 재수강으로 지워진 성적을 빼고, `letterToPoint(Retake::officialLetter(...))` × 학점을 학기별로 합한 뒤 학점 합으로 나눕니다 (4.5 만점). `grades.csv` 에는 점수만 있으므로 성적을 고치거나 지우면 다음 조회에서 바로 달라집니다. 소수 둘째 자리 표시는 화면의 `fmt` 입니다.
 
 **Q6. 재수강은 어떻게 처리하나요?**
-A. 같은 학생이 같은 과목을 여러 학기에 들으면 가장 늦은 학기가 재수강 성적이고 이전 성적은 "삭제된 성적"입니다 (`Retake::isReplaced`). 삭제된 성적은 GPA·석차·과목 통계·과목 성적표에서 빠지지만 `grades.csv` 에는 남습니다. 재수강 성적은 A0 까지만 인정합니다 (`officialLetter` 가 A+ 를 A0 로). 학생 성적표에서는 2018년 이후 입학생(`admittedSince2018`)은 지워진 과목을 `R` 로 보여 주고 그 전 입학생은 줄을 뺍니다. 학사경고는 이미 내려진 경고를 유지하려고 재수강 규칙 없이 원래 성적으로 판정합니다.
+A. 같은 학생이 같은 과목을 여러 학기에 들으면 가장 늦은 학기가 재수강 성적이고 이전 성적은 "삭제된 성적"입니다 (`Retake::isReplaced`). 삭제된 성적은 GPA·과목 통계·과목 성적표에서 빠지지만 `grades.csv` 에는 남습니다. 재수강 성적은 A0 까지만 인정합니다 (`officialLetter` 가 A+ 를 A0 로). 학생 성적표에서는 2018년 이후 입학생(`admittedSince2018`)은 지워진 과목을 `R` 로 보여 주고 그 전 입학생은 줄을 뺍니다. 학사경고는 이미 내려진 경고를 유지하려고 재수강 규칙 없이 원래 성적으로 판정합니다.
 
 **Q7. 평가 항목(중간·기말·과제)으로 성적이 자동 계산되는 구조를 설명해 주세요.**
-A. 교수가 (과목, 학기)별로 항목과 비율을 만들고 학생별 항목 점수를 넣으면, `GradeManager` 가 `syncGrade` 로 `finalScore` 를 계산해 `grades` 에 일반 성적으로 반영합니다 (비율 합계가 100 이 아니거나 점수가 빈 항목이 있으면 성적을 만들지 않고 있던 성적도 지움). 항목 자체를 바꾸면 `syncCourse` 가 수강생 전원을 다시 계산합니다. 결과가 평범한 성적이라 GPA·석차·재수강 코드를 바꿀 필요가 없었고, 항목 계산 과목의 성적을 직접 수정하는 것은 서버가 409 로 막습니다. 자세한 흐름은 3-b.
+A. 교수가 (과목, 학기)별로 항목과 비율을 만들고 학생별 항목 점수를 넣으면, `GradeManager` 가 `syncGrade` 로 `finalScore` 를 계산해 `grades` 에 일반 성적으로 반영합니다 (비율 합계가 100 이 아니거나 점수가 빈 항목이 있으면 성적을 만들지 않고 있던 성적도 지움). 항목 자체를 바꾸면 `syncCourse` 가 수강생 전원을 다시 계산합니다. 결과가 평범한 성적이라 GPA·재수강 코드를 바꿀 필요가 없었고, 항목 계산 과목의 성적을 직접 수정하는 것은 서버가 409 로 막습니다. 자세한 흐름은 3-b.
 
 **Q8. 권한은 어디서 막나요? 화면에서 버튼을 숨기면 되는 것 아닌가요?**
 A. 서버가 막습니다. 공개 라우트인 `POST /api/login` 을 뺀 모든 라우트가 `requireRole` 로 시작해 로그인(401)과 역할(403)을 확인하고, 이어서 본인 학번이나 담당 과목(`teaches`)인지 확인합니다. 화면의 탭·버튼 숨김은 편의일 뿐이라 학생이 주소를 직접 호출해도 (예: 남의 GPA 조회) 403 이 나옵니다. 교수의 담당 과목은 과목의 담당 교수 이름(쉼표로 여러 명)과 계정 이름이 같은지로 정합니다. 권한 표는 README "로그인 / 역할".

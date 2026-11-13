@@ -906,20 +906,6 @@ void Server::run() {
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
-    // 석차
-    svr.Get("/api/stats/ranking", [this](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(mtx);
-        if (!requireRole(req, res, {"admin"})) return;
-        json arr = json::array();
-        for (const auto& entry : Statistics::ranking(gm, req.get_param_value("semester"))) {
-            arr.push_back({
-                {"rank", entry.rank}, {"studentId", entry.studentId},
-                {"name", entry.name}, {"gpa", entry.gpa}
-            });
-        }
-        res.set_content(arr.dump(), "application/json; charset=utf-8");
-    });
-
     // 학생 성적표 CSV
     svr.Get("/api/export/student/:id", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);

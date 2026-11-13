@@ -221,7 +221,6 @@ const renderers = {
     students: renderStudents,
     grades: renderGrades,
     myreport: renderMyReport,
-    ranking: renderRanking,
     accounts: renderAccounts,
     course: renderCoursePage,
 };
@@ -306,8 +305,8 @@ function resetView() {
     state.assess = null;
     state.attendSem = null;
     state.attend = null;
-    ['course-list', 'student-body', 'grade-body', 'rank-body', 'enroll-content', 'myreport-body', 'account-body',
-        'grade-f-student', 'grade-f-course', 'grade-f-semester', 'rank-semester',
+    ['course-list', 'student-body', 'grade-body', 'enroll-content', 'myreport-body', 'account-body',
+        'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-hero', 'course-filter', 'course-posts', 'course-sem',
         'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
@@ -1873,32 +1872,6 @@ $('grade-body').onclick = async (e) => {
         `${studentName(studentId)} · ${courseName(courseCode)} · ${semester} 성적을 삭제할까요?`,
         () => api('DELETE', '/api/grades?' + q));
 };
-
-// ───────── 석차 ─────────
-
-// 석차 표 그리기. 고른 학기(없으면 전체)의 석차를 받아 1~3등은 메달, GPA 는 4.5 만점 기준 막대로 표시
-async function renderRanking() {
-    const sel = $('rank-semester');
-    fillSelect(sel, (await semesterList()).map((s) => ({ value: s, label: s })), '전체 학기', sel.value);
-    const semQuery = sel.value ? '?semester=' + encodeURIComponent(sel.value) : '';
-    // 고른 학기(없으면 전체)에 성적이 있는 학생: 성적이 없는 학생은 GPA 0.00 대신 '-' 로 표시
-    const [rows, graded] = await Promise.all([
-        api('GET', '/api/stats/ranking' + semQuery),
-        api('GET', '/api/grades' + semQuery).catch(() => null),
-    ]);
-    const hasGrade = new Set((graded ?? []).map((g) => g.studentId));
-    const medal = ['🥇', '🥈', '🥉'];
-    $('rank-body').innerHTML = rows.length ? rows.map((r) => `
-        <tr>
-            <td>${medal[r.rank - 1] ?? ''} <b>${esc(r.rank)}</b></td>
-            <td>${esc(r.studentId)}</td>
-            <td><b>${esc(r.name)}</b></td>
-            <td class="num">${graded && !hasGrade.has(r.studentId) ? '-' : fmt(r.gpa)}</td>
-            <td class="bar-cell"><div class="bar"><i style="width:${Math.min(100, (r.gpa / 4.5) * 100)}%"></i></div></td>
-        </tr>`).join('') : emptyRow(5, '표시할 학생이 없습니다');
-}
-// 학기를 바꾸면 석차를 다시 그림
-$('rank-semester').onchange = () => renderRanking().catch((e) => toast(e.message, true));
 
 // ───────── 계정 (관리자) ─────────
 
