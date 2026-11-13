@@ -113,7 +113,7 @@ const teaches = (c) => state.me?.role === 'professor' &&
     String(c.professor ?? '').split(',').map((s) => s.trim()).includes(state.me.name);
 // 성적 탭에서 고를 수 있는 과목: 관리자는 전체, 교수는 담당 과목만
 const gradeCourses = () => (isAdmin() ? state.courses : state.courses.filter(teaches));
-// 수강과목 목록·과목 탭에 보이는 과목: 관리자는 전체, 교수는 담당 과목, 학생은 수강신청한 과목
+// 수강과목 목록에 보이는 과목: 관리자는 전체, 교수는 담당 과목, 학생은 수강신청한 과목
 const myCourses = () => {
     if (isAdmin()) return state.courses;
     if (state.me?.role === 'professor') return state.courses.filter(teaches);
@@ -214,7 +214,7 @@ async function confirmDelete(msg, fn) {
 
 // ───────── 탭 ─────────
 
-// 탭 이름 → 그 탭을 그리는 함수 (course = 과목 탭, 어떤 과목인지는 state.courseCode)
+// 탭 이름 → 그 탭을 그리는 함수 (course = 과목 페이지, 어떤 과목인지는 state.courseCode)
 const renderers = {
     courses: renderCourses,
     enroll: renderEnroll,
@@ -225,11 +225,11 @@ const renderers = {
     accounts: renderAccounts,
     course: renderCoursePage,
 };
-// 지금 열린 탭 이름 (보이는 화면 section 의 id 'tab-이름' 에서 꺼냄. 과목 탭 버튼이 다시 그려져도 그대로)
+// 지금 열린 탭 이름 (보이는 화면 section 의 id 'tab-이름' 에서 꺼냄)
 const currentTab = () => document.querySelector('main .tab.active').id.slice('tab-'.length);
 
 // 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
-//   code: 과목 탭이면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌림
+//   code: 과목 페이지면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌림
 function showTab(name, code) {
     if (code && code !== state.courseCode) {
         state.courseCode = code;
@@ -239,13 +239,13 @@ function showTab(name, code) {
         state.attendSem = null;
     }
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active',
-        b.dataset.tab === 'course' ? name === 'course' && b.dataset.code === state.courseCode : b.dataset.tab === name));
+        b.dataset.tab === (name === 'course' ? 'courses' : name)));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
     refreshAll().catch((e) => toast(e.message, true));
 }
 $('tabs').onclick = (e) => {
     const b = e.target.closest('button[data-tab]');
-    if (b && !b.hidden) showTab(b.dataset.tab, b.dataset.code);
+    if (b && !b.hidden) showTab(b.dataset.tab);
 };
 
 // 학생·과목 목록을 서버에서 받아 state 에 저장 (학생 목록은 서버가 역할에 맞게 걸러 줌)
@@ -257,19 +257,11 @@ async function loadBase() {
         state.me.role === 'student' ? api('GET', '/api/enrollments') : [],
     ]);
 }
-// 상단 과목 탭을 myCourses() 순서대로 다시 채움. 지금 과목 페이지의 과목 탭은 active
-function renderCourseTabs() {
-    const onCourse = currentTab() === 'course';
-    $('course-tabs').innerHTML = myCourses().map((c) =>
-        `<button data-tab="course" data-code="${esc(c.code)}"${onCourse && c.code === state.courseCode ? ' class="active"' : ''}>${esc(c.name)}</button>`
-    ).join('');
-}
 // 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 지금 탭을 다시 그림
 // 과목 페이지를 보던 중 그 과목을 볼 수 없게 되면(과목 삭제·권한 변경) 수강과목 탭으로 돌아감
 async function refreshAll() {
     if (!state.me) return;
     await loadBase();
-    renderCourseTabs();
     if (currentTab() === 'course' && !myCourses().some((c) => c.code === state.courseCode)) {
         showTab('courses');
         return;
@@ -312,7 +304,7 @@ function resetView() {
     ['course-list', 'student-body', 'grade-body', 'rank-body', 'enroll-content', 'myreport-body', 'account-body',
         'grade-f-student', 'grade-f-course', 'grade-f-semester', 'rank-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
-        'course-tabs', 'course-hero', 'course-filter', 'course-posts', 'course-sem',
+        'course-hero', 'course-filter', 'course-posts', 'course-sem',
         'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
@@ -334,7 +326,7 @@ function showLogin() {
     $('login-username').focus();
 }
 
-// 로그인한 계정으로 앱 시작: 역할에 허용된 탭만 보이고 첫 탭(수강과목)을 엶 (과목 탭은 refreshAll 이 채움)
+// 로그인한 계정으로 앱 시작: 역할에 허용된 탭만 보이고 첫 탭(수강과목)을 엶
 function startApp(me) {
     state.me = me;
     resetView();
@@ -526,7 +518,7 @@ function deleteCourse(c) {
         () => api('DELETE', '/api/courses/' + encodeURIComponent(c.code)));
 }
 
-// 행을 누르면 그 과목의 과목 탭 (상세 창은 과목 페이지의 "과목 정보" 버튼)
+// 행을 누르면 그 과목의 과목 페이지 (상세 창은 과목 페이지의 "과목 정보" 버튼)
 $('course-list').onclick = (e) => {
     const row = e.target.closest('.course-row');
     if (row) showTab('course', row.dataset.code);

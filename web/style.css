@@ -64,10 +64,6 @@ body {
 #tabs button:hover { background: none; color: var(--text); }
 #tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
-/* 과목 탭: #tabs 안에서 고정 탭과 같은 줄바꿈 흐름에 참여 (과목이 없으면 숨김) */
-#course-tabs { display: contents; }
-#course-tabs:empty { display: none; }
-
 /* 상단 바 오른쪽: 로그인한 사용자 · 비밀번호 변경 · 로그아웃 */
 #user-box { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
 #user-label { color: var(--muted); margin-right: 6px; }
