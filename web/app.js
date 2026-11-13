@@ -15,10 +15,11 @@ const $ = (id) => document.getElementById(id);
 //   점수 칸·버튼이 어느 분류인지 찾을 때 사용, 안 그렸으면 null)
 // attendSem: 과목 페이지 '출결' 영역에서 고른 학기
 // attend: 그 영역에 지금 그려 둔 {code, sem, records, summaries, seq} (출결 칸이 사용, 안 그렸거나 불러오기 실패면 null)
+// currentSem: 서버가 알려 준 현재 학기 (loadBase 가 채움, 예: '2026-2'). 지난 학기 판정 기준
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
-    assessSem: null, assess: null, attendSem: null, attend: null,
+    assessSem: null, assess: null, attendSem: null, attend: null, currentSem: '',
 };
 
 // ───────── 공용 도우미 ─────────
@@ -83,6 +84,14 @@ const SEMESTER_RULES = '학기 형식이 올바르지 않습니다 (예: 2026-1,
 const SCORE_RULES = '점수는 0~100 사이 숫자여야 합니다';
 // 중복을 지운 학기 목록 (최신 학기가 위로, 빈 값 제외)
 const sortSemesters = (list) => [...new Set(list.filter(Boolean))].sort().reverse();
+// 학기 시간 순서 (서버 semester.h 와 같음): 1학기 < 여름(3) < 2학기 < 겨울(4)
+const SEMESTER_ORDER = { 1: 0, 3: 1, 2: 2, 4: 3 };
+// sem 이 cur(현재 학기)보다 지난 학기인지. 형식이 틀리면 false (미래 학기·현재 학기도 false)
+function isPastSemester(sem, cur) {
+    if (!SEMESTER_RE.test(sem ?? '') || !SEMESTER_RE.test(cur ?? '')) return false;
+    const rank = (s) => Number(s.slice(0, 4)) * 4 + SEMESTER_ORDER[s[5]];
+    return rank(sem) < rank(cur);
+}
 
 // 평가 기준·항목 점수 API 의 과목·학기 쿼리
 const assessQuery = (code, sem) => new URLSearchParams({ courseCode: code, semester: sem }).toString();
@@ -108,17 +117,24 @@ const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.
 
 const ROLE_LABEL = { admin: '관리자', professor: '교수', student: '학생' };
 const isAdmin = () => state.me?.role === 'admin';
+// 이 사용자가 접근할 수 없는 지난 학기인지 (관리자는 성적 정정용으로 모든 학기 가능)
+const isLockedSemester = (sem) => !isAdmin() && isPastSemester(sem, state.currentSem);
+// 서버가 지난 학기 요청에 돌려주는 문구와 같음
+const pastSemesterMessage = () => `지난 학기는 접근할 수 없습니다 (현재 학기: ${state.currentSem})`;
+// 학기 선택 상자에 넣을 학기 목록 (최신 학기가 위로): 현재 학기는 항상 넣고, 관리자 외에는 지난 학기를 뺌
+const visibleSemesters = (list) => sortSemesters([...list, state.currentSem]).filter((s) => !isLockedSemester(s));
 // 담당 과목 판정 (서버 teaches 와 같은 규칙): 교수 계정이고, 과목 담당 교수를 , 로 나눈 이름 중 하나가 내 이름
 const teaches = (c) => state.me?.role === 'professor' &&
     String(c.professor ?? '').split(',').map((s) => s.trim()).includes(state.me.name);
 // 성적 탭에서 고를 수 있는 과목: 관리자는 전체, 교수는 담당 과목만
 const gradeCourses = () => (isAdmin() ? state.courses : state.courses.filter(teaches));
-// 수강과목 목록에 보이는 과목: 관리자는 전체, 교수는 담당 과목, 학생은 수강신청한 과목
+// 수강과목 목록에 보이는 과목: 관리자는 전체, 교수는 담당 과목,
+//   학생은 현재 학기 이후(현재·미래 학기) 수강신청이 있는 과목 (지난 학기만 수강한 과목은 뺌)
 const myCourses = () => {
     if (isAdmin()) return state.courses;
     if (state.me?.role === 'professor') return state.courses.filter(teaches);
     if (state.me?.role !== 'student') return [];
-    const mine = new Set(state.myEnrollments.map((e) => e.courseCode));
+    const mine = new Set(state.myEnrollments.filter((e) => !isPastSemester(e.semester, state.currentSem)).map((e) => e.courseCode));
     return state.courses.filter((c) => mine.has(c.code));
 };
 
@@ -252,14 +268,17 @@ $('tabs').onclick = (e) => {
     if (b && !b.hidden) showTab(b.dataset.tab);
 };
 
-// 학생·과목 목록을 서버에서 받아 state 에 저장 (학생 목록은 서버가 역할에 맞게 걸러 줌)
+// 학생·과목 목록과 현재 학기를 서버에서 받아 state 에 저장 (학생 목록은 서버가 역할에 맞게 걸러 줌)
 // 학생이면 자기 수강신청도 받음 (서버가 자기 것만 줌) → myCourses 가 사용
 async function loadBase() {
-    [state.students, state.courses, state.myEnrollments] = await Promise.all([
+    let cur;
+    [state.students, state.courses, state.myEnrollments, cur] = await Promise.all([
         api('GET', '/api/students'),
         api('GET', '/api/courses'),
         state.me.role === 'student' ? api('GET', '/api/enrollments') : [],
+        api('GET', '/api/semester/current'),
     ]);
+    state.currentSem = cur.semester ?? '';
 }
 // 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 지금 탭을 다시 그림
 // 과목 페이지를 보던 중 그 과목을 볼 수 없게 되면(과목 삭제·권한 변경) 수강과목 탭으로 돌아감
@@ -297,6 +316,7 @@ function resetView() {
     state.accounts = [];
     state.enrollCtx = null;
     state.myEnrollments = [];
+    state.currentSem = '';
     state.courseCode = null;
     state.courseSem = null;
     state.postFilter = 'all';
@@ -565,7 +585,8 @@ function isExpired(due) {
 
 // 과목 페이지 그리기: 게시물과 학기 목록을 받고 학기를 정한 뒤 drawPosts 로 그림
 //   학기 목록: 관리자·교수는 게시물 학기 + 이 과목 수강신청 학기 + 신청 학기, 학생은 자기가 수강신청한 학기
-//   처음 보이는 학기: 이전 선택 → 게시물이 있는 가장 최근 학기 → (관리자·교수) 신청 학기 → 가장 최근 학기
+//     (visibleSemesters: 현재 학기는 항상 있고, 관리자 외에는 지난 학기가 없음)
+//   처음 보이는 학기: 이전 선택 → 게시물이 있는 가장 최근 학기 → (관리자·교수) 신청 학기(지난 학기면 제외) → 가장 최근 학기
 //   관리자·담당 교수는 아래 '평가 기준'·'출결' 영역도 그림 (같은 학기 목록, 평가 기준 처음 학기: 이전 선택 → 신청 학기 → 게시물 학기,
 //   출결 처음 학기: 이전 선택 → 평가 기준 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
 async function renderCoursePage() {
@@ -591,10 +612,11 @@ async function renderCoursePage() {
     if (staff) {
         const [list, settings] = staffInfo;
         open = settings.semester;
-        sems = sortSemesters([...posts.map((p) => p.semester), ...list.map((e) => e.semester), open]);
+        sems = visibleSemesters([...posts.map((p) => p.semester), ...list.map((e) => e.semester), open]);
+        if (isLockedSemester(open)) open = '';
         fallback = open || sems[0] || '';
     } else {
-        sems = sortSemesters(state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester));
+        sems = visibleSemesters(state.myEnrollments.filter((e) => e.courseCode === code).map((e) => e.semester));
         fallback = sems[0] || '';
     }
     if (!sems.includes(state.courseSem)) state.courseSem = sems.find((s) => posts.some((p) => p.semester === s)) ?? fallback;
@@ -604,7 +626,7 @@ async function renderCoursePage() {
     drawPosts();
 
     if (!manage) { state.assess = null; state.attend = null; return; }
-    if (state.assessSem && !sems.includes(state.assessSem)) {
+    if (state.assessSem && !sems.includes(state.assessSem) && !isLockedSemester(state.assessSem)) {
         sems.push(state.assessSem);
         sems.sort().reverse();
     }
@@ -1169,8 +1191,9 @@ async function renderEnrollStudent(open, admin) {
     const countOf = Object.fromEntries(counts.map((x) => [x.courseCode, x.count]));
     const inSem = mine.filter((e) => e.semester === sem).sort((a, b) => a.courseCode.localeCompare(b.courseCode));
     const applied = new Set(inSem.map((e) => e.courseCode));
-    // 학생은 신청 학기에만 신청·취소, 관리자는 모든 학기
-    const editable = admin || (open !== '' && sem === open);
+    // 학생은 신청 학기에만 신청·취소 (그 학기가 지난 학기면 불가), 관리자는 모든 학기
+    const locked = isLockedSemester(sem);
+    const editable = admin || (open !== '' && sem === open && !locked);
 
     const courseRows = state.courses.length ? state.courses.map((c) => `
         <tr>
@@ -1200,7 +1223,7 @@ async function renderEnrollStudent(open, admin) {
 
     const who = admin ? `${esc(studentName(sid))} (${esc(sid)}) 신청 내역` : '내 신청 내역';
     content.innerHTML = `
-        ${editable ? '' : `<p class="hint">${open ? `신청·취소는 수강신청 학기(${esc(open)})에만 할 수 있습니다` : '지금은 수강신청 기간이 아닙니다'}</p>`}
+        ${editable ? '' : `<p class="hint">${locked ? esc(pastSemesterMessage()) : open ? `신청·취소는 수강신청 학기(${esc(open)})에만 할 수 있습니다` : '지금은 수강신청 기간이 아닙니다'}</p>`}
         <h3 class="sub-title">개설 과목 · ${esc(sem)}</h3>
         <div class="table-wrap">
             <table><thead><tr><th>과목</th><th>교수</th><th>강의시간</th><th class="num">학점</th><th class="num">신청 / 정원</th><th></th></tr></thead>
@@ -1493,7 +1516,7 @@ async function renderMyReport() {
     $('myreport-body').innerHTML = progress + report;
 }
 
-// '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 평가 기준이 있는 것마다
+// '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 현재 학기 이후이고 평가 기준이 있는 것마다
 //   분류별 비율·내 점수 표(비율 0인 분류는 뺌)와 한 줄 요약
 //     최종 성적이 있으면 그 점수·등급
 //     없으면 estimateLine (점수가 없는 분류 중 출석이 아닌 칸에 예상 점수 입력칸, 입력하면 simLine 으로 다시 계산, 서버로 보내지 않음)
@@ -1507,8 +1530,9 @@ async function myAssessmentsHtml() {
         myAttendance(),
     ]);
     const combos = new Map();
-    [...state.myEnrollments, ...scores, ...attend.summaries.values()].forEach((e) =>
-        combos.set(JSON.stringify([e.courseCode, e.semester]), { code: e.courseCode, sem: e.semester }));
+    [...state.myEnrollments, ...scores, ...attend.summaries.values()]
+        .filter((e) => !isPastSemester(e.semester, state.currentSem))
+        .forEach((e) => combos.set(JSON.stringify([e.courseCode, e.semester]), { code: e.courseCode, sem: e.semester }));
     const cache = new Map();
     const list = await Promise.all([...combos.values()].map(async (x) => {
         const { mode, items } = await assessmentsOf(x.code, x.sem, cache);
@@ -1626,7 +1650,8 @@ const courseOptions = () => gradeCourses().map((c) => ({ value: c.code, label: `
 // 성적 표 그리기. 필터 선택 상자를 최신 목록으로 채우고, 고른 조건을 쿼리로 붙여 성적을 받아옴
 // 수정/삭제 버튼에는 성적을 구분하는 키 [학번, 과목코드, 학기] 를 JSON 으로 담아 둠
 // 평가 항목으로 계산되는 (과목, 학기) 성적은 수정·삭제 대신 '평가 항목' 표시 (서버도 409 로 막음)
-//   표에 나온 (과목, 학기) 조합마다 /api/assessments 를 한 번씩만 부름
+// 관리자 외에는 지난 학기 성적의 수정·삭제 대신 '지난 학기' 표시 (서버도 403 으로 막음)
+//   표에 나온 (과목, 학기) 조합마다 /api/assessments 를 한 번씩만 부름 (잠긴 지난 학기는 부르지 않음)
 async function renderGrades() {
     const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
     const semesters = await semesterList();
@@ -1642,11 +1667,14 @@ async function renderGrades() {
     const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
     const cache = new Map();
-    const assessed = await Promise.all(grades.map((g) => assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
+    const assessed = await Promise.all(grades.map((g) => isLockedSemester(g.semester) ? false
+        : assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
 
     $('grade-body').innerHTML = grades.length ? grades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
-        const actions = assessed[i]
+        const actions = isLockedSemester(g.semester)
+            ? '<span class="tag" title="지난 학기 성적은 관리자만 고칠 수 있습니다">지난 학기</span>'
+            : assessed[i]
             ? '<span class="tag" title="평가 항목 점수로 자동 계산되는 성적입니다 (과목 페이지에서 항목 점수를 입력하세요)">평가 항목</span>'
             : `<button class="link" data-act="edit" data-k='${key}'>수정</button>
                 <button class="link danger" data-act="del" data-k='${key}'>삭제</button>`;
@@ -1698,6 +1726,7 @@ function bindGradeMode() {
 // 성적 폼 값 검사 (서버와 같은 문구): 잘못되면 이유, 괜찮으면 빈 문자열
 const validateGrade = (d) => {
     if (!SEMESTER_RE.test((d.semester ?? '').trim())) return SEMESTER_RULES;
+    if (isLockedSemester(d.semester.trim())) return pastSemesterMessage();
     if (d.mode === 'letter') {
         return GRADE_LETTERS.includes(d.letter) ? '' : '지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)';
     }

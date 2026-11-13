@@ -1,4 +1,5 @@
 #include "server.h"
+#include "semester.h"
 #include "statistics.h"
 #include "course_post.h"
 #include "retake.h"
@@ -22,6 +23,8 @@
 using json = nlohmann::json;
 
 namespace {
+
+constexpr const char* kPastSemester = "지난 학기는 접근할 수 없습니다";
 
 constexpr const char* kGradeRules =
     "성적 정보가 올바르지 않습니다 (학번 숫자 8자리, 과목코드 숫자 6자리, "
@@ -405,6 +408,25 @@ int parsePostId(const std::string& text) {
     } catch (...) {
         return 0;
     }
+}
+
+// 지난 학기 접근 거부 메시지에 쓰는 현재 학기 (설정값이 없으면 오늘 날짜로 계산)
+std::string currentSemester(const GradeManager& gm) {
+    return semester::current(gm.getEnrollmentSemester(), std::time(nullptr));
+}
+
+bool isPastSemester(const GradeManager& gm, const std::string& sem) {
+    return semester::isPast(sem, currentSemester(gm));
+}
+
+// 비관리자가 지난 학기를 대상으로 하면 403 을 채우고 true (관리자·빈 학기·미래 학기는 false)
+bool rejectPastSemester(const GradeManager& gm, const Account& account,
+                        const std::string& sem, httplib::Response& res) {
+    if (account.role == "admin" || sem.empty()) return false;
+    const std::string current = currentSemester(gm);
+    if (!semester::isPast(sem, current)) return false;
+    setError(res, 403, std::string(kPastSemester) + " (현재 학기: " + current + ")");
+    return true;
 }
 
 }  // namespace
@@ -992,6 +1014,13 @@ void Server::run() {
                         "application/json; charset=utf-8");
     });
 
+    // 현재 학기 (설정된 수강신청 학기, 없으면 오늘 날짜 기준)
+    svr.Get("/api/semester/current", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!requireRole(req, res, {"admin", "professor", "student"})) return;
+        setJson(res, 200, json{{"semester", currentSemester(gm)}});
+    });
+
     // 고정 경로를 /api/enrollments보다 먼저 등록
     svr.Get("/api/enrollments/counts", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
@@ -1054,6 +1083,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
+        if (rejectPastSemester(gm, *account, enrollment.semester, res)) return;
         if (account->role == "student") {
             const std::string openSemester = gm.getEnrollmentSemester();
             if (openSemester.empty()) {
@@ -1144,6 +1174,7 @@ void Server::run() {
                 setError(res, 403, "권한이 없습니다");
                 return;
             }
+            if (rejectPastSemester(gm, *account, semester, res)) return;
             const std::string openSemester = gm.getEnrollmentSemester();
             if (openSemester.empty()) {
                 setError(res, 409, "수강신청 기간이 아닙니다");
@@ -1402,6 +1433,7 @@ void Server::run() {
         for (const CoursePost& post : gm.getPosts()) {
             if (post.courseCode != code) continue;
             if (account->role == "student" && !semesters.count(post.semester)) continue;
+            if (account->role != "admin" && isPastSemester(gm, post.semester)) continue;
             posts.push_back(post);
         }
         std::sort(posts.begin(), posts.end(), [](const CoursePost& a, const CoursePost& b) {
@@ -1436,6 +1468,7 @@ void Server::run() {
             setError(res, 400, kPostRules);
             return;
         }
+        if (rejectPastSemester(gm, *account, post.semester, res)) return;
         post.courseCode = code;
         post.author = account->username;
         post.createdAt = nowText();
@@ -1477,6 +1510,7 @@ void Server::run() {
             setError(res, 404, "없는 게시물입니다: " + idText);
             return;
         }
+        if (rejectPastSemester(gm, *account, existing->semester, res)) return;
         json body;
         if (!parseJsonBody(req, body, res)) return;
 
@@ -1486,6 +1520,7 @@ void Server::run() {
             setError(res, 400, kPostRules);
             return;
         }
+        if (rejectPastSemester(gm, *account, input.semester, res)) return;
         CoursePost post = *existing;
         post.semester = input.semester;
         post.category = input.category;
@@ -1526,6 +1561,7 @@ void Server::run() {
             setError(res, 404, "없는 게시물입니다: " + idText);
             return;
         }
+        if (rejectPastSemester(gm, *account, existing->semester, res)) return;
         if (!gm.removePost(id) || !gm.save()) {
             setError(res, 500, "게시물 저장에 실패했습니다");
             return;
@@ -1557,6 +1593,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
+        if (rejectPastSemester(gm, *account, grade.semester, res)) return;
         const int year = thisYear();
         if (!isSemesterInRange(grade.studentId, grade.semester, year)) {
             const int admission = admissionYear(grade.studentId);
@@ -1624,6 +1661,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
+        if (rejectPastSemester(gm, *account, grade.semester, res)) return;
 
         // 5. 학생의 입학년도에 맞는 학기인지 확인
         const int year = thisYear();
@@ -1743,6 +1781,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
+        if (rejectPastSemester(gm, *account, grade.semester, res)) return;
         if (gm.hasAssessments(grade.courseCode, grade.semester)) {
             setError(res, 409, kAssessedCourse);
             return;
@@ -1771,6 +1810,7 @@ void Server::run() {
             setError(res, 403, "권한이 없습니다");
             return;
         }
+        if (rejectPastSemester(gm, *account, semester, res)) return;
         if (gm.hasAssessments(courseCode, semester)) {
             setError(res, 409, kAssessedCourse);
             return;
@@ -1789,7 +1829,8 @@ void Server::run() {
     // 평가 기준 조회 (과목·학기별 6개 분류 비율과 평가 방식)
     svr.Get("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
-        if (!requireRole(req, res, {"admin", "professor", "student"})) return;
+        const Account* account = requireRole(req, res, {"admin", "professor", "student"});
+        if (!account) return;
         const std::string courseCode = req.get_param_value("courseCode");
         const std::string semester = req.get_param_value("semester");
         if (courseCode.empty() || semester.empty()) {
@@ -1800,6 +1841,7 @@ void Server::run() {
             setError(res, 400, kSemesterRules);
             return;
         }
+        if (account->role == "professor" && rejectPastSemester(gm, *account, semester, res)) return;
         if (!gm.findCourse(courseCode)) {
             setError(res, 404, "없는 과목입니다: " + courseCode);
             return;
@@ -1835,6 +1877,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, semester, res)) return;
 
         std::map<std::string, int> weights;
         for (auto it = weightsIt->begin(); it != weightsIt->end(); ++it) {
@@ -1908,6 +1951,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, semester, res)) return;
         if (!gm.removeGradingScheme(courseCode, semester)) {
             setError(res, 404, "평가 기준이 없습니다");
             return;
@@ -1939,6 +1983,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, semester, res)) return;
         for (const AssessmentScore& score : gm.getAssessmentScores(courseCode, semester)) {
             arr.push_back(assessmentScoreJson(score));
         }
@@ -1968,6 +2013,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, score.courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, score.semester, res)) return;
         if (!gm.findStudent(score.studentId)) {
             setError(res, 404, "없는 학생입니다: " + score.studentId);
             return;
@@ -2017,6 +2063,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, semester, res)) return;
         if (!gm.findStudent(studentId)) {
             setError(res, 404, "없는 학생입니다: " + studentId);
             return;
@@ -2065,6 +2112,7 @@ void Server::run() {
                 return;
             }
             if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+            if (rejectPastSemester(gm, *account, semester, res)) return;
             records = gm.getAttendanceByCourse(courseCode, semester);
         }
 
@@ -2124,6 +2172,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, record.courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, record.semester, res)) return;
         if (!gm.findStudent(record.studentId)) {
             setError(res, 404, "없는 학생입니다: " + record.studentId);
             return;
@@ -2168,6 +2217,7 @@ void Server::run() {
             return;
         }
         if (!checkCourseAccess(*account, gm, courseCode, res)) return;
+        if (rejectPastSemester(gm, *account, semester, res)) return;
         if (!gm.findStudent(studentId)) {
             setError(res, 404, "없는 학생입니다: " + studentId);
             return;

@@ -45,6 +45,13 @@
 //   GET    /api/export/student/:id    학생 성적표 CSV 다운로드 (admin, student 본인)
 //   GET    /api/export/course/:code   과목 성적표 CSV 다운로드 (admin, professor 담당 과목만)
 //
+//   GET    /api/semester/current      현재 학기 {"semester"} (로그인). 설정된 수강신청 학기, 없으면 오늘 날짜 기준
+//   지난 학기 규칙: 현재 학기보다 앞선 학기는 admin 외(professor·student)에게 닫혀 있다.
+//     쓰기(게시물·성적·평가 항목·항목 점수·출결·수강신청)와 교수의 평가 항목·항목 점수·출결 조회,
+//     게시물 조회(지난 학기 게시물은 걸러냄)가 대상이며, 막히면 403 "지난 학기는 접근할 수 없습니다 (현재 학기: ...)".
+//     성적·통계·내보내기·수강신청 조회와 학생 본인의 항목 점수·출결·평가 항목 조회는 지난 학기도 허용.
+//     검사 순서: 인증·권한 -> 지난 학기(403) -> 기존 검증(400/404/409)
+//
 //   GET    /api/enrollment/settings   수강신청 학기 {"semester"} (로그인)
 //   PUT    /api/enrollment/settings   수강신청 학기 설정 (admin, ""이면 신청 마감)
 //   GET    /api/enrollments           수강신청 목록 [{studentId,courseCode,semester,hasGrade}] (?studentId= ?courseCode= ?semester=)
