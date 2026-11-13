@@ -1275,6 +1275,41 @@ $('attend-body').onclick = (e) => {
     if (b) toggleAttend(b);
 };
 
+// ───── 강의시간 ─────
+
+// 강의시간 문자열 → [{day, start, end}] (day: '월'~'일' 한 글자, 교시 start~end).
+// 서버 src/course.cpp 의 parseSlot·splitSlots 와 같은 규칙: 칸은 공백·쉼표 구분,
+// 한 칸 = 요일 + (n) 또는 (n~m), 교시 1~30 (최대 두 자리), 잘못된 칸·빈 문자열은 무시
+function parseSchedule(str) {
+    const slots = [];
+    for (const text of String(str ?? '').split(/[ ,]/)) {
+        const m = /^([월화수목금토일])\((\d{1,2})(?:~(\d{1,2}))?\)$/.exec(text);
+        if (!m) continue;
+        const start = Number(m[2]);
+        const end = m[3] === undefined ? start : Number(m[3]);
+        if (start < 1 || end > 30 || start > end) continue;
+        slots.push({ day: m[1], start, end });
+    }
+    return slots;
+}
+
+// 두 강의시간(문자열)의 겹침 → [{day, start, end}] (겹치는 요일·교시 구간, 없으면 빈 배열).
+// 같은 요일에 교시 구간이 하나라도 겹치면 겹침 (서버 schedulesOverlap 와 같음). 빈 강의시간은 겹치지 않음
+function scheduleConflict(a, b) {
+    const slotsB = parseSchedule(b);
+    const spans = [];
+    for (const x of parseSchedule(a)) {
+        for (const y of slotsB) {
+            if (x.day !== y.day || x.start > y.end || y.start > x.end) continue;
+            spans.push({ day: x.day, start: Math.max(x.start, y.start), end: Math.min(x.end, y.end) });
+        }
+    }
+    return spans;
+}
+
+// 겹침 구간 표시 글자: 월(3~4교시) / 월(3교시)
+const formatSpan = (s) => `${s.day}(${s.start === s.end ? s.start : `${s.start}~${s.end}`}교시)`;
+
 // ───────── 수강신청 ─────────
 
 // 수강신청 탭 그리기. 맨 위에 신청 학기(또는 기간 아님)를 보이고 역할별 화면으로 나눔
@@ -1378,6 +1413,19 @@ async function renderEnrollStudent(open, admin, mine, latestGradeSemester) {
     const locked = isLockedSemester(sem);
     const editable = admin || (open !== '' && sem === open && !locked);
 
+    const course = (code) => state.courses.find((c) => c.code === code);
+    // 선택 학기에 이미 신청한 과목들의 강의시간 (겹침 검사용). 서버 schedulesOverlap 가 최종 방어선
+    const appliedCourses = inSem.map((e) => course(e.courseCode)).filter(Boolean);
+    const applyCell = (c) => {
+        const btn = (off) => `<button class="link" data-act="apply" data-code="${esc(c.code)}" ${off ? 'disabled' : ''}>신청</button>`;
+        if (applied.has(c.code) || !editable) return btn(true);
+        const hits = appliedCourses.map((o) => ({ o, spans: scheduleConflict(c.schedule, o.schedule) })).filter((h) => h.spans.length);
+        if (!hits.length) return btn(false);
+        const label = hits[0].o.name + (hits.length > 1 ? ` 외 ${hits.length - 1}` : '');
+        const tip = hits.map((h) => `${h.o.name}: ${h.spans.map(formatSpan).join(', ')} 겹침`).join('\n');
+        return `${btn(true)} <span class="badge overlap" title="${esc(tip)}">${esc(label)} 과목과 겹침</span>`;
+    };
+
     const courseRows = state.courses.length ? state.courses.map((c) => `
         <tr>
             <td><b>${esc(c.name)}</b> <span class="hint">${esc(c.code)}</span></td>
@@ -1385,11 +1433,9 @@ async function renderEnrollStudent(open, admin, mine, latestGradeSemester) {
             <td>${esc(c.schedule) || '-'}</td>
             <td class="num">${esc(c.credit)}</td>
             <td class="num">신청 ${esc(countOf[c.code] ?? 0)} / ${capacityText(c)}</td>
-            <td class="actions"><button class="link" data-act="apply" data-code="${esc(c.code)}"
-                ${applied.has(c.code) || !editable ? 'disabled' : ''}>신청</button></td>
+            <td class="actions">${applyCell(c)}</td>
         </tr>`).join('') : emptyRow(6, '등록된 과목이 없습니다');
 
-    const course = (code) => state.courses.find((c) => c.code === code);
     const totalCredits = inSem.reduce((t, e) => t + (Number(course(e.courseCode)?.credit) || 0), 0);
     const mineRows = inSem.length ? inSem.map((e) => {
         const c = course(e.courseCode);
@@ -1614,12 +1660,14 @@ function gpaChartSvg(points) {
 //   + 학기별 성적 목록 + 학사경고 + CSV 내려받기
 // 성적표 창(관리자)과 내 성적 페이지(학생)가 같이 씀. s = {id, name}
 // 평점·학점은 서버 /api/stats/summary/:id (gpaSummary) 값을 그대로 씀
+//   summaryReq: 이미 보낸 summary 요청 (내 성적 화면이 같은 값을 시뮬레이션에도 써서 한 번만 받으려고 넘김, 없으면 여기서 받음)
+//   학기별 과목 성적은 학기마다 접었다 펼치는 <details class="fold"> (기본 접힘, summary = 학기 · 학기 GPA · 등록 학점)
 //   (재수강으로 지워진 성적·없는 과목은 서버가 이미 뺌, 계산 학점이 0 이면 gpa null = 등록된 성적 없음)
-async function studentReportHtml(s) {
+async function studentReportHtml(s, summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(s.id))) {
     const id = encodeURIComponent(s.id);
     const [grades, summary, warnings] = await Promise.all([
         api('GET', '/api/grades?studentId=' + id),
-        api('GET', '/api/stats/summary/' + id),
+        summaryReq,
         api('GET', '/api/stats/warnings/' + id),
     ]);
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.courseCode.localeCompare(b.courseCode));
@@ -1647,23 +1695,21 @@ async function studentReportHtml(s) {
         ${gpaChartSvg(summary.semesters.filter((x) => x.credits > 0))}`
         : `<p class="hint">${grades.length ? '평점에 들어가는 성적이 없습니다 (재수강으로 지워진 성적만 있음)' : '등록된 성적이 없습니다'}</p>`;
 
-    const semHtml = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
+    const semItems = sortSemesters(grades.map((g) => g.semester)).map((sem) => {
         const info = semInfo[sem];
         const rows = grades.filter((g) => g.semester === sem).map((g) => `
             <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
             <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
-        const semesterCredits = info?.credits ?? '-';
         return `
-            <h3 class="sub-title">${esc(sem)}</h3>
-            <div class="semester-summary-line">
-                <span class="semester-gpa">GPA ${semGpa(info)}</span>
-                <span class="semester-credit">등록 학점 ${esc(semesterCredits)}학점</span>
-            </div>
-            <div class="table-wrap">
-                <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
-            </div>`;
+            <details class="fold" data-key="sem:${esc(sem)}">
+                <summary>${esc(sem)} · 학기 GPA ${semGpa(info)} · 등록 학점 ${esc(info?.credits ?? '-')}</summary>
+                <div class="table-wrap">
+                    <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
+                </div>
+            </details>`;
     }).join('');
+    const semHtml = semItems ? `<h3 class="sub-title">학기별 과목 성적</h3>${semItems}` : '';
     const warnHtml = warnings.length ? `
         <div class="table-wrap">
             <table><thead><tr><th>학기</th><th>사유</th><th class="num">평점</th><th class="num">신청 학점</th></tr></thead>
@@ -1701,20 +1747,145 @@ async function studentReportHtml(s) {
 
 // 학생 성적표 창 (보기 전용)
 async function showStudentReport(s) {
-    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: await studentReportHtml(s) });
+    openDialog({ title: `${s.name} 성적표`, okText: '', bodyHtml: foldBarHtml() + await studentReportHtml(s) });
+    syncFoldButton($('dlg-body'));
 }
 
 // ───────── 내 성적 (학생) ─────────
 
-// 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
+// 접었다 펼치는 영역(details.fold)을 한꺼번에 여닫는 버튼 줄. 접을 영역이 없으면 syncFoldButton 이 줄을 숨김
+const foldBarHtml = () => '<div class="fold-bar" hidden><button type="button" data-fold-toggle>모두 펼치기</button></div>';
+const foldRoot = (el) => el.closest('#myreport-body, #dlg-body');
+// 버튼 글자를 지금 상태에 맞춤: 하나라도 닫혀 있으면 '모두 펼치기', 모두 열려 있으면 '모두 접기'
+function syncFoldButton(root) {
+    const bar = root?.querySelector('.fold-bar');
+    if (!bar) return;
+    const all = [...root.querySelectorAll('details.fold')];
+    bar.hidden = !all.length;
+    bar.querySelector('button').textContent = all.some((d) => !d.open) ? '모두 펼치기' : '모두 접기';
+}
+document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-fold-toggle]');
+    const root = btn && foldRoot(btn);
+    if (!root) return;
+    const all = [...root.querySelectorAll('details.fold')];
+    const open = all.some((d) => !d.open);
+    all.forEach((d) => { d.open = open; });
+    syncFoldButton(root);
+});
+// details 는 toggle 이벤트가 위로 올라가지 않아 capture 로 받음: 시뮬레이션 상자 펼침 상태 기억, 접는 영역이면 버튼 글자 갱신
+document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (!(d instanceof HTMLDetailsElement)) return;
+    if (d.id === 'sim-box') mySim.open = d.open;
+    else if (d.classList.contains('fold')) syncFoldButton(foldRoot(d));
+}, true);
+
+// ── 목표 GPA 시뮬레이션 (서버에 저장하지 않고 화면에서만 계산) ──
+
+const GPA_MAX = 4.5;
+const GPA_EPS = 1e-9;
+// 등급 점수표 (낮은 점수부터, F = 0)
+const GRADE_POINTS = [...Object.entries(LETTER_POINT), ['F', 0]].sort((a, b) => a[1] - b[1]);
+const gradePointText = ([letter, p]) => `${letter}(${p.toFixed(1)})`;
+
+// 목표 누적 GPA 를 위해 앞으로 필요한 평균 평점 (순수 함수)
+//   gpa·credits: 지금 누적 평점·계산 학점 (gpa 가 null 이거나 credits 가 0 이면 성적 없음 = 학점 0)
+//   target: 목표 누적 GPA, credit: 앞으로 들을 학점 (1 이상)
+//   R = (target × (C + credit) − G × C) / credit
+//   kind: 'impossible' (R > 4.5, maxGpa = 전부 A+ 를 받았을 때 누적), 'done' (R ≤ 0), 'need'
+//   band: kind 가 'need' 일 때 R 이 놓인 등급 구간 ('B+(3.5) ~ A0(4.0) 사이', 정확히 등급 점수면 'A0(4.0) 이상')
+function targetGpaNeed(gpa, credits, target, credit) {
+    const C = typeof gpa === 'number' && credits > 0 ? credits : 0;
+    const G = C > 0 ? gpa : 0;
+    const R = (target * (C + credit) - G * C) / credit;
+    const maxGpa = (G * C + GPA_MAX * credit) / (C + credit);
+    if (R > GPA_MAX + GPA_EPS) return { kind: 'impossible', R, maxGpa, band: '' };
+    if (R <= GPA_EPS) return { kind: 'done', R, maxGpa, band: '' };
+    const exact = GRADE_POINTS.find(([, p]) => Math.abs(p - R) < GPA_EPS);
+    const lower = [...GRADE_POINTS].reverse().find(([, p]) => p < R);
+    const upper = GRADE_POINTS.find(([, p]) => p > R);
+    const band = exact ? `${gradePointText(exact)} 이상` : `${gradePointText(lower)} ~ ${gradePointText(upper)} 사이`;
+    return { kind: 'need', R, maxGpa, band };
+}
+// targetGpaNeed 결과 문구 (HTML). gpa = 지금 누적 평점 (null 이면 '-'), credit = 앞으로 들을 학점
+function targetGpaHtml(res, gpa, credit) {
+    if (res.kind === 'impossible') return `<span class="sim-bad">불가능 — 전부 A+ (${GPA_MAX}) 를 받아도 누적 ${fmt(res.maxGpa)}</span>`;
+    if (res.kind === 'done') return `<span class="sim-good">이미 달성했습니다 (현재 ${fmt(gpa)})</span>`;
+    return `앞으로 ${esc(credit)}학점 평균 평점 <b>${fmt(res.R)}</b> 이상 필요 <span class="hint">· ${esc(res.band)}</span>`;
+}
+
+// 시뮬레이션 상자 입력값·펼침 상태 (화면을 다시 그려도 유지, 다른 학생으로 로그인하면 초기화)
+//   credits: null = 사용자가 건드리지 않음 (기본값 = 현재 학기 신청 학점 합)
+const mySim = { owner: '', target: '', credits: null, open: false };
+
+// 내 성적 화면 맨 위 '시뮬레이션' 상자 (접힘 기본). 안에 sim-section 을 하나씩 추가
+//   summary: 서버 /api/stats/summary/:id 응답 (gpa, credits)
+function simBoxHtml(summary) {
+    if (mySim.owner !== state.me.studentId) Object.assign(mySim, { owner: state.me.studentId, target: '', credits: null, open: false });
+    const hasGpa = typeof summary.gpa === 'number' && summary.credits > 0;
+    const planned = state.myEnrollments.filter((e) => e.semester === state.currentSem)
+        .reduce((t, e) => t + (Number(state.courses.find((c) => c.code === e.courseCode)?.credit) || 0), 0);
+    const credits = mySim.credits ?? (planned > 0 ? String(planned) : '');
+    return `
+        <details id="sim-box"${mySim.open ? ' open' : ''}>
+            <summary>시뮬레이션</summary>
+            <section class="sim-section" id="sim-target" data-gpa="${hasGpa ? esc(summary.gpa) : ''}" data-credits="${hasGpa ? esc(summary.credits) : 0}">
+                <h4 class="assess-head">목표 GPA</h4>
+                <p class="hint">현재 누적 GPA ${hasGpa ? fmt(summary.gpa) : '-'} · 계산 학점 ${hasGpa ? esc(summary.credits) : 0} · 입력값은 서버에 저장하지 않고 화면에서만 계산합니다</p>
+                <div class="sim-row">
+                    <label>목표 누적 GPA <input type="number" class="sim-field" id="sim-target-gpa" min="0" max="4.5" step="any" placeholder="0~4.5" value="${esc(mySim.target)}"></label>
+                    <label>앞으로 들을 학점 <input type="number" class="sim-field" id="sim-target-credits" min="1" step="1" placeholder="학점" value="${esc(credits)}"></label>
+                </div>
+                <p class="sim-result"></p>
+            </section>
+        </details>`;
+}
+// 목표 GPA 칸 두 개를 읽어 결과 줄을 다시 계산. 범위 밖·숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스
+function updateSimTarget(sec) {
+    const parse = (input, valid) => {
+        const raw = input.value.trim();
+        const n = Number(raw);
+        const ok = raw !== '' && Number.isFinite(n) && valid(n);
+        input.classList.toggle('invalid', !ok && (raw !== '' || input.validity.badInput));
+        return ok ? n : null;
+    };
+    const target = parse(sec.querySelector('#sim-target-gpa'), (n) => n >= 0 && n <= GPA_MAX);
+    const credit = parse(sec.querySelector('#sim-target-credits'), (n) => Number.isInteger(n) && n >= 1);
+    const out = sec.querySelector('.sim-result');
+    if (target === null || credit === null) {
+        out.innerHTML = '<span class="hint">목표 GPA (0~4.5) 와 앞으로 들을 학점 (1 이상 정수) 을 입력하면 필요한 평균 평점을 계산합니다</span>';
+        return;
+    }
+    const gpa = sec.dataset.gpa === '' ? null : Number(sec.dataset.gpa);
+    out.innerHTML = targetGpaHtml(targetGpaNeed(gpa, Number(sec.dataset.credits), target, credit), gpa, credit);
+}
+$('tab-myreport').addEventListener('input', (e) => {
+    const input = e.target.closest('#sim-target input');
+    if (!input) return;
+    if (input.id === 'sim-target-gpa') mySim.target = input.value;
+    else mySim.credits = input.value;
+    updateSimTarget(document.querySelector('#sim-target'));
+});
+
+// 내 성적 화면: 접기 버튼 줄 + 시뮬레이션 상자 + '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
+//   요약(GPA·학기별 평점·그래프·학사경고)은 그대로 보이고, 과목 단위(진행 중 과목 카드·학기별 과목 성적)는 접힌 줄 (눌러서 펼침)
+//   다시 그릴 때 펼쳐 둔 영역(data-key)은 그대로 펼침
 async function renderMyReport() {
     const seq = renderSeq;
-    const [progress, report] = await Promise.all([
+    const summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(state.me.studentId));
+    const [progress, report, summary] = await Promise.all([
         myAssessmentsHtml(),
-        studentReportHtml({ id: state.me.studentId, name: state.me.name }),
+        studentReportHtml({ id: state.me.studentId, name: state.me.name }, summaryReq),
+        summaryReq,
     ]);
     if (seq !== renderSeq) return;
-    $('myreport-body').innerHTML = progress + report;
+    const body = $('myreport-body');
+    const opened = new Set([...body.querySelectorAll('details.fold[open]')].map((d) => d.dataset.key));
+    body.innerHTML = foldBarHtml() + simBoxHtml(summary) + progress + report;
+    body.querySelectorAll('details.fold').forEach((d) => { d.open = opened.has(d.dataset.key); });
+    updateSimTarget(document.querySelector('#sim-target'));
+    syncFoldButton(body);
 }
 
 // '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 현재 학기 이후이고 평가 기준이 있는 것마다
@@ -1745,16 +1916,22 @@ async function myAssessmentsHtml() {
     if (!shown.length) return attendError ? `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}</div>` : '';
 
     const cards = shown.map(({ code, sem, mode, items }) => {
-        const head = `<h4 class="assess-head">${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span></h4>`;
         const att = attend.summaries.get(JSON.stringify([code, sem]));
-        if (!items.length) return head + `<p class="attend-line">${attendSummaryLine(att)}</p>`;
+        // 한 과목 = 접었다 펼치는 카드. summary = 과목명 + 한 줄 요약(fold-line, 예상 점수를 입력하면 갱신)
+        const card = (line, bodyHtml) => `
+            <details class="fold" data-key="c:${esc(code)}|${esc(sem)}">
+                <summary>${esc(courseName(code))} <span class="hint">${esc(code)} · ${esc(sem)}</span> · <span class="fold-line">${line}</span></summary>
+                ${bodyHtml}
+            </details>`;
+        if (!items.length) return card(`출석 점수 <b>${fmt(att.score)}</b>`, `<p class="attend-line">${attendSummaryLine(att)}</p>`);
         const cols = items.filter((a) => a.weight > 0);
         const mine = (name) => scores.find((s) => s.courseCode === code && s.semester === sem && s.name === name);
         const final = grades.find((g) => g.courseCode === code && g.semester === sem);
         const simulate = (a) => !final && !mine(a.name) && a.name !== ATTEND_ITEM;
-        const line = final
-            ? `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}`
-            : estimateLine(cols.map((a) => ({ weight: a.weight, score: mine(a.name)?.score ?? null })), mode, cols.some(simulate));
+        const parts = cols.map((a) => ({ weight: a.weight, score: mine(a.name)?.score ?? null }));
+        const finalLine = final ? `최종 성적 <b>${esc(round2(final.score))}점</b> ${letterBadge(final.letter)}` : '';
+        const line = finalLine || estimateLine(parts, mode, cols.some(simulate));
+        const shortLine = finalLine || estimateLine(parts, mode, false, true);
         const rows = cols.map((a) => {
             const s = mine(a.name);
             const cell = s ? esc(s.score)
@@ -1763,14 +1940,13 @@ async function myAssessmentsHtml() {
             <tr data-w="${esc(a.weight)}"${s ? ` data-score="${esc(s.score)}"` : ''}>
                 <td>${esc(a.name)}</td><td class="num">${esc(a.weight)}</td><td class="num">${cell}</td></tr>`;
         }).join('');
-        return `
-            ${head}
+        return card(shortLine, `
             <div class="table-wrap">
                 <table data-mode="${esc(mode)}"><thead><tr><th>항목</th><th class="num">비율(%)</th><th class="num">내 점수</th></tr></thead>
                 <tbody>${rows}</tbody>
                 <tfoot><tr><td colspan="3" class="estimate sim-line">${line}</td></tr>
                 ${att ? `<tr><td colspan="3" class="estimate">${attendSummaryLine(att)}</td></tr>` : ''}</tfoot></table>
-            </div>`;
+            </div>`);
     }).join('');
     return `<div class="report"><h3 class="sub-title">진행 중 과목 (평가 항목)</h3>${attendError}${cards}</div>`;
 }
@@ -1780,7 +1956,8 @@ async function myAssessmentsHtml() {
 //   모두 차면 예상 최종 = Σ(점수×비율) / 100 (소수 둘째 자리 반올림), 점수 기준 등급 (scoreToLetter 경계)
 //   빈칸이 남으면 현재까지 환산 = Σ(점수×비율) / Σ(점수가 있는 분류의 비율), canSimulate(예상 점수 칸이 있음)면 빈칸 안내를 붙임
 //   상대평가 과목이면 실제 등급은 순위로 정해진다는 안내를 덧붙임
-function estimateLine(parts, mode, canSimulate) {
+//   short: 접힌 카드 머리글(summary)용 짧은 줄 (안내 문구 없이 환산·예상 최종과 등급만)
+function estimateLine(parts, mode, canSimulate, short = false) {
     const done = parts.filter((p) => p.score !== null);
     const total = parts.reduce((t, p) => t + p.weight, 0);
     const doneWeight = done.reduce((t, p) => t + p.weight, 0);
@@ -1788,24 +1965,26 @@ function estimateLine(parts, mode, canSimulate) {
     let line;
     if (parts.length && done.length === parts.length) {
         const est = round2(sum / 100);
-        line = `예상 최종 <b>${est.toFixed(2)}점</b> (점수 기준 등급 ${letterBadge(scoreToLetter(est))}, 미확정)`;
+        line = short ? `예상 최종 <b>${est.toFixed(2)}점</b> (${letterBadge(scoreToLetter(est))})`
+            : `예상 최종 <b>${est.toFixed(2)}점</b> (점수 기준 등급 ${letterBadge(scoreToLetter(est))}, 미확정)`;
     } else {
         if (doneWeight > 0) {
             const est = round2(sum / doneWeight);
-            line = `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
+            line = short ? `현재까지 환산 <b>${est}점</b> (${letterBadge(scoreToLetter(est))})`
+                : `현재까지 환산 <b>${est}점</b> (예상 등급 ${letterBadge(scoreToLetter(est))}, 미확정)
                 <span class="hint">· 점수가 입력된 비율 ${doneWeight} / ${total}</span>`;
         } else {
             line = '<span class="hint">아직 입력된 점수가 없습니다</span>';
         }
-        if (canSimulate) line += ' <span class="hint">· 빈칸에 예상 점수를 넣으면 최종 점수를 계산합니다</span>';
+        if (canSimulate && !short) line += ' <span class="hint">· 빈칸에 예상 점수를 넣으면 최종 점수를 계산합니다</span>';
     }
-    if (mode === 'relative') line += ` <span class="hint">· 상대평가 과목이라 실제 등급은 수강생 순위로 정해집니다 (${RELATIVE_RULES})</span>`;
+    if (mode === 'relative' && !short) line += ` <span class="hint">· 상대평가 과목이라 실제 등급은 수강생 순위로 정해집니다 (${RELATIVE_RULES})</span>`;
     return line;
 }
 
 // 예상 점수 칸이 있는 과목 표 하나의 요약 줄을 화면 값으로 다시 계산 (받은 점수 = 행의 data-score, 예상 점수 = 입력칸)
-//   0~100 밖이거나 숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스
-function simLine(table) {
+//   0~100 밖이거나 숫자가 아닌 입력은 계산에서 빼고 칸에 invalid 클래스. short 는 estimateLine 의 short
+function simLine(table, short = false) {
     const parts = [...table.querySelectorAll('tbody tr[data-w]')].map((tr) => {
         const weight = Number(tr.dataset.w);
         const input = tr.querySelector('input.sim-input');
@@ -1816,14 +1995,17 @@ function simLine(table) {
         input.classList.toggle('invalid', !ok && (raw !== '' || input.validity.badInput));
         return { weight, score: ok ? n : null };
     });
-    return estimateLine(parts, table.dataset.mode, true);
+    return estimateLine(parts, table.dataset.mode, true, short);
 }
-// 예상 점수를 입력할 때마다 그 과목 요약 줄만 다시 그림 (서버로 보내지 않고, 화면을 다시 그리면 사라짐)
+// 예상 점수를 입력할 때마다 그 과목 요약 줄(표 아래 줄 + 카드 머리글)만 다시 그림
+//   (서버로 보내지 않고, 화면을 다시 그리면 사라짐. 카드를 다시 만들지 않으므로 펼침 상태는 그대로)
 $('tab-myreport').addEventListener('input', (e) => {
     const input = e.target.closest('input.sim-input');
     if (!input) return;
     const table = input.closest('table');
     table.querySelector('td.sim-line').innerHTML = simLine(table);
+    const fold = table.closest('details');
+    if (fold) fold.querySelector('.fold-line').innerHTML = simLine(table, true);
 });
 
 // 내 출결 요약 (학생, 서버가 쿼리 없이 본인 기록 전체를 줌): {summaries: (과목, 학기) → 서버 요약, error}
