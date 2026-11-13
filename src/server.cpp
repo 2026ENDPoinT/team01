@@ -161,12 +161,36 @@ json courseJson(const Course& c) {
     };
 }
 
-// letter 는 재수강 규칙을 적용한 등급 (grades 에는 gm.getGrades() 를 넘김)
-json gradeJson(const Grade& grade, const std::vector<Grade>& grades) {
+// 상대평가 과목은 해당 학기 수강생 전원의 성적이 완성되어야 등급을 공개한다.
+bool relativeGradingComplete(const GradeManager& gm, const std::string& courseCode,
+                             const std::string& semester) {
+    if (gm.getGradingMode(courseCode, semester) != "relative") return true;
+
+    size_t enrolledCount = 0;
+    for (const Enrollment& enrollment : gm.getEnrollments()) {
+        if (enrollment.courseCode != courseCode || enrollment.semester != semester) continue;
+        ++enrolledCount;
+        const bool hasGrade = std::any_of(gm.getGrades().begin(), gm.getGrades().end(),
+                                          [&](const Grade& current) {
+            return current.studentId == enrollment.studentId &&
+                   current.courseCode == courseCode && current.semester == semester;
+        });
+        if (!hasGrade) return false;
+    }
+
+    return enrolledCount > 0;
+}
+
+// letter 는 재수강 규칙을 적용한 등급 (grades 에는 gm.getGrades() 를 넘김).
+// 상대평가 입력이 미완성인 동안에는 절대평가 등급(F 등)이 대신 노출되지 않도록 빈 문자열을 반환한다.
+json gradeJson(const Grade& grade, const std::vector<Grade>& grades, const GradeManager& gm) {
+    const std::string letter = relativeGradingComplete(gm, grade.courseCode, grade.semester)
+        ? Retake::officialLetter(grade, grades)
+        : "";
     return {
         {"studentId", grade.studentId}, {"courseCode", grade.courseCode},
         {"semester", grade.semester}, {"score", grade.score},
-        {"letter", Retake::officialLetter(grade, grades)}
+        {"letter", letter}
     };
 }
 
@@ -891,7 +915,7 @@ void Server::run() {
             if (account->role == "professor" && semester::isPast(grade.semester, current)) continue;
             if (account->role == "professor" &&
                 !isProfessorOf(*account, gm, grade.courseCode)) continue;
-            arr.push_back(gradeJson(grade, grades));
+            arr.push_back(gradeJson(grade, grades, gm));
         }
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
@@ -1146,7 +1170,9 @@ void Server::run() {
         const auto grades = gm.getGrades();
         for (const auto& grade : grades) {
             if (grade.studentId != id) continue;
-            const std::string letter = Retake::officialLetter(grade, grades);
+            const std::string letter = relativeGradingComplete(gm, grade.courseCode, grade.semester)
+                ? Retake::officialLetter(grade, grades)
+                : "";
             if (letter == "R" && !Retake::admittedSince2018(id)) continue;
             csv += escapeCSV(id) + "," + escapeCSV(student->name) + "," +
                    escapeCSV(grade.courseCode) + "," + escapeCSV(grade.semester) + "," +
@@ -1178,7 +1204,9 @@ void Server::run() {
             if (grade.courseCode != code) continue;
             csv += escapeCSV(grade.studentId) + "," + escapeCSV(grade.courseCode) + "," +
                    escapeCSV(grade.semester) + "," + std::to_string(grade.score) + "," +
-                   escapeCSV(Retake::officialLetter(grade, grades)) + "\r\n";
+                   escapeCSV(relativeGradingComplete(gm, grade.courseCode, grade.semester)
+                                  ? Retake::officialLetter(grade, grades)
+                                  : "") + "\r\n";
         }
         res.set_header("Content-Disposition", "attachment; filename=\"course_grades.csv\"");
         res.set_content(csv, "text/csv; charset=utf-8");
@@ -1809,7 +1837,7 @@ void Server::run() {
             return;
         }
         setJson(res, 201, gradeJson(*findGrade(gm, grade.studentId, grade.courseCode, grade.semester),
-                                    gm.getGrades()));
+                                    gm.getGrades(), gm));
     });
 
 
@@ -1948,7 +1976,7 @@ void Server::run() {
             return;
         }
 
-        json response = gradeJson(*savedGrade, grades);
+        json response = gradeJson(*savedGrade, grades, gm);
         response["message"] = "성적이 등록되었습니다";
         response["enrollmentCreated"] = createdEnrollment;
         setJson(res, 201, response);
@@ -1983,7 +2011,7 @@ void Server::run() {
             return;
         }
         setJson(res, 200, gradeJson(*findGrade(gm, grade.studentId, grade.courseCode, grade.semester),
-                                    gm.getGrades()));
+                                    gm.getGrades(), gm));
     });
 
     svr.Delete("/api/grades", [this](const httplib::Request& req, httplib::Response& res) {
