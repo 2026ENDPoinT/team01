@@ -16,6 +16,9 @@ const $ = (id) => document.getElementById(id);
 // attendSem: 과목 페이지 '출결' 영역에서 고른 학기
 // attend: 그 영역에 지금 그려 둔 {code, sem, records, summaries, seq} (출결 칸이 사용, 안 그렸거나 불러오기 실패면 null)
 // currentSem: 서버가 알려 준 현재 학기 (loadBase 가 채움, 예: '2026-2'). 지난 학기 판정 기준
+let gradePage = 1;
+const GRADE_PAGE_SIZE = 10;
+
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
@@ -331,6 +334,7 @@ function fillSelect(el, items, allLabel, keep) {
 
 // 화면에 그려 둔 목록·선택 상자를 모두 비움 (다른 역할로 다시 로그인했을 때 이전 화면이 남지 않게)
 function resetView() {
+    gradePage = 1;
     state.students = [];
     state.courses = [];
     state.stats = {};
@@ -1488,8 +1492,13 @@ async function studentReportHtml(s) {
             <tr><td>${esc(g.courseCode)} ${esc(courseName(g.courseCode))}</td>
             <td class="num">${esc(creditOf(g.courseCode))}</td>
             <td class="num">${esc(g.score)}</td><td>${letterBadge(g.letter)}</td></tr>`).join('');
+        const semesterCredits = info?.credits ?? '-';
         return `
-            <h3 class="sub-title">${esc(sem)} <span class="hint">학기 GPA ${semGpa(info)} · 등록 학점 ${esc(info?.credits ?? 0)}</span></h3>
+            <h3 class="sub-title">${esc(sem)}</h3>
+            <div class="semester-summary-line">
+                <span class="semester-gpa">GPA ${semGpa(info)}</span>
+                <span class="semester-credit">등록 학점 ${esc(semesterCredits)}학점</span>
+            </div>
             <div class="table-wrap">
                 <table><thead><tr><th>과목</th><th class="num">학점</th><th class="num">점수</th><th>등급</th></tr></thead><tbody>${rows}</tbody></table>
             </div>`;
@@ -1687,11 +1696,20 @@ async function renderGrades() {
     const qs = params.toString();
     const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
+
+    // 관리자는 10건씩 페이지로 나누고, 교수는 기존처럼 전체 목록을 표시
+    const paginated = isAdmin();
+    const totalPages = Math.max(1, Math.ceil(grades.length / GRADE_PAGE_SIZE));
+    if (paginated) gradePage = Math.min(Math.max(1, gradePage), totalPages);
+    else gradePage = 1;
+
+    const offset = paginated ? (gradePage - 1) * GRADE_PAGE_SIZE : 0;
+    const visibleGrades = paginated ? grades.slice(offset, offset + GRADE_PAGE_SIZE) : grades;
     const cache = new Map();
-    const assessed = await Promise.all(grades.map((g) => isLockedSemester(g.semester) ? false
+    const assessed = await Promise.all(visibleGrades.map((g) => isLockedSemester(g.semester) ? false
         : assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
 
-    $('grade-body').innerHTML = grades.length ? grades.map((g, i) => {
+    $('grade-body').innerHTML = visibleGrades.length ? visibleGrades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
         const actions = isLockedSemester(g.semester)
             ? '<span class="tag" title="지난 학기 성적은 관리자만 고칠 수 있습니다">지난 학기</span>'
@@ -1710,11 +1728,32 @@ async function renderGrades() {
             <td class="actions">${actions}</td>
         </tr>`;
     }).join('') : emptyRow(7, '조건에 맞는 성적이 없습니다');
+
+    const pager = $('grade-pagination');
+    if (pager) {
+        pager.hidden = !paginated;
+        pager.innerHTML = paginated ? `
+            <button type="button" data-page="prev" ${gradePage <= 1 ? 'disabled' : ''}>이전</button>
+            <span>${gradePage} / ${totalPages} 페이지 · 전체 ${grades.length}건</span>
+            <button type="button" data-page="next" ${gradePage >= totalPages ? 'disabled' : ''}>다음</button>
+        ` : '';
+    }
 }
 
 // 필터를 바꾸면 표를 다시 그림
 ['grade-f-student', 'grade-f-course', 'grade-f-semester'].forEach((id) =>
-    ($(id).onchange = () => renderGrades().catch((e) => toast(e.message, true))));
+    ($(id).onchange = () => {
+        gradePage = 1;
+        renderGrades().catch((e) => toast(e.message, true));
+    }));
+
+// 관리자 성적 목록 페이지 이동
+$('grade-pagination').onclick = (e) => {
+    const button = e.target.closest('button[data-page]');
+    if (!button || button.disabled) return;
+    gradePage += button.dataset.page === 'next' ? 1 : -1;
+    renderGrades().catch((err) => toast(err.message, true));
+};
 
 // 성적 등록/수정 폼 항목. 수정할 때는 학생·과목·학기를 못 바꾸고 점수(또는 등급)만 고침
 // (서버가 PUT 본문의 학번·과목코드·학기로 대상을 찾기 때문)
