@@ -774,3 +774,11 @@ main:has(#tab-timetable.active) { max-width: 1280px; }
     .tt-grid { min-width: 700px; }
     .tt-candidate-row { align-items: flex-start; flex-direction: column; }
 }
+
+/* 내 성적: 진행 중 과목과 학기별 성적 영역 구분 */
+.myreport-divider {
+    height: 0;
+    margin: 24px 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+}
