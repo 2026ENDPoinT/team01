@@ -383,6 +383,12 @@ std::string escapeCSV(const std::string& value) {
     return result;
 }
 
+// 점수 칸: P/F 과목은 점수가 없으므로 (내부값 P = 100 / NP = 0 은 내보내지 않음) 빈 칸, 등급 칸만 P/NP
+std::string scoreCSVCell(const Grade& grade, const Course* course) {
+    if (course && course->isPassFail()) return "";
+    return std::to_string(grade.score);
+}
+
 bool parseJsonBody(const httplib::Request& req, json& body, httplib::Response& res) {
     try {
         body = json::parse(req.body);
@@ -1253,7 +1259,7 @@ void Server::run() {
             if (letter == "R" && !Retake::admittedSince2018(id)) continue;
             csv += escapeCSV(id) + "," + escapeCSV(student->name) + "," +
                    escapeCSV(grade.courseCode) + "," + escapeCSV(grade.semester) + "," +
-                   std::to_string(grade.score) + "," + escapeCSV(letter) + "\r\n";
+                   scoreCSVCell(grade, gm.findCourse(grade.courseCode)) + "," + escapeCSV(letter) + "\r\n";
         }
         res.set_header("Content-Disposition", "attachment; filename=\"student_grades.csv\"");
         res.set_content(csv, "text/csv; charset=utf-8");
@@ -1280,7 +1286,7 @@ void Server::run() {
         for (const auto& grade : activeGrades) {
             if (grade.courseCode != code) continue;
             csv += escapeCSV(grade.studentId) + "," + escapeCSV(grade.courseCode) + "," +
-                   escapeCSV(grade.semester) + "," + std::to_string(grade.score) + "," +
+                   escapeCSV(grade.semester) + "," + scoreCSVCell(grade, gm.findCourse(code)) + "," +
                    escapeCSV(relativeGradingComplete(gm, grade.courseCode, grade.semester)
                                   ? Retake::officialLetter(grade, grades)
                                   : "") + "\r\n";
