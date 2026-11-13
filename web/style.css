@@ -391,6 +391,7 @@ dialog table { min-width: 420px; font-size: 13px; }
 .assess-section .toolbar .sub-title { margin: 0 8px 0 0; }
 #assess-body .table-wrap { margin-bottom: 16px; }
 .assess-head { font-size: 14px; font-weight: 600; margin: 16px 0 8px; }
+.assess-description { margin: -3px 0 10px; line-height: 1.6; }
 .scheme-table { min-width: 0; }
 .scheme-table tr.zero td { opacity: .45; }
 td.weight-sum { color: var(--text); }

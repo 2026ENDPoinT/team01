@@ -980,6 +980,8 @@ const validateScheme = (d) => {
     if (!GRADING_MODES.some((m) => m.value === d.mode)) return SCHEME_RULES;
     const total = weights.reduce((t, w) => t + Number(w), 0);
     if (total !== 100) return `평가 항목 비율 합계가 100이어야 합니다 (지금 ${total}%)`;
+    // 절대평가에서는 상대평가 등급 비율을 사용하지 않으므로 검증하지 않는다.
+    if (d.mode === 'absolute') return '';
     const ratios = GRADE_RATIO_LETTERS.map((letter) => String(d[`ratio_${letter}`] ?? '').trim());
     if (ratios.some((r) => !/^\d+$/.test(r) || Number(r) > 100)) return '상대평가 등급 비율은 0~100 정수로 입력하세요';
     const ratioNumbers = ratios.map(Number);
@@ -1148,7 +1150,8 @@ async function renderAssess() {
             <tfoot><tr><td colspan="2" class="weight-sum${total === 100 ? '' : ' warn'}">
                 비율 합계 <b>${total} / 100</b> <span class="mode-label">등급 방식 ${modeBadge}</span></td></tr></tfoot></table>
         </div>
-        <h4 class="assess-head">항목 점수 <span class="hint">칸을 고치면 바로 저장 · 빈칸으로 지우면 점수 삭제 · 출석은 출석부에서 자동 계산 · 비율이 0보다 큰 분류에 모두 점수가 있으면 최종 성적 자동 계산</span></h4>
+        <h4 class="assess-head">항목 점수</h4>
+        <p class="hint assess-description">칸을 고치면 바로 저장 · 빈칸으로 지우면 점수 삭제 · 출석은 출석부에서 자동 계산 · 비율이 0보다 큰 분류에 모두 점수가 있으면 최종 성적 자동 계산</p>
         <div class="table-wrap">
             <table><thead><tr><th>학번</th><th>이름</th>
                 ${cols.map((a) => `<th class="num">${esc(a.name)} <span class="hint">${esc(a.weight)}%</span></th>`).join('')}
@@ -1196,6 +1199,22 @@ function openSchemeForm(ctx) {
             await refreshAll();
         },
     });
+
+    // 절대평가에서는 A+~F 상대평가 비율 입력란을 숨기고,
+    // 상대평가를 선택했을 때만 표시한다. 값은 숨겨져도 유지된다.
+    const modeInput = $('dlg-body').querySelector('[name="mode"]');
+    const syncGradeRatioFields = () => {
+        const show = modeInput?.value === 'relative';
+        // 등급 방식 입력칸은 유지하고, 상대평가 규칙 설명만 방식에 맞춰 표시한다.
+        const modeHint = modeInput?.closest('.field')?.querySelector('.hint');
+        if (modeHint) modeHint.hidden = !show;
+        GRADE_RATIO_LETTERS.forEach((letter) => {
+            const input = $('dlg-body').querySelector(`[name="ratio_${letter}"]`);
+            if (input) input.closest('.field').hidden = !show;
+        });
+    };
+    modeInput?.addEventListener('change', syncGradeRatioFields);
+    syncGradeRatioFields();
 
     // 입력 중에도 누적 상한을 강제한다.
     // A+ + A0 <= 30%, A+ + A0 + B+ + B0 <= 70%, 전체 합계 <= 100%.
@@ -2518,7 +2537,7 @@ async function renderMyReport() {
     const summaryReq = api('GET', '/api/stats/summary/' + encodeURIComponent(state.me.studentId));
     const [progress, report, summary] = await Promise.all([
         myAssessmentsHtml(),
-        studentReportHtml({ id: state.me.studentId, name: state.me.name }, summaryReq),
+        studentReportHtml({ id: state.me.studentId, name: state.me.name }, summaryReq, { combineSemesterGrades: true }),
         summaryReq,
     ]);
     if (seq !== renderSeq) return;
