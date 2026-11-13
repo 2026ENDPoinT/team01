@@ -119,7 +119,7 @@ public:
     //   성공: 6개 항목을 모두 저장(0 포함), 비율이 0 이 된 분류의 항목 점수 삭제, 수강생 전원 성적 재계산
     bool setGradingScheme(const std::string& courseCode, const std::string& semester,
                           const std::vector<int>& weights, const std::string& mode,
-                          const std::vector<int>& gradeRatios = {10, 20, 20, 20, 10, 10, 10});
+                          const std::vector<int>& gradeRatios = {30, 0, 40, 0, 30, 0, 0});
     std::vector<int> getRelativeGradeRatios(const std::string& courseCode,
                                             const std::string& semester) const;
     // 평가 기준 삭제: 항목·항목 점수·등급 방식·그 과목·학기 성적을 모두 지움 (직접 입력 과목으로 돌아감). 없으면 false
