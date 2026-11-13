@@ -37,7 +37,7 @@ let studentRenderSeq = 0;
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], timetableSem: '', timetableCandidates: [], timetableMessage: '', courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
-    assessSem: null, assess: null, attendSem: null, attend: null, currentSem: '', baseLoadedAt: 0,
+    assessSem: null, assess: null, passFail: null, attendSem: null, attend: null, currentSem: '', baseLoadedAt: 0,
 };
 
 // ───────── 공용 도우미 ─────────
@@ -998,6 +998,78 @@ function relativeSummary(grades) {
     return `상대평가 결과 · ${counts.join(' · ')} <span class="hint">(동점자는 같은 등급으로 처리)</span>`;
 }
 
+// ───────── P/F 성적 (과목 페이지, P/F 과목의 관리자·담당 교수) ─────────
+
+// P/F 성적 선택 값 → 표시 문구 ('' = 아직 입력 안 함)
+const PF_CHOICES = [{ value: '', label: '미입력' }, { value: 'P', label: 'P (합격)' }, { value: 'NP', label: 'NP (불합격)' }];
+
+// '평가 기준' 자리에 그리는 P/F 성적 표 (renderAssess 가 P/F 과목일 때 부름)
+//   행 = 그 과목·학기 수강생, 선택 상자에서 P / NP 를 고르면 바로 저장 (없으면 등록 POST, 있으면 수정 PUT),
+//   '미입력' 을 고르면 성적 삭제 (DELETE). 저장한 성적은 성적표·내 성적에 그대로 반영됨 (평점·계산 학점에는 안 들어감)
+//   지난 학기는 서버가 관리자도 막으므로(403) 선택 상자를 잠그고 안내만 보임
+async function renderPassFail(code, sem, seq, box) {
+    const q = assessQuery(code, sem);
+    const [enrolls, grades] = await Promise.all([
+        api('GET', '/api/enrollments?' + q),
+        api('GET', '/api/grades?' + q),
+    ]);
+    if (seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code || state.assessSem !== sem) return;
+    const past = isPastSemester(sem, state.currentSem);
+    state.passFail = { code, sem, past };
+    const letterOf = new Map(grades.map((g) => [g.studentId, g.letter]));
+    const rows = [...enrolls].sort((a, b) => a.studentId.localeCompare(b.studentId)).map((e) => {
+        const cur = PF_LETTERS.includes(letterOf.get(e.studentId)) ? letterOf.get(e.studentId) : '';
+        return `
+        <tr data-sid="${esc(e.studentId)}">
+            <td>${esc(e.studentId)}</td>
+            <td><b>${esc(studentName(e.studentId))}</b></td>
+            <td><select class="pf-cell" data-prev="${esc(cur)}" aria-label="${esc(studentName(e.studentId))} P/F 성적" ${past ? 'disabled' : ''}>
+                ${PF_CHOICES.map((o) => `<option value="${o.value}" ${o.value === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
+            </select></td>
+        </tr>`;
+    }).join('');
+    const passCount = [...letterOf.values()].filter((l) => l === 'P').length;
+    const npCount = [...letterOf.values()].filter((l) => l === 'NP').length;
+    box.innerHTML = `
+        <p class="hint">${past
+            ? `지난 학기 성적은 변경할 수 없습니다 (현재 학기: ${esc(state.currentSem)})`
+            : 'P/F 과목은 평가 기준 없이 수강생마다 P(합격)·NP(불합격)를 고르면 바로 저장됩니다 · 미입력을 고르면 성적 삭제 · 평점·계산 학점에는 들어가지 않고 취득 학점에는 P 만 더해집니다'}</p>
+        <div class="table-wrap">
+            <table><thead><tr><th>학번</th><th>이름</th><th>P/F 성적</th></tr></thead>
+            <tbody>${rows || emptyRow(3, '이 학기 수강생이 없습니다')}</tbody>
+            ${rows ? `<tfoot><tr><td colspan="3">P ${passCount}명 · NP ${npCount}명 · 미입력 ${enrolls.length - passCount - npCount}명</td></tr></tfoot>` : ''}</table>
+        </div>`;
+}
+
+// P/F 선택을 바꾸면 저장: P·NP 는 등록(POST) 또는 수정(PUT), 미입력은 삭제(DELETE). 실패하면 이전 값으로 되돌리고 토스트
+//   (지난 학기면 서버의 403 문구 "지난 학기 성적은 변경할 수 없습니다 …" 를 그대로 보임)
+async function savePassFail(select) {
+    const ctx = state.passFail;
+    if (!ctx) return;
+    const sid = select.closest('tr').dataset.sid;
+    const prev = select.dataset.prev;
+    const next = select.value;
+    if (next === prev) return;
+    const key = { studentId: sid, courseCode: ctx.code, semester: ctx.sem };
+    select.disabled = true;
+    try {
+        if (next === '') {
+            await api('DELETE', '/api/grades?' + new URLSearchParams(key));
+            toast(`${studentName(sid)} P/F 성적을 지웠습니다`);
+        } else {
+            const g = await api(prev === '' ? 'POST' : 'PUT', '/api/grades', { ...key, letter: next });
+            toast(`${studentName(sid)} ${g.letter === 'P' ? 'P (합격)' : `${g.letter} (불합격)`} 저장`);
+        }
+        select.dataset.prev = next;
+        await refreshAll();
+    } catch (err) {
+        select.value = prev;
+        toast(err.message, true);
+    } finally {
+        if (select.isConnected) select.disabled = ctx.past;
+    }
+}
+
 // '평가 기준' 영역 그리기 (고른 학기 state.assessSem)
 //   평가 기준이 없으면 안내 문구만 (설정 버튼만, 삭제 버튼 숨김)
 //   있으면 6분류 표(분류·비율, 0% 줄은 흐리게) + 비율 합계·등급 방식 배지,
@@ -1010,8 +1082,14 @@ async function renderAssess() {
     const box = $('assess-body');
     // 다 받기 전에는 설정·삭제 버튼과 점수 칸이 이전 학기를 가리키지 않게 비워 둠
     state.assess = null;
+    state.passFail = null;
+    const passFail = pageCourse()?.gradeType === 'pf';
+    // P/F 과목은 평가 기준을 만들 수 없음 (서버 409) → 같은 자리에 P/F 성적 표, 설정 버튼은 숨김
+    $('assess-section').querySelector('.sub-title').textContent = passFail ? 'P/F 성적' : '평가 기준';
+    $('assess-add').hidden = passFail;
     $('assess-add').disabled = !sem;
     $('assess-del').hidden = true;
+    if (passFail && sem) return renderPassFail(code, sem, seq, box);
     if (!sem) {
         box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
         return;
@@ -1134,6 +1212,10 @@ $('assess-sem').onchange = () => {
     renderAssess().catch((e) => toast(e.message, true));
 };
 // 점수 칸을 바꾸면(Enter·칸 이동) 저장: 숫자면 PUT, 빈칸이면 DELETE. 실패하면 이전 값으로 되돌리고 토스트
+$('assess-body').addEventListener('change', (e) => {
+    const select = e.target.closest('select.pf-cell');
+    if (select) savePassFail(select);
+});
 $('assess-body').addEventListener('change', async (e) => {
     const input = e.target.closest('input.score-cell');
     const ctx = state.assess;
