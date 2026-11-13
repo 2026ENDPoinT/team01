@@ -423,14 +423,14 @@ TEST_CASE(gradingMode_relative_assigns_letters) {
     GradeManager gm(dir.str());
     fillAssessments(gm, kGradingRelative);
 
-    // 89점 학생만 완성: 그 한 명으로 등급을 정함
+    // 수강생 2명 중 89점 학생만 완성: 전원이 완성되기 전이라 상대평가 등급은 아직 확정하지 않음
+    //   (assignedLetter 가 비어 있고 letter() 는 점수 기준 등급)
     fillScores(gm);
-    const std::string expectedFirst = RelativeGrading::assignLetters({89.0})[0];
-    CHECK_EQ(assignedOf(gm, "24000001"), expectedFirst);
-    CHECK(!assignedOf(gm, "24000001").empty());
-    CHECK_EQ(letterOf(gm, "24000001"), assignedOf(gm, "24000001"));
+    CHECK_EQ(assignedOf(gm, "24000001"), std::string(""));
+    CHECK_EQ(letterOf(gm, "24000001"), std::string("B+"));
+    CHECK_EQ(assignedOf(gm, "24000002"), std::string("(없음)"));
 
-    // 두 번째 학생이 79.35 로 완성: 두 명으로 다시 정함
+    // 두 번째 학생이 79.35 로 완성: 수강생 전원이 완성되었으므로 두 명으로 확정
     fillSecondScores(gm);
     const Grade* second = findGrade(gm, "24000002", kCode, kSemester);
     CHECK(second != nullptr && second->score == 79.35);
@@ -446,6 +446,30 @@ TEST_CASE(gradingMode_relative_assigns_letters) {
     CHECK_EQ(assignedOf(gm, "24000002"), std::string(""));
     CHECK_EQ(findGrade(gm, "24000001", kCode, kSemester)->letter(), std::string("B+"));
     CHECK_EQ(findGrade(gm, "24000002", kCode, kSemester)->letter(), std::string("C+"));
+}
+
+// 상대평가는 수강생 전원의 성적이 완성된 뒤에만 확정: 수강생이 늘면 다시 미완성이 되어 등급을 비우고,
+// 그 수강생이 취소되면 남은 전원 기준으로 다시 확정한다.
+TEST_CASE(gradingMode_relative_reopens_when_enrollment_changes) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillAssessments(gm, kGradingRelative);
+    fillScores(gm);
+    fillSecondScores(gm);
+    CHECK_EQ(assignedOf(gm, "24000001"), std::string("B+"));
+    CHECK_EQ(assignedOf(gm, "24000002"), std::string("C+"));
+
+    // 성적이 없는 세 번째 수강생이 생기면 미완성: 기존 학생 등급이 비고 점수 기준 등급이 보임
+    CHECK(gm.addEnrollment(makeEnrollment("24000003", kCode, kSemester)));
+    CHECK_EQ(assignedOf(gm, "24000001"), std::string(""));
+    CHECK_EQ(assignedOf(gm, "24000002"), std::string(""));
+    CHECK_EQ(letterOf(gm, "24000001"), std::string("B+"));
+    CHECK_EQ(letterOf(gm, "24000002"), std::string("C+"));
+
+    // 그 수강생을 취소하면 남은 두 명 기준으로 다시 확정
+    CHECK(gm.removeEnrollment("24000003", kCode, kSemester));
+    CHECK_EQ(assignedOf(gm, "24000001"), std::string("B+"));
+    CHECK_EQ(assignedOf(gm, "24000002"), std::string("C+"));
 }
 
 TEST_CASE(gradingScheme_save_load_roundtrip) {
