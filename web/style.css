@@ -38,16 +38,10 @@ body {
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .logo {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #0b1d26;
-    font-weight: 800;
-    font-size: 15px;
+    display: block;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
 }
 .topbar h1 { font-size: 18px; margin: 0; }
 #tabs { display: flex; flex-wrap: wrap; align-self: stretch; flex: 1 1 0; min-width: 0; gap: 0 4px; }

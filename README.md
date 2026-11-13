@@ -87,7 +87,7 @@ cmake -B build && cmake --build build && ctest --test-dir build --output-on-fail
 ```
 include/      헤더 (함수 시그니처)
 src/          구현 + main.cpp
-web/          index.html, style.css, app.js
+web/          index.html, style.css, app.js, logo.png (상단 바 로고·탭 아이콘)
 data/         students.csv, courses.csv, grades.csv, enrollments.csv, assessments.csv, assessment_scores.csv, grading_modes.csv, settings.csv, accounts.csv, course_posts.csv, attendance.csv (위 "데이터" 참고)
 third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
