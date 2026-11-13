@@ -1086,8 +1086,17 @@ async function renderStudents() {
             api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null))),
         api('GET', '/api/stats/warnings').catch(() => []),
     ]);
-    const warnCount = {};
-    warnings.forEach((w) => (warnCount[w.studentId] = (warnCount[w.studentId] ?? 0) + 1));
+    // 학사경고 사유 약칭 (서버 reason 문자열 기준, 모르는 사유는 원문 그대로)
+    const reasonShort = { '수강신청 미이행': '미신청', '평점평균 1.75 미만': '평점' };
+    const warnList = {};
+    warnings.forEach((w) => (warnList[w.studentId] ??= []).push(w));
+    const warnBadge = (id) => {
+        const ws = warnList[id];
+        if (!ws) return '-';
+        const kinds = [...new Set(ws.map((w) => reasonShort[w.reason] ?? w.reason))];
+        const tip = ws.map((w) => `${w.semester} ${w.reason}${typeof w.gpa === 'number' ? ` (GPA ${w.gpa.toFixed(2)})` : ''}`).join('\n');
+        return `<span class="badge F" title="${esc(tip).replace(/\n/g, '&#10;')}">${ws.length}회 · ${esc(kinds.join('·'))}</span>`;
+    };
     body.innerHTML = list.map((s, i) => `
         <tr>
             <td>${esc(s.id)}</td>
@@ -1095,7 +1104,7 @@ async function renderStudents() {
             <td>${esc(s.major)}</td>
             <td>${esc(s.year)}학년</td>
             <td class="num">${fmt(gpas[i])}</td>
-            <td>${warnCount[s.id] ? `<span class="badge F">${warnCount[s.id]}회</span>` : '-'}</td>
+            <td>${warnBadge(s.id)}</td>
             <td class="actions">
                 <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
                 <button class="link" data-act="edit" data-id="${esc(s.id)}">수정</button>
