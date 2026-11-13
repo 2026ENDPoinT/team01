@@ -605,16 +605,14 @@ async function renderCoursePage() {
     drawPosts();
 
     if (!manage) { state.assess = null; state.attend = null; return; }
-    if (!sems.includes(state.assessSem)) state.assessSem = open || state.courseSem;
-    fillSelect($('assess-sem'), sems.map((s) => ({ value: s, label: s })), '', state.assessSem);
-    if (!sems.includes(state.assessSem)) state.assessSem = open || state.courseSem;
-
     if (state.assessSem && !sems.includes(state.assessSem)) {
         sems.push(state.assessSem);
         sems.sort().reverse();
     }
-
+    if (!sems.includes(state.assessSem)) state.assessSem = open || state.courseSem;
     fillSelect($('assess-sem'), sems.map((s) => ({ value: s, label: s })), '', state.assessSem);
+    if (!sems.includes(state.attendSem)) state.attendSem = state.assessSem;
+    fillSelect($('attend-sem'), sems.map((s) => ({ value: s, label: s })), '', state.attendSem);
     await Promise.all([renderAssess(), renderAttend()]);
 }
 
@@ -1751,7 +1749,7 @@ $('grade-add').onclick = () => {
 
     const moveButton = document.createElement('button');
     moveButton.type = 'button';
-    moveButton.textContent = '평가 항목 화면 열기';
+    moveButton.textContent = '평가 기준 화면 열기';
     moveButton.hidden = true;
     body.appendChild(moveButton);
 
@@ -1769,13 +1767,13 @@ $('grade-add').onclick = () => {
         if (!code || !SEMESTER_RE.test(semester)) return;
 
         try {
-            const items = await assessmentsOf(code, semester, new Map());
+            const { items } = await assessmentsOf(code, semester, new Map());
 
             if (id !== checkId) return;
 
             if (items.length > 0) {
                 guide.textContent =
-                    '평가 항목으로 성적을 계산하는 과목입니다.\n평가 항목 화면에서 점수를 입력하세요.';
+                    '평가 기준으로 성적을 계산하는 과목입니다.\n평가 기준 화면에서 점수를 입력하세요.';
                 moveButton.hidden = false;
                 saveButton.disabled = true;
             }
