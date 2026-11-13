@@ -37,6 +37,15 @@ std::string safeCell(const std::string& v) {
     return v;
 }
 
+// 성적 행의 점수 칸: P/F 과목(점수 없음, 내부값 P=100·NP=0 은 내보내지 않음)과
+//   재수강으로 지워진 성적은 빈 칸, 그 외에는 점수
+std::string scoreCell(const Grade& g, const Course* course, bool replaced) {
+    if (replaced || (course != nullptr && course->isPassFail())) {
+        return "";
+    }
+    return scoreToString(g.score);
+}
+
 }  // namespace
 
 std::string ReportExporter::studentReport(const GradeManager& gm, const std::string& studentId) {
@@ -67,7 +76,7 @@ std::string ReportExporter::studentReport(const GradeManager& gm, const std::str
         csv += joinCsvLine({safeCell(g.courseCode), safeCell(course ? course->name : ""),
                             safeCell(course ? course->category : ""),
                             course ? std::to_string(course->credit) : "", safeCell(g.semester),
-                            replaced ? "" : scoreToString(g.score),
+                            scoreCell(g, course, replaced),
                             Retake::officialLetter(g, grades)});
     }
     if (!grades.empty()) {
@@ -77,7 +86,8 @@ std::string ReportExporter::studentReport(const GradeManager& gm, const std::str
 }
 
 std::string ReportExporter::courseReport(const GradeManager& gm, const std::string& courseCode) {
-    if (gm.findCourse(courseCode) == nullptr) {
+    const Course* course = gm.findCourse(courseCode);
+    if (course == nullptr) {
         return "";
     }
 
@@ -97,8 +107,8 @@ std::string ReportExporter::courseReport(const GradeManager& gm, const std::stri
     for (const Grade& g : grades) {
         const Student* student = gm.findStudent(g.studentId);
         csv += joinCsvLine({safeCell(g.studentId), safeCell(student ? student->name : ""),
-                            safeCell(g.semester),
-                            scoreToString(g.score), Retake::officialLetter(g, all)});
+                            safeCell(g.semester), scoreCell(g, course, false),
+                            Retake::officialLetter(g, all)});
     }
 
     Statistics::CourseStats stats = Statistics::courseStats(gm, courseCode);

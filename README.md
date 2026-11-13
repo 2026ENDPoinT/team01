@@ -93,7 +93,7 @@ third_party/  httplib.h (cpp-httplib v0.18.3), json.hpp (nlohmann/json v3.11.3)
 tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 ```
 
-의존 방향: `student/course/grade/assessment` ← `file_io` ← `grade_manager` ← `statistics` ← `server` ← `main` (`report_exporter` 는 지금 테스트에서만 호출함. 서버의 CSV 내보내기는 자체 `escapeCSV` 사용)
+의존 방향: `student/course/grade/assessment` ← `file_io` ← `grade_manager` ← `statistics` ← `server` ← `main` (`report_exporter` 는 지금 테스트에서만 호출함. 서버의 CSV 내보내기는 자체 `escapeCSV` 사용. 서버 CSV 와 `report_exporter` 모두 P/F 과목 행은 점수 칸을 비우고 등급만 P/NP 로 냄)
 
 구조도·모듈 책임·데이터 흐름·"이걸 바꾸면 어디가 바뀌나"·예상 질문은 [docs/architecture.md](docs/architecture.md) 에 정리했습니다.
 
