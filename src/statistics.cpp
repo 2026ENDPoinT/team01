@@ -2,6 +2,9 @@
 #include "retake.h"
 #include <map>
 #include <utility>
+#include "semester.h"
+#include <algorithm>
+#include <set>
 
 namespace Statistics {
 
@@ -29,11 +32,11 @@ bool isMajorCourse(const Course& course) {
     return course.category == "전공필수" || course.category == "전공선택";
 }
 
-// 삭제된 성적을 뺀 grades 를 학기별로 묶어 평점·학점 합을 구함 (calcGPA 와 gpaSummary 가 공유)
-//   등급은 Retake::officialLetter, 없는 과목의 성적은 제외 → 계산에 들어간 성적이 있는 학기만 담김
-std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm, const std::string& studentId) {
-    const std::vector<Grade> grades = Retake::activeGrades(gm.getGradesByStudent(studentId));
-    const auto& allGrades = gm.getGrades();
+// grades 를 받는 본체: studentGrades = 그 학생의 성적, allGrades = officialLetter 가 보는 전체 성적
+std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm,
+                                            const std::vector<Grade>& studentGrades,
+                                            const std::vector<Grade>& allGrades) {
+    const std::vector<Grade> grades = Retake::activeGrades(studentGrades);
     std::map<std::string, GpaSum> sums;
     for (const Grade& g : grades) {
         const Course* course = gm.findCourse(g.courseCode);
@@ -50,12 +53,36 @@ std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm, const std::s
     return sums;
 }
 
+std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm, const std::string& studentId) {
+    return sumBySemester(gm, gm.getGradesByStudent(studentId), gm.getGrades());
+}
+
 double toGpa(const GpaSum& sum) {
     return sum.credits == 0 ? 0.0 : sum.points / sum.credits;
 }
 
 double toMajorGpa(const GpaSum& sum) {
     return sum.majorCredits == 0 ? 0.0 : sum.majorPoints / sum.majorCredits;
+}
+
+GpaSummary toSummary(const std::map<std::string, GpaSum>& sums) {
+    GpaSummary summary;
+    GpaSum total;
+    for (const auto& [sem, sum] : sums) {  // map 이라 학기 오름차순
+        SemesterSummary s;
+        s.semester = sem;
+        s.gpa = toGpa(sum);
+        s.credits = static_cast<int>(sum.credits);
+        s.majorGpa = toMajorGpa(sum);
+        s.majorCredits = static_cast<int>(sum.majorCredits);
+        summary.semesters.push_back(s);
+        total.add(sum);
+    }
+    summary.gpa = toGpa(total);
+    summary.credits = static_cast<int>(total.credits);
+    summary.majorGpa = toMajorGpa(total);
+    summary.majorCredits = static_cast<int>(total.majorCredits);
+    return summary;
 }
 
 }  // namespace
@@ -73,23 +100,7 @@ double calcGPA(const GradeManager& gm, const std::string& studentId, const std::
 }
 
 GpaSummary gpaSummary(const GradeManager& gm, const std::string& studentId) {
-    GpaSummary summary;
-    GpaSum total;
-    for (const auto& [sem, sum] : sumBySemester(gm, studentId)) {  // map 이라 학기 오름차순
-        SemesterSummary s;
-        s.semester = sem;
-        s.gpa = toGpa(sum);
-        s.credits = static_cast<int>(sum.credits);
-        s.majorGpa = toMajorGpa(sum);
-        s.majorCredits = static_cast<int>(sum.majorCredits);
-        summary.semesters.push_back(s);
-        total.add(sum);
-    }
-    summary.gpa = toGpa(total);
-    summary.credits = static_cast<int>(total.credits);
-    summary.majorGpa = toMajorGpa(total);
-    summary.majorCredits = static_cast<int>(total.majorCredits);
-    return summary;
+    return toSummary(sumBySemester(gm, studentId));
 }
 
 CourseStats courseStats(const GradeManager& gm, const std::string& courseCode) {
@@ -156,6 +167,87 @@ std::string makeSemester(int year, int term) {
 }
 
 }  // namespace
+namespace {
+
+bool isSimLetter(const std::string& letter) {
+    static const char* const kLetters[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
+    return std::any_of(std::begin(kLetters), std::end(kLetters),
+                       [&](const char* l) { return letter == l; });
+}
+
+RetakeSimulation simFail(RetakeError error, const std::string& message) {
+    RetakeSimulation result;
+    result.error = error;
+    result.message = message;
+    return result;
+}
+
+}  // namespace
+
+RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& studentId,
+                                const std::string& currentSemester,
+                                const std::vector<RetakeItem>& items) {
+    const std::vector<Grade> original = gm.getGrades();
+    std::vector<Grade> simulated = original;  // 복사본만 고침, gm 은 건드리지 않음
+    std::set<std::string> seen;
+    RetakeSimulation result;
+
+    for (const RetakeItem& item : items) {
+        if (!isSimLetter(item.letter)) {
+            return simFail(RetakeError::BadLetter,
+                           "지원하지 않는 성적 등급입니다 (A+ A0 B+ B0 C+ C0 D+ D0 F)");
+        }
+        if (gm.findCourse(item.courseCode) == nullptr) {
+            return simFail(RetakeError::NoCourse, "없는 과목입니다: " + item.courseCode);
+        }
+        if (gm.findCourse(item.courseCode)->isPassFail()) {
+            return simFail(RetakeError::PassFail, "P/F 과목은 재수강 시뮬레이션 대상이 아닙니다: " + item.courseCode);
+        }
+        if (!seen.insert(item.courseCode).second) {
+            return simFail(RetakeError::Duplicate, "같은 과목이 두 번 들어 있습니다: " + item.courseCode);
+        }
+
+        // 이 학생이 이 과목에서 받은 가장 늦은 학기 성적
+        const Grade* latest = nullptr;
+        for (const Grade& g : original) {
+            if (g.studentId != studentId || g.courseCode != item.courseCode) continue;
+            if (latest == nullptr || semester::isPast(latest->semester, g.semester)) latest = &g;
+        }
+        if (latest == nullptr) {
+            return simFail(RetakeError::NoGrade, "성적이 없는 과목입니다: " + item.courseCode);
+        }
+        if (semester::isPast(currentSemester, latest->semester)) {
+            return simFail(RetakeError::FutureGrade, "현재 학기(" + currentSemester +
+                           ")보다 늦은 학기 성적이 있는 과목입니다: " + item.courseCode);
+        }
+
+        RetakeItemResult r;
+        r.courseCode = item.courseCode;
+        r.previousLetter = Retake::officialLetter(*latest, original);
+
+        // 현재 학기에 이미 성적이 있으면 대체
+        simulated.erase(std::remove_if(simulated.begin(), simulated.end(), [&](const Grade& g) {
+            return g.studentId == studentId && g.courseCode == item.courseCode &&
+                   g.semester == currentSemester;
+        }), simulated.end());
+        Grade virt;
+        virt.studentId = studentId;
+        virt.courseCode = item.courseCode;
+        virt.semester = currentSemester;
+        virt.score = letterToScore(item.letter);
+        simulated.push_back(virt);
+        r.appliedLetter = Retake::officialLetter(simulated.back(), simulated);  // 재수강이면 A+ → A0
+        result.items.push_back(r);
+    }
+
+    std::vector<Grade> mine;
+    for (const Grade& g : simulated) {
+        if (g.studentId == studentId) mine.push_back(g);
+    }
+    result.before = gpaSummary(gm, studentId);
+    result.after = toSummary(sumBySemester(gm, mine, simulated));
+    return result;
+}
 
 std::vector<WarningEntry> academicWarnings(const GradeManager& gm, const std::string& studentId) {
     std::vector<WarningEntry> result;

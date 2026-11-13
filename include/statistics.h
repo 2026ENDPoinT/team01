@@ -67,4 +67,29 @@ struct WarningEntry {
 //   수강신청 기록이 없거나 정규학기 성적이 하나도 없으면 빈 목록
 std::vector<WarningEntry> academicWarnings(const GradeManager& gm, const std::string& studentId);
 
+// ----- 재수강 시뮬레이션 (저장하지 않음: gm 은 const) -----
+struct RetakeItem {
+    std::string courseCode;
+    std::string letter;  // 받고 싶은 등급 (A+ A0 B+ B0 C+ C0 D+ D0 F)
+};
+struct RetakeItemResult {
+    std::string courseCode;
+    std::string previousLetter;  // 지금 반영된 가장 늦은 학기 성적의 등급 (Retake::officialLetter)
+    std::string appliedLetter;   // 가상 성적의 등급 (Retake::officialLetter, 재수강이면 A+ → A0)
+};
+enum class RetakeError { None, NoCourse, NoGrade, BadLetter, Duplicate, FutureGrade, PassFail };
+struct RetakeSimulation {
+    RetakeError error = RetakeError::None;
+    std::string message;  // error 가 None 이 아닐 때 한 줄 문구
+    GpaSummary before;
+    GpaSummary after;
+    std::vector<RetakeItemResult> items;
+};
+// 그 학생의 성적 복사본에 items 마다 currentSemester 의 가상 성적(letterToScore)을 넣고 (그 학기에 이미 성적이 있으면 대체),
+// 기존 gpaSummary 규칙으로 전/후를 계산. 현재 학기보다 늦은 학기 성적이 있는 과목은 FutureGrade 오류,
+// P/F 과목은 등급을 고르는 대상이 아니므로 PassFail 오류
+RetakeSimulation simulateRetake(const GradeManager& gm, const std::string& studentId,
+                                const std::string& currentSemester,
+                                const std::vector<RetakeItem>& items);
+
 }  // namespace Statistics

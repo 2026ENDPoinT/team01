@@ -1919,12 +1919,12 @@ function targetGpaHtml(res, gpa, credit) {
 
 // 시뮬레이션 상자 입력값·펼침 상태 (화면을 다시 그려도 유지, 다른 학생으로 로그인하면 초기화)
 //   credits: null = 사용자가 건드리지 않음 (기본값 = 현재 학기 신청 학점 합)
-const mySim = { owner: '', target: '', credits: null, open: false };
+const mySim = { owner: '', target: '', credits: null, open: false, retakeCourse: '', retakeLetter: 'A+' };
 
 // 내 성적 화면 맨 위 '시뮬레이션' 상자 (접힘 기본). 안에 sim-section 을 하나씩 추가
 //   summary: 서버 /api/stats/summary/:id 응답 (gpa, credits)
 function simBoxHtml(summary) {
-    if (mySim.owner !== state.me.studentId) Object.assign(mySim, { owner: state.me.studentId, target: '', credits: null, open: false });
+    if (mySim.owner !== state.me.studentId) Object.assign(mySim, { owner: state.me.studentId, target: '', credits: null, open: false, retakeCourse: '', retakeLetter: 'A+' });
     const hasGpa = typeof summary.gpa === 'number' && summary.credits > 0;
     const planned = state.myEnrollments.filter((e) => e.semester === state.currentSem)
         .reduce((t, e) => t + (Number(state.courses.find((c) => c.code === e.courseCode)?.credit) || 0), 0);
@@ -1988,6 +1988,7 @@ async function renderMyReport() {
     body.querySelectorAll('details.fold').forEach((d) => { d.open = opened.has(d.dataset.key); });
     updateSimTarget(document.querySelector('#sim-target'));
     syncFoldButton(body);
+    renderRetakeSim().catch((e) => toast(e.message, true));
 }
 
 // '진행 중 과목 (평가 항목)': 내가 수강신청했거나 항목 점수가 있는 (과목, 학기) 중 현재 학기 이후이고 평가 기준이 있는 것마다
@@ -2094,6 +2095,93 @@ async function myAttendance() {
 const attendSummaryLine = (s) =>
     `출석 ${esc(s.present)} · 지각 ${esc(s.late)} · 결석 ${esc(s.absent)} · 출석 점수 <b>${fmt(s.score)}</b>` +
     (s.shortage ? ' <span class="badge F">출석 미달</span>' : '');
+// ───────── 시뮬레이션 (내 성적) ─────────
+
+// 재수강 시뮬레이션: 성적이 있는 과목 → 예상 등급 → 서버가 계산한 전/후 GPA (규칙은 서버 Retake·Statistics 가 적용, 저장 안 됨)
+//   목표 GPA 시뮬레이션과 같은 '시뮬레이션' 상자(#sim-box, simBoxHtml 이 그림)에 sim-section 으로 붙음.
+//   상자가 다시 그려지면 이 섹션도 사라지므로 renderMyReport 가 매번 다시 부르고, 고른 값은 mySim 에 기억
+//   P/F 과목은 평점에 들어가지 않아 고를 대상에서 뺌 (서버도 400)
+async function renderRetakeSim() {
+    const seq = renderSeq;
+    const grades = await api('GET', '/api/grades?studentId=' + encodeURIComponent(state.me.studentId));
+    if (seq !== renderSeq) return;
+    const box = document.querySelector('#sim-box');
+    if (!box) return;
+    // 과목마다 가장 늦은 학기 성적 (= 지금 반영된 등급)
+    const latest = new Map();
+    grades.filter((g) => !isPassFailCourse(g.courseCode)).forEach((g) => {
+        const cur = latest.get(g.courseCode);
+        if (!cur || isPastSemester(cur.semester, g.semester)) latest.set(g.courseCode, g);
+    });
+    let sec = document.querySelector('#sim-retake');
+    if (!sec) {
+        sec = document.createElement('section');
+        sec.className = 'sim-section';
+        sec.id = 'sim-retake';
+        box.appendChild(sec);
+    }
+    const courses = [...latest.values()].sort((a, b) => a.courseCode.localeCompare(b.courseCode));
+    if (!courses.length) {
+        sec.innerHTML = '<h4 class="assess-head">재수강 시뮬레이션</h4><p class="hint">성적이 있는 과목이 없습니다</p>';
+        return;
+    }
+    sec.innerHTML = `
+        <h4 class="assess-head">재수강 시뮬레이션</h4>
+        <p class="hint">이미 들은 과목을 다시 들어 받을 등급을 고르면 GPA 가 어떻게 바뀌는지 미리 봅니다 (저장되지 않습니다)</p>
+        <div class="field"><label for="retake-course">과목</label>
+            <select id="retake-course">${courses.map((g) => `
+                <option value="${esc(g.courseCode)}">${esc(courseName(g.courseCode) || g.courseCode)} (${esc(g.courseCode)}) · ${esc(g.semester)} ${esc(g.letter)}</option>`).join('')}
+            </select></div>
+        <div class="field"><label for="retake-letter">예상 등급</label>
+            <select id="retake-letter">${GRADE_LETTERS.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select></div>
+        <button type="button" id="retake-run">계산</button>
+        <div id="retake-result"></div>`;
+    if (latest.has(mySim.retakeCourse)) sec.querySelector('#retake-course').value = mySim.retakeCourse;
+    sec.querySelector('#retake-letter').value = mySim.retakeLetter;
+    sec.onchange = () => {  // 고르는 값을 바꾸면 옛 결과는 지움
+        mySim.retakeCourse = sec.querySelector('#retake-course').value;
+        mySim.retakeLetter = sec.querySelector('#retake-letter').value;
+        sec.querySelector('#retake-result').innerHTML = '';
+    };
+    sec.onclick = (e) => { if (e.target.closest('#retake-run')) runRetakeSim(); };
+}
+
+// 전/후 값 한 줄: "3.20 → 3.31 (+0.11)", 숫자가 아니면 '-'
+function beforeAfter(a, b, d = 2) {
+    const delta = typeof a === 'number' && typeof b === 'number' ? Math.round((b - a) * 10 ** d) / 10 ** d : null;
+    const diff = delta === null ? '' : delta === 0 ? ' (변화 없음)' : ` (${delta > 0 ? '+' : '-'}${Math.abs(delta).toFixed(d)})`;
+    return `${fmt(a, d)} → <b>${fmt(b, d)}</b>${diff}`;
+}
+
+function retakeResultHtml(r) {
+    const it = r.items[0];
+    return `
+        <p>${esc(courseName(it.courseCode))} · 이전 ${letterBadge(it.previousLetter)} → 반영 ${letterBadge(it.appliedLetter)}</p>
+        <div class="table-wrap">
+            <table><thead><tr><th></th><th class="num">전 → 후</th></tr></thead><tbody>
+                <tr><td>전체 GPA</td><td class="num">${beforeAfter(r.before.gpa, r.after.gpa)}</td></tr>
+                <tr><td>전공 GPA</td><td class="num">${beforeAfter(r.before.majorGpa, r.after.majorGpa)}</td></tr>
+                <tr><td>등록 학점</td><td class="num">${beforeAfter(r.before.credits, r.after.credits, 0)}</td></tr>
+            </tbody></table>
+        </div>
+        <p class="hint">A+ 는 A0 로 계산됩니다 (재수강 성적은 A0 까지만 반영, 이전 성적은 삭제된 성적으로 GPA 에서 빠집니다)</p>`;
+}
+
+async function runRetakeSim() {
+    const sec = document.querySelector('#sim-retake');
+    const out = sec.querySelector('#retake-result');
+    const courseCode = sec.querySelector('#retake-course').value;
+    const letter = sec.querySelector('#retake-letter').value;
+    if (!courseCode) return;
+    out.innerHTML = '<p class="hint">계산하는 중…</p>';
+    try {
+        const r = await api('POST', '/api/stats/simulate/retake',
+            { studentId: state.me.studentId, items: [{ courseCode, letter }] });
+        if (out.isConnected) out.innerHTML = retakeResultHtml(r);
+    } catch (e) {
+        if (out.isConnected) out.innerHTML = `<p class="form-error">${esc(e.message)}</p>`;
+    }
+}
 
 // ───────── 성적 ─────────
 
