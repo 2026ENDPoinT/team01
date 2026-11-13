@@ -23,6 +23,7 @@ cmake -B build
 cmake --build build
 ./build/GradeManager          # Windows: build\Debug\GradeManager.exe
 ./build/GradeManager 9090     # 8080 이 이미 사용 중이면 다른 포트로
+./build/GradeManager 18080 0.0.0.0   # 두 번째 인자로 바인드 주소를 고름 (기본 127.0.0.1, 이 컴퓨터에서만 접속). 외부에 열 때는 시연용 계정 비밀번호를 바꾸고 HTTPS 없이 비밀번호가 그대로 오간다는 점을 알고 쓸 것
 ```
 
 `data/`, `web/` 경로는 빌드 시 프로젝트 경로로 고정되므로 어디서 실행해도 됩니다.

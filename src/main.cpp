@@ -5,11 +5,15 @@
 #include "grade_manager.h"
 #include "server.h"
 
-// 사용법: GradeManager [포트]   (기본 8080)
+// 사용법: GradeManager [포트] [바인드주소]   (기본 8080, 127.0.0.1)
 int main(int argc, char* argv[]) {
     int port = 8080;
     if (argc >= 2) {
         port = std::stoi(argv[1]);
+    }
+    std::string bindAddress = "127.0.0.1";  // 기본은 이 컴퓨터에서만 접속
+    if (argc >= 3 && argv[2][0] != '\0') {
+        bindAddress = argv[2];
     }
 
     const std::string root = PROJECT_ROOT;  // CMakeLists.txt 에서 넘겨준 프로젝트 경로
@@ -30,7 +34,7 @@ int main(int argc, char* argv[]) {
         std::cout << "관리자 계정 admin / admin1234 를 만들었습니다. 로그인 후 비밀번호를 바꾸세요" << std::endl;
     }
 
-    Server server(gm, accounts, root + "/web", port);
+    Server server(gm, accounts, root + "/web", port, bindAddress);
     server.run();
     return 0;
 }
