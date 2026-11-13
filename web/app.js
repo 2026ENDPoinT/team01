@@ -1222,26 +1222,52 @@ function openSchemeForm(ctx) {
         }
     };
 
-    const updateRatioMaxes = (changedLetter = null) => {
-        // 방금 입력한 값이 허용 범위를 넘으면 즉시 최대값으로 조정한다.
-        if (changedLetter) {
-            const changed = ratioInput(changedLetter);
-            if (changed && changed.value !== '') {
-                const value = Number(changed.value);
-                if (Number.isFinite(value)) {
-                    changed.value = String(Math.max(0, Math.min(100, maxRatioFor(changedLetter), Math.trunc(value))));
+const updateRatioMaxes = (changedLetter = null) => {
+    if (changedLetter) {
+        const changed = ratioInput(changedLetter);
+
+        if (changed && changed.value !== '') {
+            const value = Number(changed.value);
+            if (Number.isFinite(value)) {
+                const max = maxRatioFor(changedLetter);
+                const adjusted = Math.max(0, Math.min(100, max, Math.trunc(value)));
+
+                // 안내 문구 영역 생성
+                let hint = changed.parentElement.querySelector('.ratio-limit-hint');
+
+                if (!hint) {
+                    hint = document.createElement('small');
+                    hint.className = 'ratio-limit-hint';
+                    hint.style.color = '#dc2626';
+                    hint.style.display = 'block';
+                    hint.style.marginTop = '4px';
+                    changed.insertAdjacentElement('afterend', hint);
+                }
+
+                // 허용 범위를 초과한 경우 안내
+                if (value > max) {
+                    changed.value = String(adjusted);
+                    hint.textContent =
+                        `입력한 값은 허용 범위를 초과하여 ${adjusted}%로 조정했습니다. 최대 허용값은 ${max}%입니다.`;
+                } else {
+                    hint.textContent = '';
                 }
             }
+        } else if (changed) {
+            const hint = changed.parentElement.querySelector('.ratio-limit-hint');
+            if (hint) hint.textContent = '';
         }
+    }
 
-        // 모든 입력칸의 max 속성도 현재 다른 등급 비율에 맞춰 갱신한다.
-        GRADE_RATIO_LETTERS.forEach((letter) => {
-            const input = ratioInput(letter);
-            if (!input) return;
-            input.min = '0';
-            input.max = String(maxRatioFor(letter));
-        });
-    };
+    // 모든 입력칸의 최대 허용값 갱신
+    GRADE_RATIO_LETTERS.forEach((letter) => {
+        const input = ratioInput(letter);
+        if (!input) return;
+
+        input.min = '0';
+        input.max = String(maxRatioFor(letter));
+    });
+};
 
     GRADE_RATIO_LETTERS.forEach((letter) => {
         ratioInput(letter)?.addEventListener('input', () => updateRatioMaxes(letter));
