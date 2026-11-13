@@ -153,7 +153,7 @@ button.link.danger:hover { background: rgba(239, 68, 68, .15); }
 }
 .btn-link:hover { background: var(--hover); }
 
-/* 표 (학생·성적·석차). 좁은 화면에서는 .table-wrap 안에서 가로로 스크롤 */
+/* 표 (학생·성적). 좁은 화면에서는 .table-wrap 안에서 가로로 스크롤 */
 .table-wrap {
     background: var(--card);
     border: 1px solid var(--line);
@@ -188,11 +188,6 @@ tfoot td { border-top: 1px solid var(--line); border-bottom: 0; color: var(--mut
 .badge.D { background: rgba(249, 115, 22, .18); color: #fb923c; }
 .badge.F { background: rgba(239, 68, 68, .18); color: #f87171; }
 .badge.R { background: rgba(156, 163, 175, .18); color: #9ca3af; }
-
-/* 석차 막대 */
-.bar-cell { width: 30%; }
-.bar { height: 8px; width: 100%; min-width: 120px; background: var(--line); border-radius: 4px; }
-.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
 
 /* 과목 목록 (세로 목록) */
 #course-list {
