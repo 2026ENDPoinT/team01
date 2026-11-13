@@ -410,8 +410,8 @@ int parsePostId(const std::string& text) {
 }  // namespace
 
 Server::Server(GradeManager& gm, AccountStore& accounts,
-               const std::string& webDir, int port)
-    : gm(gm), webDir(webDir), port(port), accounts(&accounts) {}
+               const std::string& webDir, int port, const std::string& bindAddress)
+    : gm(gm), webDir(webDir), port(port), bindAddress(bindAddress), accounts(&accounts) {}
 
 std::string Server::sessionToken(const httplib::Request& req) const {
     if (!req.has_header("Cookie")) return "";
@@ -2183,9 +2183,14 @@ void Server::run() {
         setJson(res, 200, json{{"deleted", true}});
     });
 
-    std::cout << "http://localhost:" << port
+    if (bindAddress != "127.0.0.1") {
+        std::cout << "경고: " << bindAddress
+                  << " 에 열었습니다. 로컬 밖에서도 접속할 수 있으니 시연용 계정 비밀번호를 바꾸세요"
+                  << std::endl;
+    }
+    std::cout << "http://" << (bindAddress == "127.0.0.1" ? "localhost" : bindAddress) << ":" << port
               << " 에서 실행 중 (종료: Ctrl+C)" << std::endl;
-    if (!svr.listen("127.0.0.1", port)) {
+    if (!svr.listen(bindAddress, port)) {
         std::cerr << "포트 " << port << " 를 열 수 없습니다 (이미 사용 중인지 확인)"
                   << std::endl;
     }

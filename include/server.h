@@ -106,7 +106,9 @@ struct Session {
 
 class Server {
 public:
-    Server(GradeManager& gm, AccountStore& accounts, const std::string& webDir, int port);
+    // bindAddress: 기본 127.0.0.1 (이 컴퓨터에서만 접속), main 의 두 번째 인자로 바꿀 수 있음
+    Server(GradeManager& gm, AccountStore& accounts, const std::string& webDir, int port,
+           const std::string& bindAddress = "127.0.0.1");
 
     // 서버 실행 (Ctrl+C 로 종료할 때까지 반환하지 않음)
     void run();
@@ -115,6 +117,7 @@ private:
     GradeManager& gm;
     std::string webDir;
     int port;
+    std::string bindAddress;
     std::mutex mtx;  // gm 을 한 번에 한 요청만 쓰도록 잠금
     AccountStore* accounts = nullptr;  // 계정 (main이 소유)
     std::unordered_map<std::string, Session> sessions;  // 로그인 세션 (mtx 안에서만 접근)
