@@ -39,7 +39,7 @@
 //                                     평점 계산에 들어간 학점이 0 이면 "gpa": null
 //   GET    /api/stats/summary/:id     학기별·누적 평점 {"semesters":[{semester,gpa,credits}],"gpa","credits"}
 //                                     (credits 0 이면 "gpa": null) (admin, student 본인)
-//   GET    /api/stats/course/:code    과목 평균/최고/최저 + latestSemester·latestEnrolled (로그인)
+//   GET    /api/stats/course/:code    과목 평균/최고/최저 + latestSemester·latestEnrolled·enrolledBySemester (로그인)
 //   GET    /api/stats/warnings        학사경고 전체 (admin)
 //   GET    /api/stats/warnings/:id    학생 학사경고 (admin, student 본인)
 //   GET    /api/export/student/:id    학생 성적표 CSV 다운로드 (admin, student 본인)

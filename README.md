@@ -158,7 +158,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 - 신청 학기는 관리자가 설정합니다 (`settings.csv`). 비어 있으면 수강신청 기간이 아닙니다. 학생은 신청 학기에만 신청·취소할 수 있고, 관리자는 어느 학기든 대리로 신청·취소할 수 있습니다.
 - 신청 검사: 중복 (`409`), 정원 (그 학기 신청 인원이 정원 이상이면 `409`), 같은 학생·학기에 신청한 과목과 강의시간 겹침 (`409`). 강의시간이 빈 과목(원격 등)은 겹치지 않습니다.
 - 성적 등록은 같은 (학번, 과목, 학기)의 수강신청이 있어야 합니다 (없으면 `409`). 성적 또는 평가 항목 점수가 있는 수강은 취소할 수 없습니다 (`409`). 출석부 계산값(`출석`)은 항목 점수로 세지 않습니다.
-- 과목 목록의 수강 표시 (#14): 수강신청이 있는 가장 늦은 학기의 신청 인원 / 학기당 정원 (`GET /api/stats/course/:code` 의 `latestSemester`, `latestEnrolled`)
+- 과목 목록의 수강 표시 (#14): 과목 페이지에 들어가면 처음 선택되는 학기와 그 학기 신청 인원 / 학기당 정원. 학기는 학생이면 본인이 수강신청한 학기, 관리자·교수면 이 과목에 수강신청이 있는 학기 중 볼 수 있는 가장 최근 학기 (없으면 현재 학기, `web/app.js` 의 `courseSemester`, 인원은 `GET /api/stats/course/:code` 의 `enrolledBySemester`)
 
 ## 과목 페이지
 
@@ -302,7 +302,7 @@ tests/        GradeTests 단위 테스트 (check.h 의 CHECK 매크로)
 | DELETE | `/api/grades?studentId=&courseCode=&semester=` | 성적 삭제 `{"deleted": true}` (관리자·담당 교수. 평가 기준이 있는 과목·학기는 `409`) |
 | GET | `/api/stats/gpa/:id` | 학생 GPA `{studentId, semester, gpa}` (`?semester=`, 관리자·본인). 계산에 들어간 학점이 0 이면 `"gpa": null` |
 | GET | `/api/stats/summary/:id` | 학기별·누적 평점과 학점 `{"semesters": [{semester, gpa, credits}], "gpa", "credits"}` (성적 있는 학기만 오름차순, `credits` 가 0 이면 `"gpa": null`, 관리자·본인) |
-| GET | `/api/stats/course/:code` | 과목 평균/최고/최저, `latestSemester`·`latestEnrolled` |
+| GET | `/api/stats/course/:code` | 과목 평균/최고/최저, `latestSemester`·`latestEnrolled`, `enrolledBySemester` (학기 → 수강신청 인원) |
 | GET | `/api/stats/warnings` | 학사경고 전체 `[{studentId, name, semester, reason, gpa, credits}]` (관리자) |
 | GET | `/api/stats/warnings/:id` | 학생 학사경고 `[{semester, reason, gpa, credits}]` (관리자·본인) |
 | GET | `/api/export/student/:id` | 학생 성적표 CSV (관리자·본인) |
