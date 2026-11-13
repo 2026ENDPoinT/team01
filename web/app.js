@@ -122,7 +122,7 @@ const assessQuery = (code, sem) => new URLSearchParams({ courseCode: code, semes
 function assessmentsOf(code, sem, cache) {
     const k = JSON.stringify([code, sem]);
     if (!cache.has(k)) {
-        cache.set(k, api('GET', '/api/assessments?' + assessQuery(code, sem)).catch(() => ({ mode: 'absolute', items: [] })));
+        cache.set(k, api('GET', '/api/assessments?' + assessQuery(code, sem)).catch(() => ({ mode: 'absolute', items: [], gradeRatios: { ...DEFAULT_GRADE_RATIOS } })));
     }
     return cache.get(k);
 }
@@ -132,9 +132,11 @@ const ASSESS_CATEGORIES = ['출석', '중간고사', '기말고사', '과제', '
 const ATTEND_ITEM = '출석';
 const ATTEND_LOCK_MSG = '출석 점수는 출석부에서 자동 계산됩니다 (아래 출결 영역에서 고치세요)';
 // 상대평가 규칙 안내 (서버 RelativeGrading 상수와 같은 값)
-const RELATIVE_RULES = 'A0 이상 30%·B0 이상 70% 이하, 평균 3.50 이하';
+const RELATIVE_RULES = '교수자 설정 등급별 비율 (A+·A0·B+·B0·C+·C0·F)';
 // 등급 → 평점 (서버 letterToPoint 와 같음, F·R·모르는 값은 0)
 const LETTER_POINT = { 'A+': 4.5, A0: 4.0, 'B+': 3.5, B0: 3.0, 'C+': 2.5, C0: 2.0, 'D+': 1.5, D0: 1.0 };
+const GRADE_RATIO_LETTERS = ['A+', 'A0', 'B+', 'B0', 'C+', 'C0', 'F'];
+const DEFAULT_GRADE_RATIOS = { 'A+': 10, A0: 20, 'B+': 20, B0: 20, 'C+': 10, C0: 10, F: 10 };
 
 // 학생·성적 탭이 함께 쓰는 페이지 이동 줄. 10건 이하면 표시하지 않는다.
 function renderPager(el, { page, totalPages, total, onMove }) {
@@ -992,7 +994,11 @@ const validateScheme = (d) => {
     if (weights.some((w) => !/^\d+$/.test(w) || Number(w) > 100)) return SCHEME_RULES;
     if (!GRADING_MODES.some((m) => m.value === d.mode)) return SCHEME_RULES;
     const total = weights.reduce((t, w) => t + Number(w), 0);
-    return total === 100 ? '' : `비율 합계가 100이어야 합니다 (지금 ${total}%)`;
+    if (total !== 100) return `평가 항목 비율 합계가 100이어야 합니다 (지금 ${total}%)`;
+    const ratios = GRADE_RATIO_LETTERS.map((letter) => String(d[`ratio_${letter}`] ?? '').trim());
+    if (ratios.some((r) => !/^\d+$/.test(r) || Number(r) > 100)) return '상대평가 등급 비율은 0~100 정수로 입력하세요';
+    const ratioTotal = ratios.reduce((t, r) => t + Number(r), 0);
+    return ratioTotal === 100 ? '' : `상대평가 등급 비율 합계가 100이어야 합니다 (지금 ${ratioTotal}%)`;
 };
 // 항목 점수표 마지막 열: 서버가 계산한 최종 점수와 등급 (성적이 없으면 = 미완성 '-')
 const finalCell = (g) => (g ? `<b>${esc(round2(g.score))}</b> ${letterBadge(g.letter)}` : '-');
@@ -1001,12 +1007,12 @@ const finalCell = (g) => (g ? `<b>${esc(round2(g.score))}</b> ${letterBadge(g.le
 //   상한은 서버 규칙처럼 내림 (⌊n×0.3⌋, ⌊n×0.7⌋), 성적이 없으면 평균 '-'
 function relativeSummary(grades) {
     const n = grades.length;
-    const count = (letters) => grades.filter((g) => letters.includes(g.letter)).length;
-    const point = (l) => (Object.hasOwn(LETTER_POINT, l) ? LETTER_POINT[l] : 0);
-    const avg = n ? grades.reduce((t, g) => t + point(g.letter), 0) / n : null;
-    const cap = (r) => Math.floor(n * r + 1e-9);
-    return `상대평가 · A0 이상 ${count(['A+', 'A0'])}명 / 상한 ${cap(0.3)} · B0 이상 ${count(['A+', 'A0', 'B+', 'B0'])}명 / 상한 ${cap(0.7)}` +
-        ` · 평균 평점 ${fmt(avg)} / 3.50 <span class="hint">(최종 성적 ${n}명 기준, 성적이 더 생기면 등급이 다시 정해집니다)</span>`;
+    if (n === 0 || grades.some((g) => !g.letter)) {
+        return `상대평가 · 성적 입력 완료 전 (${n}명 중 미완성 학생이 있습니다. 전원 입력 후 등급이 산출됩니다)`;
+    }
+    const counts = GRADE_RATIO_LETTERS.map((letter) =>
+        `${letter} ${grades.filter((g) => g.letter === letter).length}명`);
+    return `상대평가 결과 · ${counts.join(' · ')} <span class="hint">(동점자는 같은 등급으로 처리)</span>`;
 }
 
 // '평가 기준' 영역 그리기 (고른 학기 state.assessSem)
@@ -1028,7 +1034,7 @@ async function renderAssess() {
         return;
     }
     const q = assessQuery(code, sem);
-    const [{ mode, items }, enrolls, scores, grades] = await Promise.all([
+    const [{ mode, items, gradeRatios }, enrolls, scores, grades] = await Promise.all([
         api('GET', '/api/assessments?' + q),
         api('GET', '/api/enrollments?' + q),
         api('GET', '/api/assessment-scores?' + q),
@@ -1037,7 +1043,7 @@ async function renderAssess() {
     // 기다리는 사이 과목·학기·탭이 바뀌었으면 그리지 않음
     if (seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code || state.assessSem !== sem) return;
     const cols = items.filter((a) => a.weight > 0);
-    state.assess = { code, sem, mode, items, cols, finalSeq: 0 };
+    state.assess = { code, sem, mode, items, cols, gradeRatios: gradeRatios ?? { ...DEFAULT_GRADE_RATIOS }, finalSeq: 0 };
     if (!items.length) {
         box.innerHTML = '<p class="hint">평가 기준이 없습니다. 설정하면 이 과목·학기 성적은 항목 점수로 자동 계산됩니다</p>';
         return;
@@ -1088,17 +1094,29 @@ async function renderAssess() {
 //   저장은 PUT /api/assessments 한 번 (6분류 비율을 모두 보냄)
 function openSchemeForm(ctx) {
     const weightOf = new Map(ctx.items.map((a) => [a.name, a.weight]));
+    const ratioValues = { ...DEFAULT_GRADE_RATIOS, ...(ctx.gradeRatios ?? {}) };
     openForm({
         title: `평가 기준 설정 · ${courseName(ctx.code)} ${ctx.sem}`,
         fields: [
             ...ASSESS_CATEGORIES.map((c) => ({ name: c, label: `${c} 비율 (%, 0~100 정수)`, type: 'number', min: 0, max: 100, step: 1 })),
             { name: 'mode', label: '등급 방식', options: GRADING_MODES },
+            ...GRADE_RATIO_LETTERS.map((letter) => ({
+                name: `ratio_${letter}`, label: `상대평가 ${letter} 비율 (%, 0~100 정수)`,
+                type: 'number', min: 0, max: 100, step: 1,
+            })),
         ],
-        values: { ...Object.fromEntries(ASSESS_CATEGORIES.map((c) => [c, weightOf.get(c) ?? 0])), mode: ctx.mode },
+        values: {
+            ...Object.fromEntries(ASSESS_CATEGORIES.map((c) => [c, weightOf.get(c) ?? 0])),
+            mode: ctx.mode,
+            ...Object.fromEntries(GRADE_RATIO_LETTERS.map((letter) => [`ratio_${letter}`, ratioValues[letter]])),
+        },
         validate: validateScheme,
         onSubmit: async (d) => {
             const weights = Object.fromEntries(ASSESS_CATEGORIES.map((c) => [c, Number(d[c])]));
-            await api('PUT', '/api/assessments', { courseCode: ctx.code, semester: ctx.sem, mode: d.mode, weights });
+            const gradeRatios = Object.fromEntries(GRADE_RATIO_LETTERS.map((letter) => [letter, Number(d[`ratio_${letter}`])]));
+            await api('PUT', '/api/assessments', {
+                courseCode: ctx.code, semester: ctx.sem, mode: d.mode, weights, gradeRatios,
+            });
             toast('평가 기준을 저장했습니다');
             await refreshAll();
         },

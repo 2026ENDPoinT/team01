@@ -112,12 +112,16 @@ public:
     // ----- 평가 기준 (과목·학기마다 6분류 비율 + 등급 산출 방식) -----
     // 등급 산출 방식. 평가 기준이 없거나 기록이 없으면 kGradingAbsolute
     std::string getGradingMode(const std::string& courseCode, const std::string& semester) const;
+    // 상대평가 등급 비율 (A+, A0, B+, B0, C+, C0, F 순서). 설정이 없으면 기본 비율.
     // 평가 기준 만들기·바꾸기. weights 는 assessmentCategories() 순서의 6개 정수
     //   false: 없는 과목·P/F 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
     //          처음 만드는데 그 과목·학기에 이미 성적(직접 입력)이 있음
     //   성공: 6개 항목을 모두 저장(0 포함), 비율이 0 이 된 분류의 항목 점수 삭제, 수강생 전원 성적 재계산
     bool setGradingScheme(const std::string& courseCode, const std::string& semester,
-                          const std::vector<int>& weights, const std::string& mode);
+                          const std::vector<int>& weights, const std::string& mode,
+                          const std::vector<int>& gradeRatios = {30, 0, 40, 0, 30, 0, 0});
+    std::vector<int> getRelativeGradeRatios(const std::string& courseCode,
+                                            const std::string& semester) const;
     // 평가 기준 삭제: 항목·항목 점수·등급 방식·그 과목·학기 성적을 모두 지움 (직접 입력 과목으로 돌아감). 없으면 false
     bool removeGradingScheme(const std::string& courseCode, const std::string& semester);
 
@@ -147,6 +151,7 @@ private:
     std::vector<AssessmentScore> assessmentScores;
     std::vector<Attendance> attendance;
     std::vector<GradingMode> gradingModes;
+    std::vector<RelativeGradeRatio> relativeGradeRatios;
 
     // 항목 계산 과목이면 그 학생의 최종 점수를 다시 계산해 grades 에 반영 (항목이 없으면 아무것도 안 함)
     //   점수 = 저장된 그 학생 점수(출석 제외) + 출석 비율이 0 보다 크면 attendanceCategoryScore. 끝에서 applyGradingMode

@@ -1,29 +1,32 @@
 // 상대평가 등급 산출
-//   구현: #67 (지금은 스텁: 각 점수의 scoreToLetter 를 그대로 돌려줌)
+// A0 이상 30%, B0 이상 70% 상한과 평균 평점 3.50 이하를 적용한다.
 #include "relative_grading.h"
 
 #include <algorithm>
-#include <cmath>
 #include <numeric>
 
 #include "grade.h"
 
 namespace RelativeGrading {
-
 namespace {
 
-const char* const kLadder[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0"};
-const int kLadderSize = 8;
+// 실제 평점 계산 순서. D+/D0는 상대평가 비율 구간에는 없지만,
+// 절대평가 등급보다 높은 등급을 주지 않는 기준 및 평균 조정에 사용한다.
+const char* const kGradeLadder[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
+constexpr size_t kGradeCount = sizeof(kGradeLadder) / sizeof(kGradeLadder[0]);
 
-// kLadder 안의 위치 (A+ = 0 ... D0 = 7), F·그 밖은 -1
-int ladderIndex(const std::string& letter) {
-    for (int i = 0; i < kLadderSize; i++) {
-        if (letter == kLadder[i]) return i;
+// 비율 설정의 일곱 구간. D+/D0는 별도 비율 구간이 아니므로 F 구간으로 내려간다.
+const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 5, 8};
+
+size_t gradeIndex(const std::string& letter) {
+    for (size_t i = 0; i < kGradeCount; ++i) {
+        if (letter == kGradeLadder[i]) return i;
     }
-    return -1;
+    return kGradeCount - 1;
 }
 
 double averagePoint(const std::vector<std::string>& letters) {
+    if (letters.empty()) return 0.0;
     double sum = 0.0;
     for (const std::string& letter : letters) sum += letterToPoint(letter);
     return sum / static_cast<double>(letters.size());
@@ -31,77 +34,95 @@ double averagePoint(const std::vector<std::string>& letters) {
 
 }  // namespace
 
-std::vector<std::string> assignLetters(const std::vector<double>& scores) {
+std::vector<int> defaultRatios() {
+    // 기본 상대평가: 상위 30% A+, 다음 40% B+, 나머지 30% C+.
+    // A0 이상 30%, B0 이상 70% 상한을 만족하며 평균 평점은 최대 3.50이다.
+    return {30, 0, 40, 0, 30, 0, 0};
+}
+
+bool validRatios(const std::vector<int>& ratios) {
+    if (ratios.size() != 7) return false;
+    int total = 0;
+    for (int ratio : ratios) {
+        if (ratio < 0 || ratio > 100) return false;
+        total += ratio;
+    }
+    return total == 100;
+}
+
+std::vector<std::string> assignLetters(const std::vector<double>& scores,
+                                       const std::vector<int>& ratios) {
     const size_t n = scores.size();
-    std::vector<std::string> letters;
-    letters.reserve(n);
-    for (double score : scores) letters.push_back(scoreToLetter(score));
-    if (n == 0) return letters;
+    std::vector<std::string> result(n);
+    if (n == 0 || !validRatios(ratios)) return result;
 
-    const size_t capA = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.30 + 1e-9));
-    const size_t capAB = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.70 + 1e-9));
-
-    // 점수 높은 순 (같은 점수는 입력 순서 유지)
     std::vector<size_t> order(n);
     std::iota(order.begin(), order.end(), static_cast<size_t>(0));
-    std::stable_sort(order.begin(), order.end(),
-                     [&](size_t a, size_t b) { return scores[a] > scores[b]; });
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return scores[a] > scores[b];
+    });
 
-    size_t countA = 0;
-    size_t countAB = 0;
-    bool aClosed = false;
-    bool abClosed = false;
-
+    // 같은 점수는 하나의 묶음으로 처리한다. 묶음 전체가 들어갈 수 있는
+    // 첫 번째 비율 구간을 선택하므로 등급 경계에서 동점자가 갈라지지 않는다.
     size_t begin = 0;
     while (begin < n) {
-        size_t end = begin;
-        while (end < n && scores[order[end]] == scores[order[begin]]) end++;
-        const size_t k = end - begin;
-        std::string letter = letters[order[begin]];
+        size_t end = begin + 1;
+        while (end < n && scores[order[end]] == scores[order[begin]]) ++end;
 
-        if (letter == "A+" || letter == "A0") {
-            if (!aClosed && countA + k <= capA) {
-                countA += k;
-                countAB += k;
-            } else {
-                aClosed = true;
-                letter = "B+";
+        size_t cumulativeRatio = 0;
+        size_t relativeGrade = kRatioGradeIndex[6];  // 기본값 F
+        for (size_t category = 0; category < ratios.size(); ++category) {
+            cumulativeRatio += static_cast<size_t>(ratios[category]);
+            const size_t boundary = (n * cumulativeRatio) / 100;
+            if (end <= boundary) {
+                relativeGrade = kRatioGradeIndex[category];
+                break;
             }
         }
-        if (letter == "B+" || letter == "B0") {
-            // A 에서 그대로 통과한 묶음은 위에서 이미 countAB 를 올렸고 letter 가 A 라 여기 오지 않음
-            if (!abClosed && countAB + k <= capAB) {
-                countAB += k;
-            } else {
-                abClosed = true;
-                letter = "C+";
-            }
+
+        // 상대평가 결과가 점수 기준 절대평가 등급보다 높아지지 않도록 한다.
+        const size_t absoluteGrade = gradeIndex(scoreToLetter(scores[order[begin]]));
+        const size_t assignedGrade = std::max(relativeGrade, absoluteGrade);
+        for (size_t i = begin; i < end; ++i) {
+            result[order[i]] = kGradeLadder[assignedGrade];
         }
-        for (size_t i = begin; i < end; i++) letters[order[i]] = letter;
         begin = end;
     }
 
-    // 평균 상한 3.50 (안전장치)
-    while (averagePoint(letters) > 3.50 + 1e-9) {
-        int top = kLadderSize;  // 가장 높은 등급 (F 제외)
-        for (const std::string& letter : letters) {
-            const int idx = ladderIndex(letter);
-            if (idx >= 0 && idx < top) top = idx;
+    // 평균 평점 상한 3.50을 보장한다. 가장 낮은 점수의 비-F 동점 묶음부터
+    // 한 단계씩 낮추므로 동점자 일치와 점수 순서(고득점이 더 낮은 등급을 받지 않음)를 유지한다.
+    while (averagePoint(result) > 3.50 + 1e-9) {
+        double lowestScore = 0.0;
+        bool found = false;
+        for (size_t i = 0; i < n; ++i) {
+            if (gradeIndex(result[i]) >= kGradeCount - 1) continue;
+            if (!found || scores[i] < lowestScore) {
+                lowestScore = scores[i];
+                found = true;
+            }
         }
-        if (top >= kLadderSize - 1) break;  // D0 이하는 더 내릴 수 없음
+        if (!found) break;
 
-        double lowest = 0.0;  // 그 등급 중 가장 낮은 점수
-        bool first = true;
-        for (size_t i = 0; i < n; i++) {
-            if (ladderIndex(letters[i]) != top) continue;
-            if (first || scores[i] < lowest) lowest = scores[i];
-            first = false;
+        size_t currentGrade = kGradeCount - 1;
+        for (size_t i = 0; i < n; ++i) {
+            if (scores[i] == lowestScore) {
+                currentGrade = gradeIndex(result[i]);
+                break;
+            }
         }
-        for (size_t i = 0; i < n; i++) {
-            if (ladderIndex(letters[i]) == top && scores[i] == lowest) letters[i] = kLadder[top + 1];
+        if (currentGrade >= kGradeCount - 1) break;
+        for (size_t i = 0; i < n; ++i) {
+            if (scores[i] == lowestScore) {
+                result[i] = kGradeLadder[currentGrade + 1];
+            }
         }
     }
-    return letters;
+
+    return result;
+}
+
+std::vector<std::string> assignLetters(const std::vector<double>& scores) {
+    return assignLetters(scores, defaultRatios());
 }
 
 }  // namespace RelativeGrading
