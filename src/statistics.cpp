@@ -14,7 +14,21 @@ namespace {
 struct GpaSum {
     double points = 0.0;
     double credits = 0.0;
+    double majorPoints = 0.0;
+    double majorCredits = 0.0;
+
+    void add(const GpaSum& other) {
+        points += other.points;
+        credits += other.credits;
+        majorPoints += other.majorPoints;
+        majorCredits += other.majorCredits;
+    }
 };
+
+// 전공과목 = 이수구분이 전공필수 또는 전공선택
+bool isMajorCourse(const Course& course) {
+    return course.category == "전공필수" || course.category == "전공선택";
+}
 
 // 삭제된 성적을 뺀 grades 를 학기별로 묶어 평점·학점 합을 구함 (calcGPA 와 gpaSummary 가 공유)
 //   등급은 Retake::officialLetter, 없는 과목의 성적은 제외 → 계산에 들어간 성적이 있는 학기만 담김
@@ -25,15 +39,24 @@ std::map<std::string, GpaSum> sumBySemester(const GradeManager& gm, const std::s
     for (const Grade& g : grades) {
         const Course* course = gm.findCourse(g.courseCode);
         if (course == nullptr) continue;
+        const double weighted = letterToPoint(Retake::officialLetter(g, allGrades)) * course->credit;
         GpaSum& sum = sums[g.semester];
-        sum.points += letterToPoint(Retake::officialLetter(g, allGrades)) * course->credit;
+        sum.points += weighted;
         sum.credits += course->credit;
+        if (isMajorCourse(*course)) {
+            sum.majorPoints += weighted;
+            sum.majorCredits += course->credit;
+        }
     }
     return sums;
 }
 
 double toGpa(const GpaSum& sum) {
     return sum.credits == 0 ? 0.0 : sum.points / sum.credits;
+}
+
+double toMajorGpa(const GpaSum& sum) {
+    return sum.majorCredits == 0 ? 0.0 : sum.majorPoints / sum.majorCredits;
 }
 
 }  // namespace
@@ -58,12 +81,15 @@ GpaSummary gpaSummary(const GradeManager& gm, const std::string& studentId) {
         s.semester = sem;
         s.gpa = toGpa(sum);
         s.credits = static_cast<int>(sum.credits);
+        s.majorGpa = toMajorGpa(sum);
+        s.majorCredits = static_cast<int>(sum.majorCredits);
         summary.semesters.push_back(s);
-        total.points += sum.points;
-        total.credits += sum.credits;
+        total.add(sum);
     }
     summary.gpa = toGpa(total);
     summary.credits = static_cast<int>(total.credits);
+    summary.majorGpa = toMajorGpa(total);
+    summary.majorCredits = static_cast<int>(total.majorCredits);
     return summary;
 }
 
