@@ -20,22 +20,22 @@ class GradeManager {
 public:
     explicit GradeManager(const std::string& dataDir);
 
-    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물·평가 항목·항목 점수)
+    // 프로그램 시작 시 CSV 에서 불러오기 / 변경 후 저장 (학생·과목·성적·수강신청·설정·게시물·평가 항목·항목 점수·출결)
     bool load();
     bool save();
 
     // ----- 학생 -----
     bool addStudent(const Student& student);                    // 학번 중복이면 false
-    bool updateStudent(const std::string& id, const Student& student);  // 학번이 바뀌면 성적·수강신청·항목 점수 학번도 바꿈
-    bool removeStudent(const std::string& id);                  // 그 학생의 성적·수강신청·항목 점수도 같이 삭제
+    bool updateStudent(const std::string& id, const Student& student);  // 학번이 바뀌면 성적·수강신청·항목 점수·출결 학번도 바꿈
+    bool removeStudent(const std::string& id);                  // 그 학생의 성적·수강신청·항목 점수·출결도 같이 삭제
     const Student* findStudent(const std::string& id) const;
     std::vector<Student> searchStudents(const std::string& keyword) const;  // 학번 또는 이름에 keyword 포함
     const std::vector<Student>& getStudents() const;
 
     // ----- 과목 -----
     bool addCourse(const Course& course);                       // 과목코드 중복이면 false
-    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물·평가 항목·항목 점수 코드도 바꿈
-    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물·평가 항목·항목 점수도 같이 삭제
+    bool updateCourse(const std::string& code, const Course& course);  // 코드가 바뀌면 성적·수강신청·게시물·평가 항목·항목 점수·출결 코드도 바꿈
+    bool removeCourse(const std::string& code);                 // 그 과목의 성적·수강신청·게시물·평가 항목·항목 점수·출결도 같이 삭제
     const Course* findCourse(const std::string& code) const;
     const std::vector<Course>& getCourses() const;
 

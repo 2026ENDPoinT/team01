@@ -445,3 +445,165 @@ TEST_CASE(assessments_last_item_removal_deletes_complete_grades) {
     CHECK(gm.getGrades().empty());
     CHECK(gm.getAssessmentScoresByStudent("24000001").empty());
 }
+
+// ----- 출결 (#59) -----
+// 출석 점수는 항목 점수로 저장하지 않고 attendanceCategoryScore 가 그때그때 계산한다.
+
+namespace {
+
+Attendance makeAttendance(const std::string& studentId, int week, const std::string& status,
+                          const std::string& code = kCode, const std::string& semester = kSemester) {
+    Attendance a;
+    a.studentId = studentId;
+    a.courseCode = code;
+    a.semester = semester;
+    a.week = week;
+    a.status = status;
+    return a;
+}
+
+// 24000001: 결석 1 (1주), 지각 3 (2~4주) → 결석 환산 2 → 87.5
+void fillAttendance(GradeManager& gm) {
+    CHECK(gm.setAttendance(makeAttendance("24000001", 1, "결석")));
+    CHECK(gm.setAttendance(makeAttendance("24000001", 2, "지각")));
+    CHECK(gm.setAttendance(makeAttendance("24000001", 3, "지각")));
+    CHECK(gm.setAttendance(makeAttendance("24000001", 4, "지각")));
+}
+
+}  // namespace
+
+TEST_CASE(attendance_changes_category_score_not_assessment_scores) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillAssessments(gm);
+    fillScores(gm);
+
+    // 기록이 하나도 없으면 100 (모두 출석)
+    CHECK_NEAR(gm.attendanceCategoryScore("24000001", kCode, kSemester), 100.0, 1e-9);
+
+    fillAttendance(gm);
+    CHECK_NEAR(gm.attendanceCategoryScore("24000001", kCode, kSemester), 87.5, 1e-9);
+    CHECK_EQ(gm.getAttendanceByCourse(kCode, kSemester).size(), static_cast<size_t>(4));
+    CHECK_EQ(gm.getAttendanceByStudent("24000001").size(), static_cast<size_t>(4));
+    // 다른 학생은 기록이 없으므로 100
+    CHECK_NEAR(gm.attendanceCategoryScore("24000002", kCode, kSemester), 100.0, 1e-9);
+
+    // 항목 점수(출석 100 포함)는 건드리지 않음, 성적은 다시 계산되어 그대로 있음
+    CHECK_EQ(gm.getAssessmentScoresByStudent("24000001").size(), static_cast<size_t>(4));
+    for (const AssessmentScore& s : gm.getAssessmentScoresByStudent("24000001")) {
+        if (s.name == "출석") {
+            CHECK_NEAR(s.score, 100.0, 1e-9);
+        }
+    }
+    CHECK(findGrade(gm, "24000001", kCode, kSemester) != nullptr);
+
+    // 같은 주차를 다시 기록하면 추가가 아니라 수정: 1주 결석 → 공결 → 결석 환산 1 → 93.75
+    CHECK(gm.setAttendance(makeAttendance("24000001", 1, "공결")));
+    CHECK_EQ(gm.getAttendanceByStudent("24000001").size(), static_cast<size_t>(4));
+    CHECK_NEAR(gm.attendanceCategoryScore("24000001", kCode, kSemester), 93.75, 1e-9);
+}
+
+TEST_CASE(attendance_remove_all_returns_to_100) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillAssessments(gm);
+    fillScores(gm);
+    fillAttendance(gm);
+
+    CHECK(!gm.removeAttendance("24000001", kCode, kSemester, 5));  // 기록 없는 주차
+    CHECK(!gm.removeAttendance("24000002", kCode, kSemester, 1));  // 기록 없는 학생
+    for (int week = 1; week <= 4; week++) {
+        CHECK(gm.removeAttendance("24000001", kCode, kSemester, week));
+    }
+    CHECK(gm.getAttendanceByStudent("24000001").empty());
+    CHECK_NEAR(gm.attendanceCategoryScore("24000001", kCode, kSemester), 100.0, 1e-9);
+    CHECK_EQ(gm.getAssessmentScoresByStudent("24000001").size(), static_cast<size_t>(4));
+    CHECK(findGrade(gm, "24000001", kCode, kSemester) != nullptr);
+}
+
+TEST_CASE(attendance_requires_enrollment_and_valid_value) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillAssessments(gm);
+
+    CHECK(!gm.setAttendance(makeAttendance("24000003", 1, "출석")));            // 수강신청 없음
+    CHECK(!gm.setAttendance(makeAttendance("24000001", 1, "출석", kCode, "2026-1")));  // 그 학기 수강신청 없음
+    CHECK(!gm.setAttendance(makeAttendance("29999999", 1, "출석")));            // 없는 학생
+    CHECK(!gm.setAttendance(makeAttendance("24000001", 1, "출석", "109999")));  // 없는 과목
+    CHECK(!gm.setAttendance(makeAttendance("24000001", 0, "출석")));            // 주차 범위 밖
+    CHECK(!gm.setAttendance(makeAttendance("24000001", 17, "출석")));
+    CHECK(!gm.setAttendance(makeAttendance("24000001", 1, "조퇴")));            // 알 수 없는 상태
+    CHECK(gm.getAttendanceByCourse(kCode, kSemester).empty());
+}
+
+TEST_CASE(attendance_without_assessments_is_record_only) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillAssessments(gm);
+    // 109002 2026-2 는 평가 항목이 없는 과목 (직접 입력 과목)
+    CHECK(gm.addEnrollment(makeEnrollment("24000001", "109002", kSemester)));
+    CHECK(gm.setAttendance(makeAttendance("24000001", 1, "결석", "109002")));
+
+    CHECK_EQ(gm.getAttendanceByCourse("109002", kSemester).size(), static_cast<size_t>(1));
+    CHECK(findGrade(gm, "24000001", "109002", kSemester) == nullptr);  // 성적이 생기지 않음
+    CHECK(gm.getAssessmentScores("109002", kSemester).empty());
+
+    // 직접 입력한 성적은 출결이 바뀌어도 그대로
+    CHECK(gm.addGrade(makeGrade("24000001", "109002", kSemester, 77)));
+    CHECK(gm.setAttendance(makeAttendance("24000001", 2, "결석", "109002")));
+    const Grade* g = findGrade(gm, "24000001", "109002", kSemester);
+    CHECK(g != nullptr && g->score == 77.0);
+}
+
+TEST_CASE(attendance_save_load_roundtrip) {
+    TempDir dir;
+    {
+        GradeManager gm(dir.str());
+        CHECK(gm.load());
+        fillAssessments(gm);
+        fillScores(gm);
+        fillAttendance(gm);
+        CHECK(gm.setAttendance(makeAttendance("24000002", 16, "공결")));
+        CHECK(gm.save());
+    }
+
+    GradeManager loaded(dir.str());
+    CHECK(loaded.load());
+    CHECK_EQ(loaded.getAttendanceByCourse(kCode, kSemester).size(), static_cast<size_t>(5));
+    const std::vector<Attendance> second = loaded.getAttendanceByStudent("24000002");
+    CHECK(second.size() == 1 && second[0].week == 16 && second[0].status == "공결");
+    CHECK_NEAR(loaded.attendanceCategoryScore("24000001", kCode, kSemester), 87.5, 1e-9);
+
+    // 불러온 뒤에도 기록이 이어짐 (2주 지각 → 출석: 지각 2 → 결석 환산 1 → 93.75)
+    CHECK(loaded.setAttendance(makeAttendance("24000001", 2, "출석")));
+    CHECK_NEAR(loaded.attendanceCategoryScore("24000001", kCode, kSemester), 93.75, 1e-9);
+}
+
+TEST_CASE(attendance_cascade_course_code_and_student_changes) {
+    TempDir dir;
+    GradeManager gm(dir.str());
+    fillAssessments(gm);
+    fillAttendance(gm);
+    CHECK(gm.setAttendance(makeAttendance("24000002", 1, "결석")));
+
+    // 과목코드 변경 → 출결 코드도 바뀌고 점수가 이어짐
+    CHECK(gm.updateCourse(kCode, makeCourse("109009", "자료구조 (새 코드)")));
+    CHECK(gm.getAttendanceByCourse(kCode, kSemester).empty());
+    CHECK_EQ(gm.getAttendanceByCourse("109009", kSemester).size(), static_cast<size_t>(5));
+    CHECK_NEAR(gm.attendanceCategoryScore("24000001", "109009", kSemester), 87.5, 1e-9);
+
+    // 학번 변경 → 출결 학번도 바뀜
+    CHECK(gm.updateStudent("24000001", makeStudent("24000009", "가")));
+    CHECK(gm.getAttendanceByStudent("24000001").empty());
+    CHECK_EQ(gm.getAttendanceByStudent("24000009").size(), static_cast<size_t>(4));
+    CHECK_NEAR(gm.attendanceCategoryScore("24000009", "109009", kSemester), 87.5, 1e-9);
+
+    // 학생 삭제 → 그 학생 출결만 삭제
+    CHECK(gm.removeStudent("24000009"));
+    CHECK(gm.getAttendanceByStudent("24000009").empty());
+    CHECK_EQ(gm.getAttendanceByStudent("24000002").size(), static_cast<size_t>(1));
+
+    // 과목 삭제 → 그 과목 출결 모두 삭제
+    CHECK(gm.removeCourse("109009"));
+    CHECK(gm.getAttendanceByStudent("24000002").empty());
+}
