@@ -1,4 +1,4 @@
-﻿#include "grade_manager.h"
+#include "grade_manager.h"
 
 #include <algorithm>
 #include <iostream>
@@ -407,6 +407,8 @@ bool GradeManager::addEnrollment(const Enrollment& enrollment) {
         return false;
     }
     enrollments.push_back(enrollment);
+    // 상대평가 과목은 수강생 구성이 바뀌었으므로 전체 입력 완료 여부와 등급을 다시 확인한다.
+    applyGradingMode(enrollment.courseCode, enrollment.semester);
     return true;
 }
 
@@ -422,6 +424,8 @@ bool GradeManager::removeEnrollment(const std::string& studentId, const std::str
     }
 
     enrollments.erase(it);
+    // 수강생이 줄었으므로 남은 수강생 기준으로 상대평가를 다시 산출한다.
+    applyGradingMode(courseCode, semester);
     return true;
 }
 
@@ -1009,6 +1013,33 @@ void GradeManager::applyGradingMode(const std::string& courseCode, const std::st
         }
         return;
     }
+    // 상대평가는 해당 과목·학기 수강생 전원의 성적이 완성된 뒤 한 번에 산출한다.
+    // grades 에는 항목 점수가 완성된 학생만 들어오므로 수강신청 인원과 비교한다.
+    size_t enrolledCount = 0;
+    bool allEnrolledStudentsGraded = true;
+    for (const Enrollment& enrollment : enrollments) {
+        if (enrollment.courseCode != courseCode || enrollment.semester != semester) {
+            continue;
+        }
+        ++enrolledCount;
+        const bool hasGrade = std::any_of(targets.begin(), targets.end(), [&](const Grade* grade) {
+            return grade->studentId == enrollment.studentId;
+        });
+        if (!hasGrade) {
+            allEnrolledStudentsGraded = false;
+        }
+    }
+
+    if (enrolledCount == 0 || !allEnrolledStudentsGraded || targets.size() != enrolledCount) {
+        // 아직 미완성인 동안에는 상대평가 등급을 확정하지 않는다.
+        // assignedLetter 를 비우면 Grade::letter() 는 점수 기준 등급을 반환하므로,
+        // API 응답에서도 아래의 완료 여부를 확인해 등급을 빈 문자열로 내려준다.
+        for (Grade* grade : targets) {
+            grade->assignedLetter.clear();
+        }
+        return;
+    }
+
     std::vector<double> scores;
     for (const Grade* grade : targets) {
         scores.push_back(grade->score);
