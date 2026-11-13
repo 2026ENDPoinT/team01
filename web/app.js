@@ -16,13 +16,21 @@ const $ = (id) => document.getElementById(id);
 // attendSem: 과목 페이지 '출결' 영역에서 고른 학기
 // attend: 그 영역에 지금 그려 둔 {code, sem, records, summaries, seq} (출결 칸이 사용, 안 그렸거나 불러오기 실패면 null)
 // currentSem: 서버가 알려 준 현재 학기 (loadBase 가 채움, 예: '2026-2'). 지난 학기 판정 기준
+// baseLoadedAt: loadBase 가 마지막으로 성공한 시각 (ms, 0 = 캐시 없음). showTab 이 30초(BASE_TTL_MS) 안이면 loadBase 를 건너뜀
+// renderSeq: 탭을 열거나 refreshAll 할 때마다 올리는 렌더 토큰. 렌더러는 시작할 때 값을 잡아 두고, 기다린 뒤 달라졌으면 화면을 건드리지 않음
+let renderSeq = 0;
+// baseGen: loadBase 호출 번호. 더 새 호출이 있거나 resetView 가 불렀으면 늦게 온 옛 응답은 state 에 쓰지 않음
+let baseGen = 0;
+// dirtyTabs: 변경(refreshAll) 뒤 다시 그리지 못한 탭 이름. 이런 탭은 옛 값이 보이지 않게 열 때 비우고 '불러오는 중…' 으로 시작
+const dirtyTabs = new Set();
+const BASE_TTL_MS = 30000;
 let gradePage = 1;
 const GRADE_PAGE_SIZE = 10;
 
 const state = {
     me: null, students: [], courses: [], stats: {}, accounts: [], enrollCtx: null,
     myEnrollments: [], courseCode: null, courseSem: null, postFilter: 'all', coursePosts: [],
-    assessSem: null, assess: null, attendSem: null, attend: null, currentSem: '',
+    assessSem: null, assess: null, attendSem: null, attend: null, currentSem: '', baseLoadedAt: 0,
 };
 
 // ───────── 공용 도우미 ─────────
@@ -267,8 +275,32 @@ const renderers = {
 // 지금 열린 탭 이름 (보이는 화면 section 의 id 'tab-이름' 에서 꺼냄)
 const currentTab = () => document.querySelector('main .tab.active').id.slice('tab-'.length);
 
-// 탭 버튼·화면을 바꾸고 그 탭을 다시 그림 (탭을 열 때마다 서버에서 최신 값을 받음)
-//   code: 과목 페이지면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌림
+// 탭 이름 → 처음 열 때 (그 화면이 비어 있을 때만) 보일 '불러오는 중…' 자리. 이미 그려 둔 탭은 이전 내용을 그대로 둠
+const loadingSlots = {
+    courses: ['course-list', '<li class="empty">불러오는 중…</li>'],
+    enroll: ['enroll-content', '<p class="hint">불러오는 중…</p>'],
+    students: ['student-body', emptyRow(7, '불러오는 중…')],
+    grades: ['grade-body', emptyRow(7, '불러오는 중…')],
+    myreport: ['myreport-body', '<p class="hint">불러오는 중…</p>'],
+    accounts: ['account-body', emptyRow(5, '불러오는 중…')],
+    course: ['course-posts', '<p class="hint">불러오는 중…</p>'],
+};
+
+// 과목 페이지 화면을 비움 (다른 과목으로 옮길 때 이전 과목 내용이 잠깐이라도 보이지 않게)
+function clearCoursePage() {
+    state.coursePosts = [];
+    state.assess = null;
+    state.attend = null;
+    ['course-hero', 'course-filter', 'course-posts', 'course-sem',
+        'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
+    delete $('attend-body').dataset.key;
+}
+
+// 탭 버튼·화면을 바꾸고 그 탭을 그림 (탭 이동마다 렌더 토큰을 올려, 늦게 오는 옛 탭 응답이 화면을 덮지 않게 함)
+//   이미 그려 둔 탭은 이전 내용을 그대로 보이고 서버 응답이 오면 제자리 갱신, 처음 여는 탭만 '불러오는 중…' 을 보임
+//   학생·과목 목록(loadBase)은 30초 안이면 다시 받지 않음 (openTab)
+//   등록·수정·삭제(refreshAll) 뒤에는 지금 탭만 다시 그리므로, 나머지 탭은 dirtyTabs 에 넣어 다음에 열 때 옛 값을 비우고 새로 받음
+//   code: 과목 페이지면 그 과목코드. 다른 과목으로 바뀌면 학기·분류·평가 기준·출결 학기 선택을 처음으로 되돌리고 화면도 비움
 function showTab(name, code, assessSemester = null) {
     if (code && code !== state.courseCode) {
         state.courseCode = code;
@@ -276,6 +308,7 @@ function showTab(name, code, assessSemester = null) {
         state.postFilter = 'all';
         state.assessSem = null;
         state.attendSem = null;
+        clearCoursePage();
     }
 
     if (name === 'course' && assessSemester) {
@@ -285,35 +318,75 @@ function showTab(name, code, assessSemester = null) {
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active',
         b.dataset.tab === (name === 'course' ? 'courses' : name)));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
-    refreshAll().catch((e) => toast(e.message, true));
+    const seq = ++renderSeq;
+    openTab(name, seq).catch((e) => { if (seq === renderSeq) toast(e.message, true); });
 }
 $('tabs').onclick = (e) => {
     const b = e.target.closest('button[data-tab]');
     if (b && !b.hidden) showTab(b.dataset.tab);
 };
 
+// showTab 의 본체. loadBase 캐시 나이에 따라
+//   30초 미만: loadBase 없이 바로 그림
+//   캐시 없음(로그인 직후): loadBase 를 받은 뒤 그림 (그릴 목록이 아직 없음)
+//   30초 이상: 캐시로 먼저 그리면서 loadBase 를 같이 받고, 목록이 바뀌었으면 한 번 더 그림
+async function openTab(name, seq) {
+    if (!state.me) return;
+    if (dirtyTabs.delete(name)) {
+        if (name === 'course') clearCoursePage();
+        else $(loadingSlots[name][0]).innerHTML = '';
+    }
+    const slot = loadingSlots[name];
+    if ($(slot[0]).innerHTML === '') $(slot[0]).innerHTML = slot[1];
+    if (Date.now() - state.baseLoadedAt < BASE_TTL_MS) { await renderTab(); return; }
+    if (!state.baseLoadedAt) {
+        await loadBase();
+        if (seq === renderSeq) await renderTab();
+        return;
+    }
+    const [changed] = await Promise.all([loadBase(), renderTab()]);
+    if (changed && seq === renderSeq) await renderTab();
+}
+
 // 학생·과목 목록과 현재 학기를 서버에서 받아 state 에 저장 (학생 목록은 서버가 역할에 맞게 걸러 줌)
 // 학생이면 자기 수강신청도 받음 (서버가 자기 것만 줌) → myCourses 가 사용
+// 받은 값이 이전과 다르면 true (openTab 이 그 탭을 다시 그릴지 정함). 더 새 호출이 있거나 resetView 가 불렀으면 쓰지 않고 false
 async function loadBase() {
-    let cur;
-    [state.students, state.courses, state.myEnrollments, cur] = await Promise.all([
+    const gen = ++baseGen;
+    const [students, courses, myEnrollments, cur] = await Promise.all([
         api('GET', '/api/students'),
         api('GET', '/api/courses'),
         state.me.role === 'student' ? api('GET', '/api/enrollments') : [],
         api('GET', '/api/semester/current'),
     ]);
-    state.currentSem = cur.semester ?? '';
+    if (gen !== baseGen) return false;
+    const next = { students, courses, myEnrollments, currentSem: cur.semester ?? '' };
+    const changed = Object.keys(next).some((k) => JSON.stringify(state[k]) !== JSON.stringify(next[k]));
+    Object.assign(state, next);
+    state.baseLoadedAt = Date.now();
+    return changed;
 }
-// 등록·수정·삭제 뒤에 호출: 목록을 다시 받고 지금 탭을 다시 그림
-// 과목 페이지를 보던 중 그 과목을 볼 수 없게 되면(과목 삭제·권한 변경) 수강과목 탭으로 돌아감
-async function refreshAll() {
-    if (!state.me) return;
-    await loadBase();
-    if (currentTab() === 'course' && !myCourses().some((c) => c.code === state.courseCode)) {
+
+// 지금 열린 탭을 그림. 과목 페이지를 보던 중 그 과목을 볼 수 없게 되면(과목 삭제·권한 변경) 수강과목 탭으로 돌아감
+async function renderTab() {
+    const name = currentTab();
+    if (name === 'course' && !myCourses().some((c) => c.code === state.courseCode)) {
+        clearCoursePage();
         showTab('courses');
         return;
     }
-    await renderers[currentTab()]();
+    await renderers[name]();
+}
+
+// 등록·수정·삭제 뒤에 호출: 캐시를 쓰지 않고 목록을 항상 새로 받은 뒤 지금 탭을 다시 그림 (변경 직후 최신 값이 보여야 함)
+async function refreshAll() {
+    if (!state.me) return;
+    const seq = ++renderSeq;
+    for (const n of Object.keys(renderers)) if (n !== currentTab()) dirtyTabs.add(n);
+    state.baseLoadedAt = 0;  // 기다리는 사이 다른 탭이 열려도 옛 캐시를 쓰지 않게
+    await loadBase();
+    if (seq !== renderSeq) return;  // 그 사이 탭을 옮겼으면 그 탭의 렌더가 맡음
+    await renderTab();
 }
 
 // 성적에 나온 학기 목록 (최신 학기가 위로). 학기 선택 상자에 사용
@@ -334,6 +407,10 @@ function fillSelect(el, items, allLabel, keep) {
 
 // 화면에 그려 둔 목록·선택 상자를 모두 비움 (다른 역할로 다시 로그인했을 때 이전 화면이 남지 않게)
 function resetView() {
+    renderSeq++;
+    dirtyTabs.clear();
+    baseGen++;
+    state.baseLoadedAt = 0;
     gradePage = 1;
     state.students = [];
     state.courses = [];
@@ -354,9 +431,10 @@ function resetView() {
         'grade-f-student', 'grade-f-course', 'grade-f-semester',
         'enroll-student', 'enroll-course', 'enroll-sem-select',
         'course-hero', 'course-filter', 'course-posts', 'course-sem',
-        'assess-sem', 'assess-body', 'attend-sem', 'attend-body'].forEach((id) => ($(id).innerHTML = ''));
+        'assess-sem', 'assess-body', 'attend-sem', 'attend-body', 'grade-pagination'].forEach((id) => ($(id).innerHTML = ''));
     ['student-search', 'enroll-sem-input', 'enroll-set-sem'].forEach((id) => ($(id).value = ''));
     delete $('enroll-sem-select').dataset.course;
+    delete $('attend-body').dataset.key;
     $('enroll-period').textContent = '';
 }
 
@@ -479,10 +557,12 @@ const courseFormValues = (c) => ({ ...c, remote: c.remote ? 'Y' : 'N' });
 //   최근 학기 = 교수·관리자는 수강신청이 1건 이상 있는 가장 늦은 학기 (신청 기록이 없으면 학기 없이 "수강 0"),
 //     학생은 본인 수강신청 중 이 과목의 현재 학기 이후 가장 최근 학기 (과목 페이지에서 처음 보이는 학기와 같음)
 async function renderCourses() {
+    const seq = renderSeq;
     const list = $('course-list');
     const courses = myCourses();
     const stats = await Promise.all(courses.map((c) =>
         api('GET', '/api/stats/course/' + encodeURIComponent(c.code)).catch(() => null)));
+    if (seq !== renderSeq) return;
     state.stats = Object.fromEntries(courses.map((c, i) => [c.code, stats[i]]));
     if (!courses.length) {
         const msg = { professor: '담당 과목이 없습니다', student: '수강신청한 과목이 없습니다' }[state.me.role] ?? '등록된 과목이 없습니다';
@@ -491,6 +571,7 @@ async function renderCourses() {
     }
     const cache = new Map();
     const latest = await Promise.all(courses.map((c, i) => courseLatest(c.code, stats[i], cache)));
+    if (seq !== renderSeq) return;
     list.innerHTML = courses.map((c, i) => {
         const st = state.stats[c.code];
         const has = st && st.count > 0;
@@ -635,8 +716,9 @@ function isExpired(due) {
 //   출결 처음 학기: 이전 선택 → 평가 기준 학기). 출결 영역은 불러오기 실패를 영역 안에 보이고 던지지 않음
 async function renderCoursePage() {
     const code = state.courseCode;
+    const seq = renderSeq;
     const c = pageCourse();
-    if (!c) { showTab('courses'); return; }
+    if (!c) { clearCoursePage(); showTab('courses'); return; }
     const manage = canManageCourse(c);
     $('post-add').hidden = !manage;
     $('assess-section').hidden = !manage;
@@ -650,7 +732,7 @@ async function renderCoursePage() {
         ]) : null,
     ]);
     // 기다리는 사이 다른 과목·탭으로 옮겼으면 그리지 않음 (나중에 끝난 요청이 화면을 덮지 않게)
-    if (currentTab() !== 'course' || state.courseCode !== code) return;
+    if (seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code) return;
 
     let sems, fallback, open = '';
     if (staff) {
@@ -855,6 +937,7 @@ function relativeSummary(grades) {
 //   '출석' 열은 늘 읽기 전용 (lockAttendColumn)
 async function renderAssess() {
     const code = state.courseCode;
+    const seq = renderSeq;
     const sem = state.assessSem ?? '';
     const box = $('assess-body');
     // 다 받기 전에는 설정·삭제 버튼과 점수 칸이 이전 학기를 가리키지 않게 비워 둠
@@ -873,7 +956,7 @@ async function renderAssess() {
         api('GET', '/api/grades?' + q),
     ]);
     // 기다리는 사이 과목·학기·탭이 바뀌었으면 그리지 않음
-    if (currentTab() !== 'course' || state.courseCode !== code || state.assessSem !== sem) return;
+    if (seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code || state.assessSem !== sem) return;
     const cols = items.filter((a) => a.weight > 0);
     state.assess = { code, sem, mode, items, cols, finalSeq: 0 };
     if (!items.length) {
@@ -1029,9 +1112,10 @@ async function attendanceOf(query) {
 //   다시 그리는 동안 이전 표는 그대로 두되 state.attend 가 null 이라 눌러도 저장하지 않음 (다른 과목·학기면 '불러오는 중')
 async function renderAttend() {
     const code = state.courseCode;
+    const seq = renderSeq;
     const sem = state.attendSem ?? '';
     const box = $('attend-body');
-    const stale = () => currentTab() !== 'course' || state.courseCode !== code || state.attendSem !== sem;
+    const stale = () => seq !== renderSeq || currentTab() !== 'course' || state.courseCode !== code || state.attendSem !== sem;
     state.attend = null;
     if (!sem) {
         box.innerHTML = '<p class="hint">고를 학기가 없습니다 (수강신청 학기를 정하거나 이 과목에 수강신청이 있어야 합니다)</p>';
@@ -1187,8 +1271,10 @@ $('attend-body').onclick = (e) => {
 //   관리자: 신청 학기 설정 + 고른 학생의 수강신청 (모든 학기에서 신청·취소)
 //   교수: 담당 과목의 학기별 수강생 조회만
 async function renderEnroll() {
+    const seq = renderSeq;
     const role = state.me.role;
     const { semester: open = '' } = await api('GET', '/api/enrollment/settings');
+    if (seq !== renderSeq) return;
     const period = $('enroll-period');
     period.textContent = open ? `수강신청 학기: ${open}` : '수강신청 기간이 아닙니다';
     period.classList.toggle('closed', !open);
@@ -1204,6 +1290,7 @@ async function renderEnroll() {
 
 // 학생(또는 관리자가 고른 학생)의 "개설 과목" + "신청 내역" 두 목록
 async function renderEnrollStudent(open, admin) {
+    const seq = renderSeq;
     const content = $('enroll-content');
     let sid = state.me.studentId;
     if (admin) {
@@ -1213,13 +1300,18 @@ async function renderEnrollStudent(open, admin) {
         sid = pick.value;
     }
     const mine = await api('GET', '/api/enrollments?studentId=' + encodeURIComponent(sid));
+    if (seq !== renderSeq) return;
 
     // 학기: 관리자는 직접 입력(비면 신청 학기, 그것도 비면 가장 최근 성적 학기),
     //       학생은 신청 학기 + 자기 수강신청에 나온 학기 중에서 선택
     let sem;
     if (admin) {
         const input = $('enroll-sem-input');
-        if (!input.value.trim()) input.value = open || (await semesterList())[0] || '';
+        if (!input.value.trim()) {
+            const sems = await semesterList();
+            if (seq !== renderSeq) return;
+            input.value = open || sems[0] || '';
+        }
         sem = input.value.trim();
     } else {
         const sel = $('enroll-sem-select');
@@ -1235,6 +1327,7 @@ async function renderEnrollStudent(open, admin) {
     state.enrollCtx = { studentId: sid, semester: sem };
 
     const counts = await api('GET', '/api/enrollments/counts?semester=' + encodeURIComponent(sem));
+    if (seq !== renderSeq) return;
     const countOf = Object.fromEntries(counts.map((x) => [x.courseCode, x.count]));
     const inSem = mine.filter((e) => e.semester === sem).sort((a, b) => a.courseCode.localeCompare(b.courseCode));
     const applied = new Set(inSem.map((e) => e.courseCode));
@@ -1286,6 +1379,7 @@ async function renderEnrollStudent(open, admin) {
 
 // 교수: 담당 과목 + 학기를 골라 수강생 표 (학번·이름·학과·성적 유무). 신청·취소 버튼 없음
 async function renderEnrollProfessor(open) {
+    const seq = renderSeq;
     const content = $('enroll-content');
     state.enrollCtx = null;
     const pick = $('enroll-course');
@@ -1293,6 +1387,7 @@ async function renderEnrollProfessor(open) {
     if (!pick.value) { content.innerHTML = '<p class="hint">담당 과목이 없습니다</p>'; return; }
     const code = pick.value;
     const list = await api('GET', '/api/enrollments?courseCode=' + encodeURIComponent(code));
+    if (seq !== renderSeq) return;
 
     // 학기: 신청 학기·현재 학기 + 이 과목 수강신청에 나온 학기 (최신순, 지난 학기는 뺌)
     // 과목을 바꿨을 때 처음 보이는 학기: 신청 학기에 수강생이 있으면 그 학기, 없으면 (지난 학기 제외) 수강생이 있는 가장 최근 학기
@@ -1561,10 +1656,12 @@ async function showStudentReport(s) {
 
 // 내 성적 화면: 맨 위 '진행 중 과목 (평가 항목)' (평가 기준·출결 기록이 있는 과목이 없으면 생략) + 성적표
 async function renderMyReport() {
+    const seq = renderSeq;
     const [progress, report] = await Promise.all([
         myAssessmentsHtml(),
         studentReportHtml({ id: state.me.studentId, name: state.me.name }),
     ]);
+    if (seq !== renderSeq) return;
     $('myreport-body').innerHTML = progress + report;
 }
 
@@ -1705,9 +1802,11 @@ const courseOptions = () => gradeCourses().map((c) => ({ value: c.code, label: `
 // 관리자 외에는 지난 학기 성적의 수정·삭제 대신 '지난 학기' 표시 (서버도 403 으로 막음)
 //   표에 나온 (과목, 학기) 조합마다 /api/assessments 를 한 번씩만 부름 (잠긴 지난 학기는 부르지 않음)
 async function renderGrades() {
+    const seq = renderSeq;
     const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
     // 교수에게는 지난 학기를 뺀 목록 (현재 학기는 항상 포함). 관리자·학생 화면은 그대로
     const all = await semesterList();
+    if (seq !== renderSeq) return;
     const semesters = state.me.role === 'professor' ? visibleSemesters(all) : all;
     fillSelect(fs, studentOptions(), '전체 학생', fs.value);
     fillSelect(fc, courseOptions(), isAdmin() ? '전체 과목' : '전체 담당 과목', fc.value);
@@ -1719,6 +1818,7 @@ async function renderGrades() {
     if (fm.value) params.set('semester', fm.value);
     const qs = params.toString();
     const grades = await api('GET', '/api/grades' + (qs ? '?' + qs : ''));
+    if (seq !== renderSeq) return;
     grades.sort((a, b) => b.semester.localeCompare(a.semester) || a.studentId.localeCompare(b.studentId));
 
     // 관리자는 10건씩 페이지로 나누고, 교수는 기존처럼 전체 목록을 표시
@@ -1732,6 +1832,7 @@ async function renderGrades() {
     const cache = new Map();
     const assessed = await Promise.all(visibleGrades.map((g) => isLockedSemester(g.semester) ? false
         : assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
+    if (seq !== renderSeq) return;
 
     $('grade-body').innerHTML = visibleGrades.length ? visibleGrades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));
@@ -2021,7 +2122,10 @@ function bindRoleToggle() {
 
 // 계정 표 그리기 (해시·salt 는 서버가 내보내지 않음)
 async function renderAccounts() {
-    state.accounts = await api('GET', '/api/accounts');
+    const seq = renderSeq;
+    const accounts = await api('GET', '/api/accounts');
+    if (seq !== renderSeq) return;
+    state.accounts = accounts;
     $('account-body').innerHTML = state.accounts.length ? state.accounts.map((a) => `
         <tr>
             <td><b>${esc(a.username)}</b>${a.username === state.me.username ? ' <span class="tag">나</span>' : ''}</td>
