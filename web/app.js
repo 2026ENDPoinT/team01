@@ -560,17 +560,17 @@ async function renderCourses() {
     const seq = renderSeq;
     const list = $('course-list');
     const courses = myCourses();
-    const stats = await Promise.all(courses.map((c) =>
-        api('GET', '/api/stats/course/' + encodeURIComponent(c.code)).catch(() => null)));
+    const stats = await api('GET', '/api/stats/course/batch').catch(() => []);
     if (seq !== renderSeq) return;
-    state.stats = Object.fromEntries(courses.map((c, i) => [c.code, stats[i]]));
+    const statsByCode = Object.fromEntries(stats.map((item) => [item.courseCode, item]));
+    state.stats = Object.fromEntries(courses.map((c) => [c.code, statsByCode[c.code] ?? null]));
     if (!courses.length) {
         const msg = { professor: '담당 과목이 없습니다', student: '수강신청한 과목이 없습니다' }[state.me.role] ?? '등록된 과목이 없습니다';
         list.innerHTML = `<li class="empty">${msg}</li>`;
         return;
     }
     const cache = new Map();
-    const latest = await Promise.all(courses.map((c, i) => courseLatest(c.code, stats[i], cache)));
+    const latest = await Promise.all(courses.map((c) => courseLatest(c.code, state.stats[c.code], cache)));
     if (seq !== renderSeq) return;
     list.innerHTML = courses.map((c, i) => {
         const st = state.stats[c.code];
@@ -1284,45 +1284,77 @@ $('attend-body').onclick = (e) => {
 async function renderEnroll() {
     const seq = renderSeq;
     const role = state.me.role;
-    const { semester: open = '' } = await api('GET', '/api/enrollment/settings');
-    if (seq !== renderSeq) return;
-    const period = $('enroll-period');
-    period.textContent = open ? `수강신청 학기: ${open}` : '수강신청 기간이 아닙니다';
-    period.classList.toggle('closed', !open);
-    $('enroll-admin').hidden = role !== 'admin';
-    $('enroll-student-wrap').hidden = role !== 'admin';
-    $('enroll-course-wrap').hidden = role !== 'professor';
-    $('enroll-sem-input').hidden = role !== 'admin';
-    $('enroll-sem-select').hidden = role === 'admin';
-    if (role === 'admin') $('enroll-set-sem').value = open;
-    if (role === 'professor') return renderEnrollProfessor(open);
-    return renderEnrollStudent(open, role === 'admin');
-}
+    const admin = role === 'admin';
+    const professor = role === 'professor';
 
-// 학생(또는 관리자가 고른 학생)의 "개설 과목" + "신청 내역" 두 목록
-async function renderEnrollStudent(open, admin) {
-    const seq = renderSeq;
-    const content = $('enroll-content');
+    $('enroll-admin').hidden = !admin;
+    $('enroll-student-wrap').hidden = !admin;
+    $('enroll-course-wrap').hidden = !professor;
+    $('enroll-sem-input').hidden = !admin;
+    $('enroll-sem-select').hidden = admin;
+
+    if (professor) {
+        const pick = $('enroll-course');
+        fillSelect(pick, state.courses.filter(teaches).map((c) => ({
+            value: c.code, label: `${c.name} (${c.code})`,
+        })), '', pick.value);
+        const code = pick.value;
+        const [settings, list] = await Promise.all([
+            api('GET', '/api/enrollment/settings'),
+            code ? api('GET', '/api/enrollments?courseCode=' + encodeURIComponent(code)) : Promise.resolve([]),
+        ]);
+        if (seq !== renderSeq) return;
+        const open = settings.semester ?? '';
+        const period = $('enroll-period');
+        period.textContent = open ? `수강신청 학기: ${open}` : '수강신청 기간이 아닙니다';
+        period.classList.toggle('closed', !open);
+        return renderEnrollProfessor(open, list);
+    }
+
     let sid = state.me.studentId;
     if (admin) {
         const pick = $('enroll-student');
         fillSelect(pick, studentOptions(), '', pick.value);
-        if (!pick.value) { state.enrollCtx = null; content.innerHTML = '<p class="hint">등록된 학생이 없습니다</p>'; return; }
+        if (!pick.value) {
+            const { semester: open = '' } = await api('GET', '/api/enrollment/settings');
+            if (seq !== renderSeq) return;
+            const period = $('enroll-period');
+            period.textContent = open ? `수강신청 학기: ${open}` : '수강신청 기간이 아닙니다';
+            period.classList.toggle('closed', !open);
+            $('enroll-set-sem').value = open;
+            state.enrollCtx = null;
+            $('enroll-content').innerHTML = '<p class="hint">등록된 학생이 없습니다</p>';
+            return;
+        }
         sid = pick.value;
     }
-    const mine = await api('GET', '/api/enrollments?studentId=' + encodeURIComponent(sid));
-    if (seq !== renderSeq) return;
 
-    // 학기: 관리자는 직접 입력(비면 신청 학기, 그것도 비면 가장 최근 성적 학기),
-    //       학생은 신청 학기 + 자기 수강신청에 나온 학기 중에서 선택
+    const [settings, mine] = await Promise.all([
+        api('GET', '/api/enrollment/settings'),
+        api('GET', '/api/enrollments?studentId=' + encodeURIComponent(sid)),
+    ]);
+    if (seq !== renderSeq) return;
+    const open = settings.semester ?? '';
+    const period = $('enroll-period');
+    period.textContent = open ? `수강신청 학기: ${open}` : '수강신청 기간이 아닙니다';
+    period.classList.toggle('closed', !open);
+    if (admin) $('enroll-set-sem').value = open;
+    return renderEnrollStudent(open, admin, mine, settings.latestGradeSemester ?? '');
+}
+
+// 학생(또는 관리자가 고른 학생)의 "개설 과목" + "신청 내역" 두 목록
+async function renderEnrollStudent(open, admin, mine, latestGradeSemester) {
+    const seq = renderSeq;
+    const content = $('enroll-content');
+    const sid = admin ? $('enroll-student').value : state.me.studentId;
+    if (!sid) { state.enrollCtx = null; content.innerHTML = '<p class="hint">등록된 학생이 없습니다</p>'; return; }
+
+    // 관리자는 신청 학기가 비어 있으면 전체 성적 중 가장 최근 학기를 기본값으로 사용
+    // (기존 semesterList() 요청을 설정 API 응답에 포함해 요청 한 건을 줄임)
     let sem;
     if (admin) {
         const input = $('enroll-sem-input');
-        if (!input.value.trim()) {
-            const sems = await semesterList();
-            if (seq !== renderSeq) return;
-            input.value = open || sems[0] || '';
-        }
+        if (!input.value.trim()) input.value = open || latestGradeSemester || '';
         sem = input.value.trim();
     } else {
         const sel = $('enroll-sem-select');
@@ -1389,15 +1421,13 @@ async function renderEnrollStudent(open, admin) {
 }
 
 // 교수: 담당 과목 + 학기를 골라 수강생 표 (학번·이름·학과·성적 유무). 신청·취소 버튼 없음
-async function renderEnrollProfessor(open) {
+async function renderEnrollProfessor(open, list) {
     const seq = renderSeq;
     const content = $('enroll-content');
     state.enrollCtx = null;
     const pick = $('enroll-course');
-    fillSelect(pick, state.courses.filter(teaches).map((c) => ({ value: c.code, label: `${c.name} (${c.code})` })), '', pick.value);
     if (!pick.value) { content.innerHTML = '<p class="hint">담당 과목이 없습니다</p>'; return; }
     const code = pick.value;
-    const list = await api('GET', '/api/enrollments?courseCode=' + encodeURIComponent(code));
     if (seq !== renderSeq) return;
 
     // 학기: 신청 학기·현재 학기 + 이 과목 수강신청에 나온 학기 (최신순, 지난 학기는 뺌)
@@ -1471,23 +1501,26 @@ const studentFields = (editing) => [
 ];
 
 // 학생 표 그리기 (관리자). 검색어가 있으면 서버 검색 API 결과를, 없으면 전체 목록을 보여줌
-// 학생마다 GPA API 를 한 번씩 불러서 GPA 열을 채우고, 학사경고 목록으로 학생별 경고 횟수를 셈
+// 전체 학생 GPA 일괄 조회와 학사경고 목록으로 GPA 열·경고 횟수를 채움
 // 성적이 없는 학생은 서버가 gpa null 을 줌 → '-' (fmt)
 async function renderStudents() {
+    const seq = renderSeq;
     const q = $('student-search').value.trim();
     let list = state.students;
     if (q) {
         try { list = await api('GET', '/api/students/search?q=' + encodeURIComponent(q)); }
         catch (e) { toast(e.message, true); }
     }
+    if (seq !== renderSeq) return;
     const body = $('student-body');
     if (!list.length) { body.innerHTML = emptyRow(7, q ? '검색 결과가 없습니다' : '등록된 학생이 없습니다'); return; }
 
-    const [gpas, warnings] = await Promise.all([
-        Promise.all(list.map((s) =>
-            api('GET', '/api/stats/gpa/' + encodeURIComponent(s.id)).then(gpaOf).catch(() => null))),
+    const [gpaRows, warnings] = await Promise.all([
+        api('GET', '/api/stats/gpa/batch').catch(() => []),
         api('GET', '/api/stats/warnings').catch(() => []),
     ]);
+    if (seq !== renderSeq) return;
+    const gpaById = Object.fromEntries(gpaRows.map((row) => [row.studentId, gpaOf(row)]));
     // 학사경고 사유 약칭 (서버 reason 문자열 기준, 모르는 사유는 원문 그대로)
     const reasonShort = { '수강신청 미이행': '미신청', '평점평균 1.75 미만': '평점' };
     const warnList = {};
@@ -1505,7 +1538,7 @@ async function renderStudents() {
             <td><b>${esc(s.name)}</b></td>
             <td>${esc(s.major)}</td>
             <td>${esc(s.year)}학년</td>
-            <td class="num">${fmt(gpas[i])}</td>
+            <td class="num">${fmt(gpaById[s.id])}</td>
             <td>${warnBadge(s.id)}</td>
             <td class="actions">
                 <button class="link" data-act="report" data-id="${esc(s.id)}">성적표</button>
@@ -1819,7 +1852,7 @@ const courseOptions = () => gradeCourses().map((c) => ({ value: c.code, label: `
 // 수정/삭제 버튼에는 성적을 구분하는 키 [학번, 과목코드, 학기] 를 JSON 으로 담아 둠
 // 평가 항목으로 계산되는 (과목, 학기) 성적은 수정·삭제 대신 '평가 항목' 표시 (서버도 409 로 막음)
 // 관리자 외에는 지난 학기 성적의 수정·삭제 대신 '지난 학기' 표시 (서버도 403 으로 막음)
-//   표에 나온 (과목, 학기) 조합마다 /api/assessments 를 한 번씩만 부름 (잠긴 지난 학기는 부르지 않음)
+//   표에 나온 (과목, 학기) 조합을 /api/assessments/batch 한 번으로 조회 (잠긴 지난 학기는 제외)
 async function renderGrades() {
     const seq = renderSeq;
     const fs = $('grade-f-student'), fc = $('grade-f-course'), fm = $('grade-f-semester');
@@ -1848,10 +1881,20 @@ async function renderGrades() {
 
     const offset = paginated ? (gradePage - 1) * GRADE_PAGE_SIZE : 0;
     const visibleGrades = paginated ? grades.slice(offset, offset + GRADE_PAGE_SIZE) : grades;
-    const cache = new Map();
-    const assessed = await Promise.all(visibleGrades.map((g) => isLockedSemester(g.semester) ? false
-        : assessmentsOf(g.courseCode, g.semester, cache).then((a) => a.items.length > 0)));
+    const pairs = [...new Map(visibleGrades
+        .filter((g) => !isLockedSemester(g.semester))
+        .map((g) => [JSON.stringify([g.courseCode, g.semester]), {
+            courseCode: g.courseCode, semester: g.semester,
+        }])).values()];
+    const assessmentRows = pairs.length
+        ? await api('POST', '/api/assessments/batch', { pairs }).catch(() => [])
+        : [];
     if (seq !== renderSeq) return;
+    const assessedByPair = new Map(assessmentRows.map((a) => [
+        JSON.stringify([a.courseCode, a.semester]), Array.isArray(a.items) && a.items.length > 0,
+    ]));
+    const assessed = visibleGrades.map((g) => isLockedSemester(g.semester) ? false
+        : assessedByPair.get(JSON.stringify([g.courseCode, g.semester])) ?? false);
 
     $('grade-body').innerHTML = visibleGrades.length ? visibleGrades.map((g, i) => {
         const key = esc(JSON.stringify([g.studentId, g.courseCode, g.semester]));

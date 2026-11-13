@@ -894,6 +894,25 @@ void Server::run() {
         res.set_content(arr.dump(), "application/json; charset=utf-8");
     });
 
+    // 전체 학생 GPA 일괄 조회 (관리자 전용). 개별 GPA API 와 같은 값·null 규칙.
+    // 고정 경로를 /:id 보다 먼저 등록해 "batch" 가 학생 ID 로 해석되지 않게 한다.
+    svr.Get("/api/stats/gpa/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!requireRole(req, res, {"admin"})) return;
+
+        json arr = json::array();
+        for (const Student& student : gm.getStudents()) {
+            const Statistics::GpaSummary summary = Statistics::gpaSummary(gm, student.id);
+            const json gpa = summary.credits > 0
+                ? json(Statistics::calcGPA(gm, student.id))
+                : json(nullptr);
+            arr.push_back({
+                {"studentId", student.id}, {"semester", ""}, {"gpa", gpa}
+            });
+        }
+        setJson(res, 200, arr);
+    });
+
     // GPA
     svr.Get("/api/stats/gpa/:id", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
@@ -949,6 +968,31 @@ void Server::run() {
             {"majorGpa", summary.majorCredits > 0 ? json(summary.majorGpa) : json(nullptr)},
             {"majorCredits", summary.majorCredits}
         });
+    });
+
+    // 전체 과목 통계 일괄 조회. 개별 과목 통계와 같은 필드·계산 규칙.
+    // 고정 경로를 /:code 보다 먼저 등록한다.
+    svr.Get("/api/stats/course/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!requireRole(req, res, {"admin", "professor", "student"})) return;
+
+        json arr = json::array();
+        for (const Course& course : gm.getCourses()) {
+            const auto stats = Statistics::courseStats(gm, course.code);
+            json enrolledBySemester = json::object();
+            for (const Enrollment& enrollment : gm.getEnrollments()) {
+                if (enrollment.courseCode != stats.courseCode || enrollment.semester.empty()) continue;
+                enrolledBySemester[enrollment.semester] =
+                    enrolledBySemester.value(enrollment.semester, 0) + 1;
+            }
+            arr.push_back({
+                {"courseCode", stats.courseCode}, {"count", stats.count},
+                {"average", stats.average}, {"max", stats.max}, {"min", stats.min},
+                {"latestSemester", stats.latestSemester}, {"latestEnrolled", stats.latestEnrolled},
+                {"enrolledBySemester", enrolledBySemester}
+            });
+        }
+        setJson(res, 200, arr);
     });
 
     // 과목 통계
@@ -1076,8 +1120,14 @@ void Server::run() {
     svr.Get("/api/enrollment/settings", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         if (!requireRole(req, res, {"admin", "professor", "student"})) return;
-        res.set_content(json{{"semester", gm.getEnrollmentSemester()}}.dump(),
-                        "application/json; charset=utf-8");
+        std::string latestGradeSemester;
+        for (const Grade& grade : gm.getGrades()) {
+            if (grade.semester > latestGradeSemester) latestGradeSemester = grade.semester;
+        }
+        setJson(res, 200, json{
+            {"semester", gm.getEnrollmentSemester()},
+            {"latestGradeSemester", latestGradeSemester}
+        });
     });
 
     svr.Put("/api/enrollment/settings", [this](const httplib::Request& req, httplib::Response& res) {
@@ -1944,6 +1994,54 @@ void Server::run() {
     });
 
     // 평가 기준 전체 등록·수정: {courseCode,semester,mode,weights:{출석:0,...}}. POST 는 사용하지 않는다.
+    // 여러 (과목, 학기)의 평가 기준 일괄 조회. 각 항목은 기존 GET /api/assessments 와 같은 모양.
+    // 본문: {"pairs":[{"courseCode":"109201","semester":"2026-2"}, ...]}
+    svr.Post("/api/assessments/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(mtx);
+        const Account* account = requireRole(req, res, {"admin", "professor", "student"});
+        if (!account) return;
+
+        json body;
+        if (!parseJsonBody(req, body, res)) return;
+        const auto pairsIt = body.find("pairs");
+        if (pairsIt == body.end() || !pairsIt->is_array()) {
+            setError(res, 400, "pairs 배열이 필요합니다");
+            return;
+        }
+
+        json arr = json::array();
+        std::unordered_set<std::string> seen;
+        for (const json& pair : *pairsIt) {
+            if (!pair.is_object() || !pair.contains("courseCode") ||
+                !pair["courseCode"].is_string() || !pair.contains("semester") ||
+                !pair["semester"].is_string()) {
+                setError(res, 400, "평가 기준 조회 항목이 올바르지 않습니다");
+                return;
+            }
+            const std::string courseCode = pair["courseCode"].get<std::string>();
+            const std::string semester = pair["semester"].get<std::string>();
+            if (courseCode.empty() || semester.empty() || !isValidSemester(semester)) {
+                setError(res, 400, kSemesterRules);
+                return;
+            }
+            if (account->role == "professor" && rejectPastSemester(gm, *account, semester, res)) return;
+            if (!gm.findCourse(courseCode)) {
+                setError(res, 404, "없는 과목입니다: " + courseCode);
+                return;
+            }
+
+            const std::string key = courseCode + "\n" + semester;
+            if (!seen.insert(key).second) continue;
+            arr.push_back({
+                {"courseCode", courseCode},
+                {"semester", semester},
+                {"mode", gm.getGradingMode(courseCode, semester)},
+                {"items", gradingSchemeItemsJson(gm, courseCode, semester)}
+            });
+        }
+        setJson(res, 200, arr);
+    });
+
     svr.Put("/api/assessments", [this](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(mtx);
         const Account* account = requireRole(req, res, {"admin", "professor"});
