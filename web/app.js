@@ -577,13 +577,14 @@ $('logout').onclick = async () => {
 const COURSE_CATEGORIES = ['전공필수', '전공선택', '교양필수', '교양선택', '일반선택'];
 const COURSE_LANGUAGES = ['한국어전용', '영어전용', '모듈강좌(M)'];
 const asOptions = (list) => list.map((v) => ({ value: v, label: v }));
-const courseFields = () => [
+// registering: 과목 등록 폼이면 담당 교수·강의시간 필수 (수정 폼은 강의시간이 빈 기존 과목도 고칠 수 있게 선택)
+const courseFields = (registering = false) => [
     { name: 'code', label: '과목 코드 (숫자 6자리)', placeholder: '예: 109004', pattern: '\\d{6}', hint: '과목 코드는 숫자 6자리여야 합니다' },
     { name: 'name', label: '과목명' },
     { name: 'category', label: '이수구분', options: asOptions(COURSE_CATEGORIES) },
     { name: 'credit', label: '학점 (1~4)', type: 'number', min: 1, max: 4, step: 1 },
-    { name: 'professor', label: '담당 교수', optional: true },
-    { name: 'schedule', label: '강의시간', optional: true, placeholder: '예: 월(1~4) 또는 화(2~3) 목(2~3)' },
+    { name: 'professor', label: '담당 교수', optional: !registering },
+    { name: 'schedule', label: '강의시간', optional: !registering, placeholder: '예: 월(1~4) 또는 화(2~3) 목(2~3)' },
     { name: 'language', label: '강의언어', options: asOptions(COURSE_LANGUAGES) },
     { name: 'area', label: '교양영역 (교양 과목만)', optional: true, placeholder: '예: 인문, 자연과학' },
     { name: 'capacity', label: '학기당 정원 (0 = 제한 없음)', type: 'number' },
@@ -602,6 +603,14 @@ const validateCourse = (d) => {
     if ((d.credit ?? '').trim() === '' || !Number.isInteger(credit) || credit < 1 || credit > 4) return '학점은 1~4 사이여야 합니다';
     const capacity = Number(d.capacity);
     if (!Number.isInteger(capacity) || capacity < 0 || capacity > 999) return '정원은 0~999 사이여야 합니다';
+    return '';
+};
+// 과목 등록 폼 검사: 위 규칙 + 담당 교수·강의시간 필수 (서버 RequestValidation::newCourseError 와 같은 문구)
+const validateNewCourse = (d) => {
+    const reason = validateCourse(d);
+    if (reason) return reason;
+    if (!(d.professor ?? '').trim()) return '담당 교수가 비어 있습니다';
+    if (!(d.schedule ?? '').trim()) return '강의시간이 비어 있습니다';
     return '';
 };
 // 폼 값 → API 본문 (숫자·참거짓 변환)
@@ -742,9 +751,9 @@ $('course-list').onclick = (e) => {
 
 $('course-add').onclick = () => openForm({
     title: '과목 등록',
-    fields: courseFields(),
+    fields: courseFields(true),
     values: { category: '전공선택', credit: 3, language: '한국어전용', capacity: 0, remote: 'N' },
-    validate: validateCourse,
+    validate: validateNewCourse,
     onSubmit: async (d) => {
         await api('POST', '/api/courses', courseBody(d));
         toast('과목을 등록했습니다');

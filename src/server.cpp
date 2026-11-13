@@ -1604,7 +1604,9 @@ void Server::run() {
         if (!parseJsonBody(req, body, res)) return;
         Course course;
         // 틀린 항목을 짚는 문구 (예: 학점 "abc" → "학점은 숫자여야 합니다")
-        const std::string reason = RequestValidation::readCourse(body, "", course);
+        // 등록할 때만 담당 교수·강의시간 필수 (수정은 기존 과목을 그대로 고칠 수 있게 검사하지 않음)
+        std::string reason = RequestValidation::readCourse(body, "", course);
+        if (reason.empty()) reason = RequestValidation::newCourseError(course);
         if (!reason.empty()) {
             setError(res, 400, "과목 정보가 올바르지 않습니다 (" + reason + ")");
             return;
