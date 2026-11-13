@@ -10,14 +10,13 @@
 namespace RelativeGrading {
 namespace {
 
-// 실제 평점 계산 순서. D+/D0는 상대평가 비율 구간에는 없지만,
-// 절대평가 등급보다 높은 등급을 주지 않는 기준 및 평균 조정에 사용한다.
+// 실제 평점 계산 순서. C0는 별도 비율 구간 없이 절대평가 상한 및 평균 조정에 사용한다.
 const char* const kGradeLadder[] = {"A+", "A0", "B+", "B0", "C+", "C0", "D+", "D0", "F"};
 constexpr size_t kGradeCount = sizeof(kGradeLadder) / sizeof(kGradeLadder[0]);
 
-// 비율 설정의 여섯 구간. C0·D+·D0는 별도 비율 구간이 아니므로
-// 절대평가 등급 상한 또는 F 구간에 의해 결정된다.
-const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 8};
+// 비율 설정의 여덟 구간. C0는 별도 비율 구간이 아니므로
+// 절대평가 등급 상한 또는 평균 평점 조정에 의해 결정된다.
+const size_t kRatioGradeIndex[] = {0, 1, 2, 3, 4, 6, 7, 8};
 
 size_t gradeIndex(const std::string& letter) {
     for (size_t i = 0; i < kGradeCount; ++i) {
@@ -38,11 +37,11 @@ double averagePoint(const std::vector<std::string>& letters) {
 std::vector<int> defaultRatios() {
     // 기본 상대평가: 상위 30% A+, 다음 40% B+, 나머지 30% C+.
     // A0 이상 30%, B0 이상 70% 상한을 만족하며 평균 평점은 최대 3.50이다.
-    return {30, 0, 40, 0, 30, 0};
+    return {30, 0, 40, 0, 30, 0, 0, 0};
 }
 
 bool validRatios(const std::vector<int>& ratios) {
-    if (ratios.size() != 6) return false;
+    if (ratios.size() != 8) return false;
     int total = 0;
     for (int ratio : ratios) {
         if (ratio < 0 || ratio > 100) return false;
@@ -51,6 +50,7 @@ bool validRatios(const std::vector<int>& ratios) {
     if (total != 100) return false;
 
     // A+ + A0는 30% 이하, A+ + A0 + B+ + B0는 70% 이하여야 한다.
+    // C+, D+, D0, F는 나머지 70% 범위 안에서 합계 100%를 구성한다.
     const int aPlusAndA0 = ratios[0] + ratios[1];
     const int aThroughB0 = aPlusAndA0 + ratios[2] + ratios[3];
     if (aPlusAndA0 > static_cast<int>(kMaxARatio * 100)) return false;
@@ -79,7 +79,7 @@ std::vector<std::string> assignLetters(const std::vector<double>& scores,
         while (end < n && scores[order[end]] == scores[order[begin]]) ++end;
 
         size_t cumulativeRatio = 0;
-        size_t relativeGrade = kRatioGradeIndex[5];  // 기본값 F
+        size_t relativeGrade = kRatioGradeIndex[7];  // 기본값 F
         for (size_t category = 0; category < ratios.size(); ++category) {
             cumulativeRatio += static_cast<size_t>(ratios[category]);
             const size_t boundary = (n * cumulativeRatio) / 100;

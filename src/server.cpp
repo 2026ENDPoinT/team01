@@ -234,7 +234,7 @@ json gradingSchemeItemsJson(const GradeManager& gm, const std::string& courseCod
 }
 
 const std::vector<std::string>& relativeGradeLetters() {
-    static const std::vector<std::string> letters = {"A+", "A0", "B+", "B0", "C+", "F"};
+    static const std::vector<std::string> letters = {"A+", "A0", "B+", "B0", "C+", "D+", "D0", "F"};
     return letters;
 }
 
@@ -2266,14 +2266,14 @@ void Server::run() {
         const auto ratioIt = body.find("gradeRatios");
         if (ratioIt != body.end()) {
             if (!ratioIt->is_object()) {
-                setError(res, 400, "상대평가 등급 비율은 A+, A0, B+, B0, C+, F의 정수 비율이어야 합니다");
+                setError(res, 400, "상대평가 등급 비율은 A+, A0, B+, B0, C+, D+, D0, F의 정수 비율이어야 합니다");
                 return;
             }
             const auto& letters = relativeGradeLetters();
             for (auto it = ratioIt->begin(); it != ratioIt->end(); ++it) {
                 const auto label = std::find(letters.begin(), letters.end(), it.key());
                 if (label == letters.end() || !it.value().is_number_integer()) {
-                    setError(res, 400, "상대평가 등급 비율은 A+, A0, B+, B0, C+, F의 정수 비율이어야 합니다");
+                    setError(res, 400, "상대평가 등급 비율은 A+, A0, B+, B0, C+, D+, D0, F의 정수 비율이어야 합니다");
                     return;
                 }
                 const long long value = it.value().get<long long>();

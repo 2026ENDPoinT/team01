@@ -927,7 +927,7 @@ std::vector<int> GradeManager::getRelativeGradeRatios(const std::string& courseC
     return RelativeGrading::defaultRatios();
 }
 
-// 평가 기준 만들기·바꾸기: 6분류 비율(0 포함)과 등급 방식을 한 번에 저장한다.
+// 평가 기준 만들기·바꾸기: 6개 평가 항목 비율(0 포함), 8개 상대평가 등급 비율과 등급 방식을 한 번에 저장한다.
 // false: 없는 과목·P/F 과목, 학기 형식 오류, weights 크기 != 6, 0~100 밖, 합계 != 100, mode 가 두 값이 아님,
 //        처음 만드는데 그 과목·학기에 이미 성적(직접 입력)이 있음
 bool GradeManager::setGradingScheme(const std::string& courseCode, const std::string& semester,
@@ -965,7 +965,7 @@ bool GradeManager::setGradingScheme(const std::string& courseCode, const std::st
         }
     }
 
-    // 1) 그 과목·학기 항목을 지우고 6개(0 포함)를 저장한다.
+    // 1) 그 과목·학기 평가 항목 6개(0 포함)를 저장한다.
     assessments.erase(std::remove_if(assessments.begin(), assessments.end(),
                                      [&](const Assessment& item) {
                                          return item.courseCode == code && item.semester == sem;
