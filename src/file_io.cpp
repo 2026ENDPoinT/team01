@@ -668,15 +668,19 @@ bool FileIO::loadGradingModes(std::vector<GradingMode>& modes) {
 }
 
 
-// relative_grade_ratios.csv : courseCode,semester,A+,A0,B+,B0,C+,D+,D0,F
-const char* const kRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,D+,D0,F";
+// relative_grade_ratios.csv : courseCode,semester,A+,A0,B+,B0,C+,C0,D+,D0,F
+const char* const kRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,C0,D+,D0,F";
+// 이전 8등급 비율 형식(C0 비율이 없던 버전)
+const char* const kEightGradeRelativeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,D+,D0,F";
+// 이전 7등급 비율 형식
 const char* const kLegacyRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,C0,F";
+// 가장 오래된 6등급 비율 형식
 const char* const kOldRelativeGradeRatiosHeader = "courseCode,semester,A+,A0,B+,B0,C+,F";
 
 bool FileIO::saveRelativeGradeRatios(const std::vector<RelativeGradeRatio>& ratios) {
     std::string content = std::string(kRelativeGradeRatiosHeader) + "\n";
     for (const RelativeGradeRatio& item : ratios) {
-        if (item.ratios.size() != 8) continue;
+        if (item.ratios.size() != 9) continue;
         std::vector<std::string> fields = {item.courseCode, item.semester};
         int total = 0;
         for (int value : item.ratios) {
@@ -691,12 +695,12 @@ bool FileIO::saveRelativeGradeRatios(const std::vector<RelativeGradeRatio>& rati
 bool FileIO::loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios) {
     const std::string path = dataDir + "/relative_grade_ratios.csv";
     std::vector<CsvRow> rows;
-    if (!readCsv(path, {kRelativeGradeRatiosHeader, kLegacyRelativeGradeRatiosHeader,
-                        kOldRelativeGradeRatiosHeader}, rows)) return false;
+    if (!readCsv(path, {kRelativeGradeRatiosHeader, kEightGradeRelativeRatiosHeader,
+                        kLegacyRelativeGradeRatiosHeader, kOldRelativeGradeRatiosHeader}, rows)) return false;
 
     ratios.clear();
     for (const CsvRow& row : rows) {
-        if (row.fields.size() != 8 && row.fields.size() != 9) continue;
+        if (row.fields.size() < 8 || row.fields.size() > 11) continue;
         RelativeGradeRatio item;
         item.courseCode = row.fields[0];
         item.semester = row.fields[1];
@@ -712,16 +716,17 @@ bool FileIO::loadRelativeGradeRatios(std::vector<RelativeGradeRatio>& ratios) {
             loaded.push_back(value);
             total += value;
         }
-        // 구버전 6개 비율(A+,A0,B+,B0,C+,F)은 D+,D0를 0으로 추가한다.
+        // 구버전 6개 비율: C0, D+, D0 비율을 0으로 추가한다.
         if (loaded.size() == 6) {
-            loaded.insert(loaded.end() - 1, {0, 0});
+            loaded.insert(loaded.end() - 1, {0, 0, 0});
         } else if (loaded.size() == 7) {
-            // 이전 7개 비율 형식의 C0 비율은 C+에 합산한 뒤 D+,D0를 0으로 추가한다.
-            loaded[4] += loaded[5];
-            loaded.erase(loaded.begin() + 5);
+            // 구버전 7개 비율(A+,A0,B+,B0,C+,C0,F): D+, D0를 0으로 추가한다.
             loaded.insert(loaded.end() - 1, {0, 0});
+        } else if (loaded.size() == 8) {
+            // 직전 8개 비율(A+,A0,B+,B0,C+,D+,D0,F): C0를 0으로 추가한다.
+            loaded.insert(loaded.begin() + 5, 0);
         }
-        if (loaded.size() != 8 || total != 100) valid = false;
+        if (loaded.size() != 9 || total != 100) valid = false;
         const bool duplicate = std::any_of(ratios.begin(), ratios.end(), [&](const RelativeGradeRatio& other) {
             return other.courseCode == item.courseCode && other.semester == item.semester;
         });
